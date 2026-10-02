@@ -278,7 +278,7 @@ export class SkillBuilderService {
     const scriptContent = (draft as any).scriptContent;
     if (isScripted && (!scriptContent || !String(scriptContent).trim())) {
       throw new Error(
-        `执行模式为 ${draft.executionMode}，必须提供脚本代码（scripts/main.py）。请继续与 AI 对话补全脚本，或将模式改为 llm_only。`
+        `执行模式为 ${draft.executionMode}，必须提供脚本代码（scripts/main.mjs）。请继续与 AI 对话补全脚本，或将模式改为 llm_only。`
       );
     }
 
@@ -361,8 +361,9 @@ export class SkillBuilderService {
       creator_session_id: session.sessionId,
     };
     if (d.executionMode === 'script' || d.executionMode === 'hybrid') {
-      fm.script_entry = (d as any).scriptEntry || 'scripts/main.py';
-      fm.script_runtime = (d as any).scriptRuntime || 'py';
+      // D7/M1-7：Node 一等公民 — 脚本技能默认 node（用户零 Python 依赖）；Python 按需显式要求
+      fm.script_entry = (d as any).scriptEntry || 'scripts/main.mjs';
+      fm.script_runtime = (d as any).scriptRuntime || 'node';
       fm.script_timeout_ms = d.scriptTimeoutMs || 60000;
     }
     return fm;
@@ -408,7 +409,7 @@ export class SkillBuilderService {
           : '⚠️ 当前 execution_mode 是 script/hybrid，但 scriptContent 仍为空，请在本次回复的 draft_updates 中生成完整 Python 脚本')
       : '当前 execution_mode 是 llm_only，无需脚本';
 
-    const system = `你是 CORAL 平台的 Skill 创建助手，需要通过多轮中文对话，把用户的「能力需求」转换为可执行的 SKILL.md（必要时含 scripts/main.py）。
+    const system = `你是 CORAL 平台的 Skill 创建助手，需要通过多轮中文对话，把用户的「能力需求」转换为可执行的 SKILL.md（必要时含 scripts/main.mjs，默认 Node 脚本）。
 
 # 当前已收集字段
 ${filled.length > 0 ? filled.join(', ') : '（暂无）'}
@@ -444,7 +445,7 @@ ${scriptStatus}
     "estimated_duration_ms": 30000,
     "tags": ["..."],
     "promptContent": "Markdown 文本，包含技能用途、执行步骤、参数说明",
-    "scriptEntry": "scripts/main.py",
+    "scriptEntry": "scripts/main.mjs",
     "referenceContent": "可选 reference.md"
   },
   "fields_pending": ["还需要用户回答的字段名（snake_case）"],
@@ -460,31 +461,30 @@ ${scriptStatus}
 ## 第二段：<SCRIPT> 块（仅 script/hybrid 模式且需要生成脚本时输出）
 \`\`\`
 <SCRIPT>
-\`\`\`python
-#!/usr/bin/env python3
-import sys, json, os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', '_lib'))
-from coral_progress import emit_progress, emit_log, emit_artifact
+\`\`\`javascript
+// Node 脚本（默认，入口文件用 .mjs 扩展名 = 明确 ESM）：stdin 读 JSON，stdout 输出最终 JSON，stderr 走进度协议
+import { emitProgress, emitLog, emitArtifact } from '../../_lib/coral-progress.mjs';
 
-def main():
-    raw = sys.stdin.read()
-    inputs = json.loads(raw) if raw else {}
-    emit_progress(0, 100, '开始执行')
-    # ... 业务逻辑 ...
-    emit_progress(100, 100, '完成')
-    print(json.dumps({"ok": True, "result": "..."}, ensure_ascii=False))
+const stdin = await new Promise(resolve => {
+  let data = '';
+  process.stdin.on('data', c => (data += c));
+  process.stdin.on('end', () => resolve(data));
+});
+const { input } = JSON.parse(stdin || '{}');
 
-if __name__ == '__main__':
-    main()
+emitProgress('init', '开始执行', { percent: 0 });
+// ... 业务逻辑（Node 22 内置 fetch / node:fs 等即可用，无需 npm install）...
+emitProgress('done', '完成', { percent: 100 });
+process.stdout.write(JSON.stringify({ ok: true, result: '...' }));
 \`\`\`
 </SCRIPT>
 \`\`\`
 
 **关键约束**：
-- 脚本写在 \`\`\`python ... \`\`\` 围栏中，**原样输出 Python 源码**，不需要任何转义
-- 每行长度合理，不要把整个脚本压成一行
-- 必须 \`from coral_progress import emit_progress, emit_log, emit_artifact\`
-- JSON stdin 读输入，JSON stdout 输出最终结果，stderr 走 emit_progress / emit_log
+- **默认生成 Node 脚本**，入口文件名必须用 **.mjs**（如 scripts/main.mjs — .js 会按 CommonJS 解析导致 import 报错）；仅当用户明确要求 Python 时才生成 Python（模板：\`#!/usr/bin/env python3\` + \`sys.path.insert(0, ..._lib)\` + \`from coral_progress import ...\`，入口 scripts/main.py）
+- 脚本写在 \`\`\` 围栏中，**原样输出源码**，不需要任何转义
+- Node 脚本用 \`import ... from '../../_lib/coral-progress.mjs'\` 引入进度协议；Python 用 \`from coral_progress import ...\`
+- stdin 读输入（上面的流式读法，跨平台最稳），stdout 输出最终 JSON 结果，stderr 走 emitProgress/emitLog
 - 如果脚本未变化无需重发可以省略 <SCRIPT> 块；但当**当前 scriptContent 仍为空**时**必须**输出完整 <SCRIPT>
 
 # 反问优先级
@@ -537,7 +537,7 @@ interface ParsedBuilderResponse {
 }
 
 /**
- * 优先抽取 <SCRIPT> 标签或 ```python``` 代码块中的 Python 脚本
+ * 优先抽取 <SCRIPT> 标签或围栏代码块中的脚本（默认 Node，兼容 Python）
  * 这种方式让 Python 源码不需要 JSON 转义，避免 LLM 输出大量 \\n / \\" 时的格式破损
  */
 function extractFencedPython(text: string): string | null {
@@ -546,15 +546,15 @@ function extractFencedPython(text: string): string | null {
   const taggedScript = text.match(/<SCRIPT>([\s\S]*?)<\/SCRIPT>/i);
   if (taggedScript) {
     const inner = taggedScript[1];
-    const fenced = inner.match(/```(?:python|py)?\s*\n?([\s\S]*?)```/i);
+    const fenced = inner.match(/```(?:python|py|javascript|js|mjs)?\s*\n?([\s\S]*?)```/i);
     if (fenced && fenced[1].trim()) return fenced[1].trim();
     // 标签内若直接是裸代码（没有 ``` fence），原样返回
     const naked = inner.trim();
-    if (naked && /\b(import|def|print)\b/.test(naked)) return naked;
+    if (naked && /\b(import|def|print|const|require)\b/.test(naked)) return naked;
   }
 
-  // 2) 退化：全文里最长的 ```python``` 代码块
-  const fences = [...text.matchAll(/```(?:python|py)\s*\n?([\s\S]*?)```/gi)];
+  // 2) 退化：全文里最长的 ```脚本``` 代码块（默认 Node，兼容 Python 围栏）
+  const fences = [...text.matchAll(/```(?:python|py|javascript|js|mjs)\s*\n?([\s\S]*?)```/gi)];
   if (fences.length === 0) return null;
   const longest = fences.map(m => m[1]).sort((a, b) => b.length - a.length)[0];
   return longest.trim() || null;
@@ -634,11 +634,11 @@ export function parseBuilderResponse(raw: string): ParsedBuilderResponse {
     }
   }
 
-  // 3) 裸 JSON / brace-balanced（先剥掉 python 围栏与 SCRIPT 标签，避免干扰）
+  // 3) 裸 JSON / brace-balanced（先剥掉脚本围栏与 SCRIPT 标签，避免干扰）
   if (!json) {
     const stripped = text
       .replace(/<SCRIPT>[\s\S]*?<\/SCRIPT>/gi, '')
-      .replace(/```(?:python|py)\s*\n?[\s\S]*?```/gi, '')
+      .replace(/```(?:python|py|javascript|js|mjs)\s*\n?[\s\S]*?```/gi, '')
       .replace(/```json\s*\n?/gi, '')
       .replace(/```/g, '')
       .trim();
@@ -664,5 +664,5 @@ function stripPythonFences(text: string): string {
   if (!text) return '';
   return text
     .replace(/<SCRIPT>[\s\S]*?<\/SCRIPT>/gi, '<SCRIPT>...（已存档于 draft.scriptContent）...</SCRIPT>')
-    .replace(/```(?:python|py)\s*\n?[\s\S]*?```/gi, '```python\n...（已存档于 draft.scriptContent）...\n```');
+    .replace(/```(?:python|py|javascript|js|mjs)\s*\n?[\s\S]*?```/gi, '```javascript\n...（已存档于 draft.scriptContent）...\n```');
 }

@@ -287,6 +287,23 @@ export class SkillExecutor {
             taskId: ctx.taskId, agentId: ctx.agentId, skillName,
             ...ev,
           });
+
+          // M1-7（协议缝隙修复）：脚本用 emit_artifact 手动声明的产物
+          // （phase=artifact + detail._artifact）→ 与自动检测同款 skill.artifact 事件
+          const manualArtifact = (ev.detail as any)?._artifact;
+          if (manualArtifact && typeof manualArtifact === 'object' && manualArtifact.name && manualArtifact.path) {
+            eventBus.emit('skill.artifact', {
+              taskId: ctx.taskId,
+              agentId: ctx.agentId,
+              skillName,
+              artifact: {
+                type: String(manualArtifact.type || 'file'),
+                name: String(manualArtifact.name),
+                path: String(manualArtifact.path),
+                ...(typeof manualArtifact.preview === 'string' ? { preview: manualArtifact.preview } : {}),
+              },
+            });
+          }
         }
         for (const log of logLines) {
           eventBus.emit('skill.log', {

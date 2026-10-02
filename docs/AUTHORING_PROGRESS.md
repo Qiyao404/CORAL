@@ -63,6 +63,37 @@ emit_artifact("政策报告.md", "/path/to/policy.md", artifact_type="markdown")
 
 ---
 
+## 3b. Node helper（默认推荐，零 Python 依赖）
+
+Node 脚本技能（`script_runtime: node`）的入口文件用 **`.mjs`** 扩展（明确 ESM，不受外部
+package.json 影响），并从 `skills/_lib/` 导入零依赖单文件 helper：
+
+```javascript
+// skills/my-skill/scripts/main.mjs
+import { emitProgress, emitLog, emitArtifact } from '../../_lib/coral-progress.mjs';
+
+// stdin 读平台输入（JSON），stdout 只写最终结果
+const stdin = await new Promise(resolve => {
+  let data = '';
+  process.stdin.on('data', c => (data += c));
+  process.stdin.on('end', () => resolve(data));
+});
+const { input } = JSON.parse(stdin || '{}');
+
+emitProgress('init', '开始处理', { percent: 0 });
+emitProgress('scraping', '[3/8] 第 1 页', { step: 3, total: 8, percent: 37, detail: { page: 1 } });
+emitLog('一条普通日志');
+emitArtifact('结果文件', 'output/result.md', 'markdown');
+emitProgress('done', '全部完成', { percent: 100 });
+
+process.stdout.write(JSON.stringify({ ok: true }));
+```
+
+Node 22 内置 `fetch` 与全部 `node:` 模块 — 常见抓取/文件处理技能**无需 npm install**。
+npm 包形态的 SDK（`@coral/progress`，API 一致）供技能目录之外的项目使用。
+
+---
+
 ## 4. 推荐的 phase 命名
 
 | phase | 含义 |

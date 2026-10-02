@@ -5,7 +5,8 @@
   "description": "CORAL — 通用智能体运行时平台",
   "workspaces": [
     "packages/server",
-    "packages/web"
+    "packages/web",
+    "packages/progress"
   ],
   "scripts": {
     "dev:server": "npm run dev -w packages/server",
@@ -13,7 +14,7 @@
     "build:server": "npm run build -w packages/server",
     "build:web": "npm run build -w packages/web",
     "build": "npm run build:server && npm run build:web",
-    "test": "npm run test -w packages/server",
+    "test": "npm run test -w packages/server && npm run test -w packages/progress",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\""
   },
   "devDependencies": {
