@@ -205,6 +205,8 @@ export interface PlatformConfig {
   llmRetryBaseDelayMs: number;
   /** M0-5：显式演示模式（--demo 启动参数或 CORAL_DEMO_MODE=1），LLM 返回带标记的模拟数据 */
   demoMode: boolean;
+  /** M1-2（D13）：shell_run 工具开关 — 默认关闭，SHELL_TOOL_ENABLED=true 显式开启 */
+  shellToolEnabled: boolean;
   skillsDir: string;
   scenarioPacksDir: string;
   skillWatcherDebounceMs: number;
