@@ -75,6 +75,8 @@ export function loadConfig(): PlatformConfig {
     shellToolEnabled: envBool('SHELL_TOOL_ENABLED', false),
     runMaxSteps: envInt('RUN_MAX_STEPS', 25),
     runMaxTokens: envInt('RUN_MAX_TOKENS', 200_000),
+    memoryDir: resolveDir(env('MEMORY_DIR', './data/memory')),
+    memoryDistillEnabled: envBool('MEMORY_DISTILL', true),
     corsAllowedOrigins: parseCorsOrigins(
       env('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173')
     ),

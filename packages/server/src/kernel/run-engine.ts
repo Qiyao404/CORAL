@@ -10,6 +10,8 @@ import { createDefaultToolRegistry } from '../tools/registry.js';
 import { makeTodoTool } from '../tools/builtin/todo.js';
 import { makePastRunsTool } from '../tools/builtin/past-runs.js';
 import { makeSpawnTool } from '../tools/builtin/spawn.js';
+import { makeMemoryTools, MEMORY_GUIDE } from '../tools/builtin/memory.js';
+import { MemoryService, distillMemory } from '../services/memory-service.js';
 import type { Tool } from '../tools/types.js';
 import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-registry.js';
 import type { SkillExecutor } from '../skill-runtime/skill-executor.js';
@@ -146,7 +148,8 @@ export class RunEngine {
         },
         signal,
         workspaceDir: input.workspaceDir,
-        extraSystem: input.extraSystem,
+        // D18：记忆使用指引常驻系统提示；调用方的 extraSystem 追加在后
+        extraSystem: input.extraSystem ? `${MEMORY_GUIDE}\n\n${input.extraSystem}` : MEMORY_GUIDE,
         onEvent: e => this.onLoopEvent(runId, e),
         saveCheckpoint: cp => this.saveCheckpoint(runId, cp),
         summarize: async transcript => this.summarizeTranscript(transcript),
@@ -180,6 +183,11 @@ export class RunEngine {
           ? { error: result.error }
           : { finalContentPreview: result.finalContent.slice(0, 500), steps: result.steps, toolCalls: result.toolCalls, tokensIn: result.tokensIn, tokensOut: result.tokensOut }
       );
+
+      // M1-11（D18）：会话结束记忆整理 — 仅正常完成时；demo 模式与开关关闭时跳过
+      if (result.status === 'completed' && platformConfig.memoryDistillEnabled && !(this.deps.llm as any).isDemoMode?.()) {
+        await this.distillAfterRun(runId, result.messages);
+      }
     } catch (err: any) {
       if (signal.aborted) {
         this.markCancelled(runId);
@@ -274,6 +282,7 @@ export class RunEngine {
     const tools = registry.list();
     tools.push(makeTodoTool(ev => this.onLoopEvent(runId, { type: ev.type, payload: ev.payload })));
     tools.push(makePastRunsTool(taskStore as any));
+    tools.push(...makeMemoryTools(new MemoryService(platformConfig.memoryDir)));
 
     // M1-4：spawn 工具 — 子预算上限为平台默认的 1/2 量级，spawn 限额 run 级共享
     const spawn = makeSpawnTool({
@@ -291,6 +300,24 @@ export class RunEngine {
     });
     tools.push(spawn);
     return tools;
+  }
+
+  /** M1-11：把本次 run 的对话转录交给 LLM 提炼长期记忆（失败不影响 run 终态） */
+  private async distillAfterRun(runId: string, messages: Array<{ role: string; content: string }>): Promise<void> {
+    try {
+      const transcript = messages
+        .map(m => `[${m.role}] ${m.content}`)
+        .join('\n');
+      const service = new MemoryService(platformConfig.memoryDir);
+      const written = await distillMemory(this.deps.llm, service, transcript);
+      if (written.length > 0) {
+        this.emitRunEvent(runId, 'memory.distilled', {
+          files: written,
+        });
+      }
+    } catch (err: any) {
+      console.warn(`[RunEngine] run ${runId} 记忆整理失败（不影响 run）: ${err?.message ?? err}`);
+    }
   }
 
   /** 上下文压缩摘要器（主循环与 sub-agent 共用） */

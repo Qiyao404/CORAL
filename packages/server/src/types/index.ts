@@ -189,7 +189,9 @@ export type CoralEventType =
   | 'tool.call_started' | 'tool.call_completed' | 'tool.call_failed'
   | 'todo.updated' | 'checkpoint.created'
   /** M1-4：sub-agent 生命周期 */
-  | 'subagent.started' | 'subagent.completed' | 'subagent.failed';
+  | 'subagent.started' | 'subagent.completed' | 'subagent.failed'
+  /** M1-11（D18）：记忆整理 */
+  | 'memory.distilled';
 
 export interface CoralEvent {
   eventId: string;
@@ -221,6 +223,9 @@ export interface PlatformConfig {
   /** M1-5：Free 模式 run 预算默认值（请求级可覆盖，硬上限见 run-engine） */
   runMaxSteps: number;
   runMaxTokens: number;
+  /** M1-11（D18）：记忆目录与「会话结束记忆整理」开关（demo 模式始终跳过整理） */
+  memoryDir: string;
+  memoryDistillEnabled: boolean;
   skillsDir: string;
   scenarioPacksDir: string;
   skillWatcherDebounceMs: number;

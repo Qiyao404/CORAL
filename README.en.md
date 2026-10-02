@@ -90,7 +90,7 @@ Full usage guide → [USE.md](./USE.md) (Chinese)
 | Persistence | SQLite (better-sqlite3, WAL mode, versioned schema migrations) |
 | Skills | YAML frontmatter (gray-matter) + chokidar hot reload |
 | Progress protocol | Home-grown `[CORAL_PROGRESS]` single-line-JSON-over-stderr protocol |
-| Quality | Vitest (203 tests) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
+| Quality | Vitest (212 tests) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
 
 ---
 
