@@ -42,12 +42,13 @@ export function makeMemoryTools(service: MemoryService): Tool[] {
     name: 'memory_write',
     description:
       'Write (create or replace) a long-term memory file. Use for durable facts: user preferences, corrections, project conventions, lessons learned. ' +
-      'Read the existing file first and merge your update into it — do not create near-duplicate topic files.',
+      'Read the existing file first and merge your update into it — do not create near-duplicate topic files. ' +
+      'IMPORTANT: the file name parameter is called "name" (e.g. "user-preferences.md").',
     inputSchema: {
       type: 'object',
       required: ['name', 'content'],
       properties: {
-        name: { type: 'string', description: 'Short kebab-case topic name (e.g. user-preferences.md)' },
+        name: { type: 'string', description: 'Short kebab-case topic file name (e.g. "user-preferences.md"). NOT "topic".' },
         content: { type: 'string', description: 'Full markdown content of the file' },
       },
     },
@@ -57,11 +58,20 @@ export function makeMemoryTools(service: MemoryService): Tool[] {
       if (typeof input?.content !== 'string' || !input.content.trim()) {
         return toolError('BAD_INPUT', 'content 必须为非空字符串');
       }
+      // 健壮性（用户实测反馈）：模型常用 topic/filename 误作参数名 — 接受别名
+      const rawName = input?.name ?? input?.topic ?? input?.filename;
+      if (rawName === undefined || rawName === null || String(rawName).trim() === '') {
+        return toolError('BAD_INPUT', '缺少文件名参数：请用 "name" 传入主题文件名（如 "user-preferences.md"）');
+      }
       try {
-        const w = service.write(String(input?.name ?? ''), input.content);
+        const w = service.write(String(rawName), input.content);
         return toolOk({ written: w.name, bytes: w.bytes, truncated: w.truncated });
       } catch (err: any) {
-        return toolError('BAD_NAME', err?.message ?? '非法文件名', false);
+        return toolError(
+          'BAD_NAME',
+          `文件名 "${String(rawName)}" 无法使用：${err?.message ?? '非法'}。请改用简洁的 kebab-case 主题名（如 "user-preferences.md"），并以 "name" 参数传入`,
+          false
+        );
       }
     },
   };

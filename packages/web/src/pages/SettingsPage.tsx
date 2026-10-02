@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, Monitor, Palette, Brain, FileText } from 'lucide-react';
+import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, Monitor, Palette, Brain, FileText, FolderOpen } from 'lucide-react';
 import { api } from '../api/client';
 import { Card, Button, Input, Textarea, Tag, Select, Skeleton } from '../components/ui';
 import { useTheme, type ThemeMode } from '../contexts/ThemeContext';
@@ -54,6 +54,11 @@ export default function SettingsPage() {
   const [profileMessage, setProfileMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // M1-10：工作区管理
+  const [workspaces, setWorkspaces] = useState<Array<{ id: string; name: string; dir: string; permission: string }>>([]);
+  const [activeWsId, setActiveWsId] = useState<string | null>(null);
+  const [wsForm, setWsForm] = useState({ name: '', dir: '', permission: 'ask' });
+  const [wsMessage, setWsMessage] = useState('');
   // 创新③：长期记忆
   const [memoryFiles, setMemoryFiles] = useState<Array<{ name: string; size: number; modifiedAt: string }>>([]);
   const [memoryName, setMemoryName] = useState('');
@@ -83,6 +88,30 @@ export default function SettingsPage() {
       setMemoryFiles(res.items ?? []);
     } catch { /* 静默 */ }
   };
+  const loadWorkspaces = async () => {
+    try {
+      const res = await api.listWorkspaces();
+      setWorkspaces(res.items ?? []);
+      setActiveWsId(res.activeId ?? null);
+    } catch { /* 静默 */ }
+  };
+  const handleCreateWorkspace = async () => {
+    setWsMessage('');
+    try {
+      await api.createWorkspace({ name: wsForm.name, dir: wsForm.dir, permission: wsForm.permission });
+      setWsForm({ name: '', dir: '', permission: 'ask' });
+      await loadWorkspaces();
+      setWsMessage('工作区已创建');
+    } catch (err: any) { setWsMessage(err.message); }
+  };
+  const handleActivateWorkspace = async (id: string) => {
+    try { await api.activateWorkspace(id); await loadWorkspaces(); } catch (err: any) { setWsMessage(err.message); }
+  };
+  const handleDeleteWorkspace = async (id: string) => {
+    if (!confirm('删除该工作区？（只解除绑定，不会删除磁盘上的文件夹）')) return;
+    try { await api.deleteWorkspace(id); await loadWorkspaces(); } catch (err: any) { setWsMessage(err.message); }
+  };
+
   const openMemoryFile = async (name: string) => {
     try {
       const r = await api.getMemory(name);
@@ -107,6 +136,7 @@ export default function SettingsPage() {
   useEffect(() => {
     loadAll().catch(() => {}).finally(() => setLoading(false));
     loadMemory();
+    loadWorkspaces();
   }, []);
 
   const fillFormFromProfile = (p: LlmProfile) => {
@@ -359,6 +389,54 @@ export default function SettingsPage() {
             <Button variant="secondary" onClick={handleResetProfile} icon={<RefreshCw className="w-4 h-4" />}>恢复默认</Button>
           </div>
           {profileMessage && <p className="text-sm text-fg-muted">{profileMessage}</p>}
+        </div>
+      </Card>
+
+      <Card className="mb-6">
+        <h2 className="font-heading font-semibold text-fg-primary mb-1 flex items-center gap-2">
+          <FolderOpen className="w-5 h-5" /> 工作区（Agent 的本地文件夹权限）
+        </h2>
+        <p className="text-xs text-fg-muted mb-4">
+          绑定本地文件夹后，Agent 才能读写其中的文件。权限档：只读 / 询问（写改弹 diff 批准，默认）/ 自动。Chat 页顶部可选择本次使用哪个工作区。
+        </p>
+
+        {workspaces.length > 0 && (
+          <div className="space-y-1.5 mb-4">
+            {workspaces.map(w => (
+              <div key={w.id} className={`flex items-center gap-2 p-2.5 rounded-lg border text-xs ${activeWsId === w.id ? 'border-brand/40 bg-brand-soft' : 'border-glass-border bg-bg-panel/40'}`}>
+                <FolderOpen className="w-4 h-4 text-brand shrink-0" />
+                <span className="font-medium text-fg-primary">{w.name}</span>
+                <code className="text-fg-muted truncate flex-1">{w.dir}</code>
+                <Tag variant={w.permission === 'readonly' ? 'default' : w.permission === 'auto' ? 'warn' : 'info'}>{w.permission}</Tag>
+                {activeWsId === w.id ? <Tag variant="success">当前</Tag>
+                  : <Button size="sm" variant="ghost" onClick={() => handleActivateWorkspace(w.id)}>设为当前</Button>}
+                <button className="text-fg-disabled hover:text-status-danger cursor-pointer" onClick={() => handleDeleteWorkspace(w.id)}><X className="w-3.5 h-3.5" /></button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+          <div>
+            <label className="block text-xs text-fg-muted mb-1">名称</label>
+            <Input value={wsForm.name} onChange={e => setWsForm(f => ({ ...f, name: e.target.value }))} placeholder="我的项目" />
+          </div>
+          <div className="md:col-span-2">
+            <label className="block text-xs text-fg-muted mb-1">本地文件夹完整路径（须已存在）</label>
+            <Input value={wsForm.dir} onChange={e => setWsForm(f => ({ ...f, dir: e.target.value }))} placeholder="D:\projects\my-notes" />
+          </div>
+          <div>
+            <label className="block text-xs text-fg-muted mb-1">权限档</label>
+            <Select value={wsForm.permission} onChange={e => setWsForm(f => ({ ...f, permission: e.target.value }))}>
+              <option value="ask">询问（默认，写改弹 diff 批准）</option>
+              <option value="readonly">只读</option>
+              <option value="auto">自动（写改直接执行）</option>
+            </Select>
+          </div>
+        </div>
+        <div className="mt-3 flex items-center gap-3">
+          <Button onClick={handleCreateWorkspace} icon={<Plus className="w-4 h-4" />}>创建工作区</Button>
+          {wsMessage && <p className="text-xs text-fg-muted">{wsMessage}</p>}
         </div>
       </Card>
 

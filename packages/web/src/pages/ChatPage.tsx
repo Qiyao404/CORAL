@@ -184,7 +184,7 @@ export default function ChatPage() {
               onChange={e => setWorkspaceId(e.target.value)}
               className="!w-56 text-xs"
             >
-              <option value="">不绑定工作区</option>
+              <option value="">{workspaces.length === 0 ? "未创建工作区（设置页可创建）" : "不绑定工作区"}</option>
               {workspaces.map(w => (
                 <option key={w.id} value={w.id}>
                   {w.name}（{w.permission}）
@@ -237,12 +237,14 @@ export default function ChatPage() {
               rows={1}
               className="flex-1"
             />
-            {workspaceId && (
-              <label className="cursor-pointer p-2 rounded-lg hover:bg-bg-elev/40 text-fg-muted hover:text-brand" title="上传文件到工作区">
-                <Upload className="w-4 h-4" />
-                <input type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = ''; }} />
-              </label>
-            )}
+            <label
+              className="cursor-pointer p-2 rounded-lg hover:bg-bg-elev/40 text-fg-muted hover:text-brand"
+              title={workspaceId ? '上传文件到工作区' : '先在设置页创建工作区，才能上传文件'}
+              onClick={e => { if (!workspaceId) { e.preventDefault(); alert('上传需要先绑定工作区：请到「设置」页创建工作区（绑定一个本地文件夹），然后在顶部选择它。'); } }}
+            >
+              <Upload className="w-4 h-4" />
+              <input type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = ''; }} />
+            </label>
             {activeRunId && view.runStatus === 'running' ? (
               <Button variant="danger" onClick={cancel} icon={<Square className="w-4 h-4" />}>停止</Button>
             ) : (
