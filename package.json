@@ -1,0 +1,23 @@
+{
+  "name": "coral",
+  "version": "2.0.0-m0",
+  "private": true,
+  "description": "CORAL — 通用智能体运行时平台",
+  "workspaces": [
+    "packages/server",
+    "packages/web"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w packages/server",
+    "dev:web": "npm run dev -w packages/web",
+    "build:server": "npm run build -w packages/server",
+    "build:web": "npm run build -w packages/web",
+    "build": "npm run build:server && npm run build:web",
+    "test": "npm run test -w packages/server",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\""
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0",
+    "typescript": "^5.7.0"
+  }
+}

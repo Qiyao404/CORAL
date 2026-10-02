@@ -1,0 +1,24 @@
+# 依赖与构建产物
+node_modules/
+dist/
+*.tsbuildinfo
+
+# 运行时数据（SQLite 库 / 事件 / 会话等，v2 起不进版本库）
+data/
+
+# Skill 运行产物与内部目录（产出物在运行时生成）
+skills/*/output/
+skills/.trash/
+skills/.history/
+skills/_lib/__pycache__/
+__pycache__/
+
+# 本地配置与密钥
+.env
+.env.local
+
+# 内部计划文档（不公开）
+docs/V2_PLAN.md
+
+# 日志
+*.log

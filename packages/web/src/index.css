@@ -1,0 +1,218 @@
+@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;500;600;700&family=Poppins:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+ * 主题变量
+ * - :root 默认 = 浅色
+ * - .dark 类  = 深色
+ *   * darkMode: 'class' (tailwind.config.js)
+ *   * 切换：document.documentElement.classList.add/remove('dark')
+ * - 颜色统一以 "R G B" 三分量存储，便于 Tailwind 的 / <alpha-value>
+ * ============================================================ */
+@layer base {
+  :root {
+    color-scheme: light;
+
+    /* 背景层（浅色） */
+    --bg-base:  248 250 252;   /* slate-50  */
+    --bg-panel: 255 255 255;   /* white     */
+    --bg-raise: 241 245 249;   /* slate-100 */
+    --bg-elev:  226 232 240;   /* slate-200 */
+
+    /* 文字层（浅色） */
+    --fg-primary:   15  23  42;   /* slate-900 */
+    --fg-secondary: 51  65  85;   /* slate-700 */
+    --fg-muted:     100 116 139;  /* slate-500 */
+    --fg-disabled:  148 163 184;  /* slate-400 */
+
+    /* 品牌色（浅色下用更深的绿，保证 AA 对比度） */
+    --brand:        22  163 74;   /* green-600 */
+    --brand-hover:  21  128 61;   /* green-700 */
+    --brand-active: 22  101 52;   /* green-800 */
+
+    /* 状态色 */
+    --status-info:    14  165 233;
+    --status-success: 22  163 74;
+    --status-warn:    217 119 6;
+    --status-danger:  220 38  38;
+    --status-pending: 100 116 139;
+
+    /* Glass 边框（浅色用深色描边低透明度） */
+    --glass-border: 15 23 42;
+    --glass-border-alpha: 0.08;
+    --glass-border-strong-alpha: 0.16;
+
+    /* 阴影（浅色用低强度，更柔和） */
+    --shadow-glass: 0 1px 0 rgba(255,255,255,0.65) inset, 0 6px 24px rgba(15,23,42,0.08);
+    --shadow-glass-strong: 0 1px 0 rgba(255,255,255,0.7) inset, 0 12px 36px rgba(15,23,42,0.12);
+
+    /* 滚动条 */
+    --scrollbar: 100 116 139;
+
+    /* 页面背景晕染（浅色） */
+    --bg-image:
+      radial-gradient(at 8% 0%, rgba(34, 197, 94, 0.10) 0px, transparent 40%),
+      radial-gradient(at 92% 12%, rgba(56, 189, 248, 0.08) 0px, transparent 36%);
+  }
+
+  .dark {
+    color-scheme: dark;
+
+    /* 背景层（深色） */
+    --bg-base:  2   6   23;    /* slate-950 */
+    --bg-panel: 15  23  42;    /* slate-900 */
+    --bg-raise: 30  41  59;    /* slate-800 */
+    --bg-elev:  51  65  85;    /* slate-700 */
+
+    /* 文字层（深色） */
+    --fg-primary:   248 250 252;
+    --fg-secondary: 203 213 225;
+    --fg-muted:     148 163 184;
+    --fg-disabled:  100 116 139;
+
+    /* 品牌色（深色用亮一点的绿） */
+    --brand:        34  197 94;
+    --brand-hover:  22  163 74;
+    --brand-active: 21  128 61;
+
+    /* 状态色 */
+    --status-info:    56  189 248;
+    --status-success: 34  197 94;
+    --status-warn:    245 158 11;
+    --status-danger:  239 68  68;
+    --status-pending: 148 163 184;
+
+    /* Glass 边框（深色用白色描边） */
+    --glass-border: 255 255 255;
+    --glass-border-alpha: 0.10;
+    --glass-border-strong-alpha: 0.18;
+
+    /* 阴影（深色更深） */
+    --shadow-glass: 0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 32px rgba(2, 6, 23, 0.45);
+    --shadow-glass-strong: 0 1px 0 rgba(255,255,255,0.07) inset, 0 12px 48px rgba(2, 6, 23, 0.6);
+
+    /* 滚动条 */
+    --scrollbar: 148 163 184;
+
+    /* 页面背景晕染（深色） */
+    --bg-image:
+      radial-gradient(at 8% 0%, rgba(34, 197, 94, 0.06) 0px, transparent 40%),
+      radial-gradient(at 92% 12%, rgba(56, 189, 248, 0.05) 0px, transparent 36%);
+  }
+
+  html, body {
+    background: rgb(var(--bg-base));
+    color: rgb(var(--fg-primary));
+    font-family: 'Open Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 200ms ease, color 200ms ease;
+  }
+  h1, h2, h3, h4 {
+    font-family: 'Poppins', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    font-feature-settings: 'cv11';
+  }
+  body {
+    background-image: var(--bg-image);
+    background-attachment: fixed;
+  }
+}
+
+/* ============================================================
+ * Glassmorphism 组件类
+ *   两套主题各自定义，业务代码继续用 .glass 即可
+ * ============================================================ */
+@layer components {
+  .glass {
+    background: linear-gradient(135deg, rgba(255,255,255,0.85), rgba(255,255,255,0.65));
+    backdrop-filter: blur(16px) saturate(120%);
+    -webkit-backdrop-filter: blur(16px) saturate(120%);
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    box-shadow: var(--shadow-glass);
+    transition: background 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
+  }
+  .dark .glass {
+    background: linear-gradient(135deg, rgba(15, 23, 42, 0.65), rgba(30, 41, 59, 0.45));
+    border: 1px solid rgba(255, 255, 255, 0.10);
+  }
+
+  .glass-hover {
+    transition: transform 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
+  }
+  .glass-hover:hover {
+    border-color: rgba(15, 23, 42, 0.16);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-glass-strong);
+  }
+  .dark .glass-hover:hover {
+    border-color: rgba(255, 255, 255, 0.18);
+  }
+
+  .glass-soft {
+    background: rgba(255, 255, 255, 0.6);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    border: 1px solid rgba(15, 23, 42, 0.06);
+  }
+  .dark .glass-soft {
+    background: rgba(15, 23, 42, 0.45);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  /* 主进度条带流光 */
+  .progress-bar-fill {
+    background: linear-gradient(
+      90deg,
+      rgb(var(--brand)) 0%,
+      rgba(255, 255, 255, 0.45) 50%,
+      rgb(var(--brand)) 100%
+    );
+    background-size: 200% 100%;
+    animation: progress-flow 1.8s linear infinite;
+  }
+
+  /* 运行中节点脉冲 */
+  .node-running {
+    animation: node-pulse 1.6s ease-in-out infinite alternate;
+  }
+
+  /* 骨架屏 */
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      rgba(148, 163, 184, 0.15) 0%,
+      rgba(148, 163, 184, 0.30) 50%,
+      rgba(148, 163, 184, 0.15) 100%
+    );
+    background-size: 200% 100%;
+    animation: skeleton-shimmer 1.2s ease-in-out infinite;
+    border-radius: 0.5rem;
+  }
+}
+
+/* 滚动条 — 跟随主题 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--scrollbar) / 0.35);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(var(--scrollbar) / 0.55);
+}
+
+/* 尊重 reduce-motion */
+@media (prefers-reduced-motion: reduce) {
+  .progress-bar-fill,
+  .node-running,
+  .skeleton {
+    animation: none !important;
+  }
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
