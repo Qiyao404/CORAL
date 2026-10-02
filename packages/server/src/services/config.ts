@@ -73,6 +73,8 @@ export function loadConfig(): PlatformConfig {
     llmRetryBaseDelayMs: envInt('LLM_RETRY_BASE_DELAY_MS', 500),
     demoMode: process.argv.includes('--demo') || envBool('CORAL_DEMO_MODE', false),
     shellToolEnabled: envBool('SHELL_TOOL_ENABLED', false),
+    runMaxSteps: envInt('RUN_MAX_STEPS', 25),
+    runMaxTokens: envInt('RUN_MAX_TOKENS', 200_000),
     corsAllowedOrigins: parseCorsOrigins(
       env('CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173')
     ),

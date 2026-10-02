@@ -12,6 +12,11 @@ import { SkillExecutor } from './skill-runtime/skill-executor.js';
 import { PlanningEngine } from './planning/planning-engine.js';
 import { DAGScheduler } from './scheduler/dag-scheduler.js';
 import { SkillBuilderService } from './services/skill-builder-service.js';
+import { RunEngine } from './kernel/run-engine.js';
+import { RunStore } from './store/run-store.js';
+import { RunEventStore } from './store/run-event-store.js';
+import { CheckpointStore } from './store/checkpoint-store.js';
+import { registerRunRoutes } from './api/run.routes.js';
 import { ensureLlmConfigsInitialized } from './services/llm-config-service.js';
 import { getCompanyProfile } from './services/company-profile-service.js';
 import { registerTaskRoutes } from './api/task.routes.js';
@@ -65,6 +70,16 @@ async function main() {
   const dagScheduler = new DAGScheduler(executor, registry);
   const skillBuilderService = new SkillBuilderService(registry);
 
+  // M1-5：Free 模式 run-engine（AgentLoop 接线到三表 + 事件总线）
+  const runEngine = new RunEngine({
+    llm: llmClient,
+    skillRegistry: registry,
+    skillExecutor: executor,
+    runStore: new RunStore(),
+    eventStore: new RunEventStore(),
+    checkpointStore: new CheckpointStore(),
+  });
+
   // 创建 Fastify 应用
   const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
 
@@ -106,6 +121,7 @@ async function main() {
   registerSystemRoutes(app, registry);
   registerSkillBuilderRoutes(app, skillBuilderService);
   registerCompanyProfileRoutes(app);
+  registerRunRoutes(app, runEngine);
 
   // WebSocket 事件推送
   app.get('/ws/events', { websocket: true }, (socket, _request) => {

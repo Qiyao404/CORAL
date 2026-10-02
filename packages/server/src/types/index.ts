@@ -178,7 +178,16 @@ export type CoralEventType =
   | 'skill_builder.draft_updated' | 'skill_builder.committed'
   | 'skill_builder.failed'
   /** v1.1.0 新增：公司画像变更 */
-  | 'company_profile.updated';
+  | 'company_profile.updated'
+  /** M1-5（§4.4 v2 事件）：run 生命周期 */
+  | 'run.created' | 'run.started' | 'run.completed' | 'run.failed'
+  | 'run.cancelled' | 'run.budget_exceeded'
+  /** M1-3：agent loop */
+  | 'loop.step_started' | 'loop.step_completed' | 'loop.context_compressed'
+  | 'loop.cancelled' | 'loop.failed'
+  /** M1-2/M1-3：工具调用与 D19 */
+  | 'tool.call_started' | 'tool.call_completed' | 'tool.call_failed'
+  | 'todo.updated' | 'checkpoint.created';
 
 export interface CoralEvent {
   eventId: string;
@@ -207,6 +216,9 @@ export interface PlatformConfig {
   demoMode: boolean;
   /** M1-2（D13）：shell_run 工具开关 — 默认关闭，SHELL_TOOL_ENABLED=true 显式开启 */
   shellToolEnabled: boolean;
+  /** M1-5：Free 模式 run 预算默认值（请求级可覆盖，硬上限见 run-engine） */
+  runMaxSteps: number;
+  runMaxTokens: number;
   skillsDir: string;
   scenarioPacksDir: string;
   skillWatcherDebounceMs: number;

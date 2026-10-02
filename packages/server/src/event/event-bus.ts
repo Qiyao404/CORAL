@@ -8,6 +8,11 @@ type EventHandler = (event: CoralEvent) => void;
 const VOLATILE_EVENT_TYPES: ReadonlySet<string> = new Set([
   'skill.log',
   'skill.progress',
+  // M1-5：v2 run/loop/tool 事件持久化在 events 表（事件溯源），不重复写 audit_events
+  'run.created', 'run.started', 'run.completed', 'run.failed', 'run.cancelled', 'run.budget_exceeded',
+  'loop.step_started', 'loop.step_completed', 'loop.context_compressed', 'loop.cancelled', 'loop.failed',
+  'tool.call_started', 'tool.call_completed', 'tool.call_failed',
+  'todo.updated', 'checkpoint.created',
 ]);
 
 /** 内存 ring buffer 的容量上限（防止长时间任务下日志事件爆内存） */
