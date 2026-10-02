@@ -14,7 +14,7 @@ export interface TodoItem {
 
 const STATUS_SET = new Set(['pending', 'in_progress', 'completed']);
 
-export function makeTodoTool(emit: (e: { type: string; payload?: Record<string, any> }) => void): Tool {
+export function makeTodoTool(): Tool {
   return {
     name: 'todo_write',
     description:
@@ -42,7 +42,7 @@ export function makeTodoTool(emit: (e: { type: string; payload?: Record<string, 
     source: 'builtin',
     permission: 'auto',
 
-    async invoke(input: any): Promise<import('../types.js').ToolResult> {
+    async invoke(input: any, ctx: import('../types.js').ToolContext): Promise<import('../types.js').ToolResult> {
       const todos = input?.todos;
       if (!Array.isArray(todos) || todos.length === 0) {
         return toolError('BAD_INPUT', 'todos 必须为非空数组');
@@ -61,10 +61,7 @@ export function makeTodoTool(emit: (e: { type: string; payload?: Record<string, 
         cleaned.push({ content: content.slice(0, 200), status: status as TodoItem['status'] });
       }
 
-      emit({
-        type: 'todo.updated',
-        payload: { todos: cleaned },
-      });
+      ctx.emit({ type: 'todo.updated', payload: { todos: cleaned } });
 
       return toolOk({
         updated: cleaned.length,

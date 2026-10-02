@@ -31,6 +31,7 @@ export default function ChatPage() {
   const [goal, setGoal] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string>('');
@@ -74,7 +75,7 @@ export default function ChatPage() {
     try {
       const res = await api.createRun({
         goal: goal.trim(),
-        sessionId: sessions.find(s => s.runs.some(r => r.id === activeRunId))?.sessionId ?? undefined,
+        sessionId: currentSessionId ?? undefined,
         workspaceId: workspaceId || undefined,
       });
       setGoal('');
@@ -110,7 +111,7 @@ export default function ChatPage() {
         <div className="p-3 border-b border-glass-border flex items-center justify-between">
           <span className="text-xs text-fg-muted flex items-center gap-1"><History className="w-3.5 h-3.5" /> 历史会话</span>
           <button
-            onClick={() => setActiveRunId(null)}
+            onClick={() => { setActiveRunId(null); setCurrentSessionId(`sess_${Date.now().toString(36)}`); }}
             className="text-xs text-brand hover:text-brand-hover flex items-center gap-1 cursor-pointer"
             title="开始新会话"
           >
@@ -125,7 +126,7 @@ export default function ChatPage() {
               {s.runs.map(r => (
                 <button
                   key={r.id}
-                  onClick={() => setActiveRunId(r.id)}
+                  onClick={() => { setActiveRunId(r.id); setCurrentSessionId(s.sessionId); }}
                   className={`w-full text-left p-2 rounded-lg text-xs transition-colors cursor-pointer ${
                     activeRunId === r.id ? 'bg-brand-soft text-brand' : 'text-fg-secondary hover:bg-bg-elev/40'
                   }`}

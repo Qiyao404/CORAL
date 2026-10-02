@@ -324,7 +324,7 @@ export class RunEngine {
     // D20：fs_search 仅在绑定工作区时可用
     if (workspace) tools.push(fsSearchTool);
 
-    tools.push(makeTodoTool(ev => this.onLoopEvent(runId, { type: ev.type, payload: ev.payload })));
+    tools.push(makeTodoTool()); // 事件经 ctx.emit → loop 注入 agentId
     tools.push(makePastRunsTool(taskStore as any));
     tools.push(...makeMemoryTools(new MemoryService(platformConfig.memoryDir)));
 

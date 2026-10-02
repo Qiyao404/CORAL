@@ -6,14 +6,15 @@ import { makeToolContext } from '../types.js';
 describe('todo_write 工具（M1-3 / D19）', () => {
   it('合法清单 → ok + todo.updated 事件携带完整清单', async () => {
     const events: any[] = [];
-    const tool = makeTodoTool(ev => events.push(ev));
+    const tool = makeTodoTool();
+    const ctx = makeToolContext({ emit: ev => events.push(ev) });
     const r = await tool.invoke(
       { todos: [
         { content: '抓取数据', status: 'completed' },
         { content: '筛选相关', status: 'in_progress' },
         { content: '生成报告', status: 'pending' },
       ]},
-      makeToolContext()
+      ctx
     );
     expect(r.ok).toBe(true);
     expect((r.data as any).updated).toBe(3);
@@ -23,17 +24,19 @@ describe('todo_write 工具（M1-3 / D19）', () => {
   });
 
   it('非法输入：空数组 / 缺 content / 非法 status / 超过 50 条', async () => {
-    const tool = makeTodoTool(() => {});
-    expect((await tool.invoke({ todos: [] }, makeToolContext())).error?.code).toBe('BAD_INPUT');
-    expect((await tool.invoke({ todos: [{ status: 'pending' }] }, makeToolContext())).error?.code).toBe('BAD_INPUT');
-    expect((await tool.invoke({ todos: [{ content: 'x', status: 'doing' }] }, makeToolContext())).error?.code).toBe('BAD_INPUT');
-    expect((await tool.invoke({ todos: Array.from({ length: 51 }, () => ({ content: 'x', status: 'pending' })) }, makeToolContext())).error?.code).toBe('BAD_INPUT');
+    const tool = makeTodoTool();
+    const ctx = makeToolContext();
+    expect((await tool.invoke({ todos: [] }, ctx)).error?.code).toBe('BAD_INPUT');
+    expect((await tool.invoke({ todos: [{ status: 'pending' }] }, ctx)).error?.code).toBe('BAD_INPUT');
+    expect((await tool.invoke({ todos: [{ content: 'x', status: 'doing' }] }, ctx)).error?.code).toBe('BAD_INPUT');
+    expect((await tool.invoke({ todos: Array.from({ length: 51 }, () => ({ content: 'x', status: 'pending' })) }, ctx)).error?.code).toBe('BAD_INPUT');
   });
 
   it('超长 content 被裁剪到 200 字符', async () => {
     const events: any[] = [];
-    const tool = makeTodoTool(ev => events.push(ev));
-    await tool.invoke({ todos: [{ content: '长'.repeat(500), status: 'pending' }] }, makeToolContext());
+    const tool = makeTodoTool();
+    const ctx = makeToolContext({ emit: ev => events.push(ev) });
+    await tool.invoke({ todos: [{ content: '长'.repeat(500), status: 'pending' }] }, ctx);
     expect(events[0].payload.todos[0].content.length).toBe(200);
   });
 
