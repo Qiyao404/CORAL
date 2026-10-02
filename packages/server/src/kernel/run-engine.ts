@@ -9,6 +9,7 @@ import { platformConfig } from '../services/config.js';
 import { createDefaultToolRegistry } from '../tools/registry.js';
 import { makeTodoTool } from '../tools/builtin/todo.js';
 import { makePastRunsTool } from '../tools/builtin/past-runs.js';
+import { makeSpawnTool } from '../tools/builtin/spawn.js';
 import type { Tool } from '../tools/types.js';
 import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-registry.js';
 import type { SkillExecutor } from '../skill-runtime/skill-executor.js';
@@ -148,16 +149,7 @@ export class RunEngine {
         extraSystem: input.extraSystem,
         onEvent: e => this.onLoopEvent(runId, e),
         saveCheckpoint: cp => this.saveCheckpoint(runId, cp),
-        summarize: async transcript => {
-          const { content } = await this.deps.llm.complete(
-            [
-              { role: 'system', content: 'You compress an agent conversation transcript into a dense factual summary. Keep: facts learned, decisions made, file paths, tool outcomes, open questions. Drop: pleasantries and repetition. Output plain text.' },
-              { role: 'user', content: transcript },
-            ],
-            { temperature: 0.2, maxTokens: 1500 }
-          );
-          return content;
-        },
+        summarize: async transcript => this.summarizeTranscript(transcript),
       });
 
       const result = await loop.run();
@@ -208,15 +200,16 @@ export class RunEngine {
     // 事件由 cancelRun API 统一发出；此处不重复
   }
 
-  /** loop 事件 → events 表 + eventBus（双写） */
+  /** loop 事件 → events 表 + eventBus（双写）；agentId 区分主循环/sub-agent（M1-4） */
   private onLoopEvent(runId: string, e: LoopEvent): void {
     const payload = { runId, ...(e.payload ?? {}) };
+    const agentId = typeof (payload as any).agentId === 'string' ? (payload as any).agentId : 'main';
     const toolName = typeof (payload as any).tool === 'string' ? (payload as any).tool : undefined;
     const stored = this.deps.eventStore.insert({
       runId,
       seq: this.nextSeq(runId),
       type: e.type,
-      agentId: 'main',
+      agentId,
       toolName,
       payload,
     });
@@ -269,7 +262,8 @@ export class RunEngine {
     } catch { /* 总线异常不影响执行 */ }
   }
 
-  /** 工具集：默认 registry（内置+技能）+ D19 两工具；每次 run 现建（技能热重载天然生效）。
+  /** 工具集：默认 registry（内置+技能）+ D19 两工具 + agent_spawn（M1-4）；
+   *  每次 run 现建（技能热重载天然生效）。
    *  注意：todo_write 的 emit 是构造时注入的闭包（不走 ctx.emit），必须显式路由到本 run 的事件流 */
   private buildTools(runId: string): Tool[] {
     const registry = createDefaultToolRegistry({
@@ -280,6 +274,34 @@ export class RunEngine {
     const tools = registry.list();
     tools.push(makeTodoTool(ev => this.onLoopEvent(runId, { type: ev.type, payload: ev.payload })));
     tools.push(makePastRunsTool(taskStore as any));
+
+    // M1-4：spawn 工具 — 子预算上限为平台默认的 1/2 量级，spawn 限额 run 级共享
+    const spawn = makeSpawnTool({
+      llm: this.deps.llm,
+      summarize: async transcript => this.summarizeTranscript(transcript),
+      baseTools: tools,
+      depth: 0,
+      spawnCounter: { count: 0 },
+      subBudget: {
+        defaultSteps: Math.max(3, Math.floor(platformConfig.runMaxSteps / 3)),
+        defaultTokens: Math.max(5000, Math.floor(platformConfig.runMaxTokens / 3)),
+        maxSteps: Math.max(5, Math.floor(platformConfig.runMaxSteps / 2)),
+        maxTokens: Math.max(10000, Math.floor(platformConfig.runMaxTokens / 2)),
+      },
+    });
+    tools.push(spawn);
     return tools;
+  }
+
+  /** 上下文压缩摘要器（主循环与 sub-agent 共用） */
+  private async summarizeTranscript(transcript: string): Promise<string> {
+    const { content } = await this.deps.llm.complete(
+      [
+        { role: 'system', content: 'You compress an agent conversation transcript into a dense factual summary. Keep: facts learned, decisions made, file paths, tool outcomes, open questions. Drop: pleasantries and repetition. Output plain text.' },
+        { role: 'user', content: transcript },
+      ],
+      { temperature: 0.2, maxTokens: 1500 }
+    );
+    return content;
   }
 }

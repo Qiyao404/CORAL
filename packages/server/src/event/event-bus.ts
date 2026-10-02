@@ -13,6 +13,7 @@ const VOLATILE_EVENT_TYPES: ReadonlySet<string> = new Set([
   'loop.step_started', 'loop.step_completed', 'loop.context_compressed', 'loop.cancelled', 'loop.failed',
   'tool.call_started', 'tool.call_completed', 'tool.call_failed',
   'todo.updated', 'checkpoint.created',
+  'subagent.started', 'subagent.completed', 'subagent.failed',
 ]);
 
 /** 内存 ring buffer 的容量上限（防止长时间任务下日志事件爆内存） */

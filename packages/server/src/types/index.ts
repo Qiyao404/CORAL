@@ -187,7 +187,9 @@ export type CoralEventType =
   | 'loop.cancelled' | 'loop.failed'
   /** M1-2/M1-3：工具调用与 D19 */
   | 'tool.call_started' | 'tool.call_completed' | 'tool.call_failed'
-  | 'todo.updated' | 'checkpoint.created';
+  | 'todo.updated' | 'checkpoint.created'
+  /** M1-4：sub-agent 生命周期 */
+  | 'subagent.started' | 'subagent.completed' | 'subagent.failed';
 
 export interface CoralEvent {
   eventId: string;

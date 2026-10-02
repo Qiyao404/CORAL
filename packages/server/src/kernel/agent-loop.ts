@@ -315,8 +315,10 @@ export class AgentLoop {
   }
 
   private emit(type: string, payload?: Record<string, any>): void {
+    // agentId 注入：主循环 'main'，sub-agent 各自 id（M1-4 — 事件流区分来源）
+    const enriched = { agentId: this.options.agentId, ...payload };
     try {
-      this.options.onEvent({ type, payload });
+      this.options.onEvent({ type, payload: enriched });
     } catch { /* 事件消费者异常不中断循环 */ }
   }
 }
