@@ -1,8 +1,52 @@
 import OpenAI from 'openai';
 import type {
-  ChatProvider, ChatRequest, ChatResponse, ChatMessage, ChatUsage, ProviderConfig, StopReason,
+  ChatProvider, ChatRequest, ChatResponse, ChatMessage, ChatUsage, ProviderConfig, StopReason, ToolCall,
 } from './types.js';
 import { withRetry, classifyProviderError, describeError, type RetryPolicy } from './retry.js';
+
+/**
+ * M1 复审补丁：DeepSeek V3.2 系模型的「工具调用退化」——
+ * 间歇性地把工具调用以 DSML 特殊标记文本（<｜｜DSML｜｜ invoke name="...">）打印在
+ * content 里而不是走标准 tool_calls 字段。这里做归一化：检测 → 解析 → 转标准
+ * tool_calls，循环层无感。同时保留 degraded 标记供上层告警。
+ */
+
+const DSML_INVOKE_RE = /invoke\s+name="([^"]+)"([\s\S]*?)(?=<｜｜?DSML｜｜?\s*invoke|<\/｜｜?DSML｜｜?\s*calls>|$)/g;
+const DSML_PARAM_RE = /parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)(?=<｜｜?DSML｜｜?\s*(?:parameter|invoke)|<\/｜｜?DSML|$)/g;
+
+/** 检测并解析 DSML 文本型工具调用；无 DSML 或解析不出 → null */
+export function parseDsmlToolCalls(content: string): { toolCalls: ToolCall[]; remaining: string } | null {
+  if (!content || !content.includes('DSML')) return null;
+  if (!content.includes('invoke')) return null;
+
+  const toolCalls: ToolCall[] = [];
+  let m: RegExpExecArray | null;
+  DSML_INVOKE_RE.lastIndex = 0;
+  let seq = 0;
+  while ((m = DSML_INVOKE_RE.exec(content)) !== null) {
+    const name = m[1];
+    const body = m[2];
+    if (!name) continue;
+    const input: Record<string, any> = {};
+    let pm: RegExpExecArray | null;
+    DSML_PARAM_RE.lastIndex = 0;
+    while ((pm = DSML_PARAM_RE.exec(body)) !== null) {
+      const key = pm[1];
+      const rawValue = pm[2].trim();
+      try {
+        input[key] = JSON.parse(rawValue);
+      } catch {
+        input[key] = rawValue;
+      }
+    }
+    toolCalls.push({ id: `dsml_${seq++}`, name, input });
+  }
+  if (toolCalls.length === 0) return null;
+
+  // 正文 = 第一个 DSML 标记之前的自然语言部分
+  const cut = content.indexOf('<｜');
+  return { toolCalls, remaining: content.slice(0, cut > 0 ? cut : 0).trim() };
+}
 
 /**
  * M1-1：OpenAI 兼容端点 provider（DashScope / DeepSeek / OpenRouter / Ollama / OpenAI…）。
@@ -51,7 +95,7 @@ export class OpenAICompatProvider implements ChatProvider {
     const message = choice?.message ?? {};
     const rawCalls = (message.tool_calls ?? []) as any[];
 
-    return {
+    const result: ChatResponse = {
       content: message.content ?? '',
       toolCalls: rawCalls
         .filter(c => c?.type === 'function' || c?.function)
@@ -66,6 +110,7 @@ export class OpenAICompatProvider implements ChatProvider {
       },
       stopReason: mapStopReason(choice?.finish_reason),
     };
+    return normalizeDegradedToolCalls(result);
   }
 
   async stream(req: ChatRequest, onChunk: (delta: string) => void): Promise<ChatResponse> {
@@ -122,7 +167,7 @@ export class OpenAICompatProvider implements ChatProvider {
       }
     );
 
-    return {
+    return normalizeDegradedToolCalls({
       content: full,
       toolCalls: [...toolAcc.entries()].map(([, t]) => ({
         id: t.id,
@@ -131,7 +176,28 @@ export class OpenAICompatProvider implements ChatProvider {
       })),
       usage,
       stopReason: mapStopReason(finishReason),
+    });
+  }
+
+  /** 请求参数构造（stream/complete 共用） */
+  private buildParams(req: ChatRequest, stream: boolean): Record<string, any> {
+    const params: Record<string, any> = {
+      model: this.model,
+      messages: this.toOpenAIMessages(req),
+      temperature: req.temperature ?? 0.7,
+      max_tokens: req.maxTokens ?? 4096,
+      ...(req.tools && req.tools.length > 0
+        ? {
+            tools: req.tools.map(t => ({
+              type: 'function',
+              function: { name: t.name, description: t.description, parameters: t.inputSchema },
+            })),
+          }
+        : {}),
+      ...(req.jsonMode ? { response_format: { type: 'json_object' as const } } : {}),
+      ...(stream ? { stream: true } : {}),
     };
+    return params;
   }
 
   /** 消息映射：system 合并前置；assistant 携带 tool_calls；tool → role:'tool' + tool_call_id */
@@ -175,6 +241,24 @@ function mapStopReason(finish: string | undefined | null): StopReason {
   if (finish === 'length') return 'max_tokens';
   if (finish === 'stop' || !finish) return 'end';
   return 'other';
+}
+
+/**
+ * 退化归一化：无标准 tool_calls 但 content 含 DSML 文本型调用 → 解析转正。
+ * 标记 response.degraded 供上层告警（loop 会发事件，UI 可见）。
+ */
+function normalizeDegradedToolCalls(result: ChatResponse): ChatResponse {
+  if (result.toolCalls.length > 0 || !result.content) return result;
+  const parsed = parseDsmlToolCalls(result.content);
+  if (!parsed) return result;
+  console.warn(`[LLM/openai-compat] 检测到 DSML 文本型工具调用（${parsed.toolCalls.length} 个），已解析转正`);
+  return {
+    ...result,
+    content: parsed.remaining,
+    toolCalls: parsed.toolCalls,
+    stopReason: 'tool_use',
+    degraded: true,
+  };
 }
 
 function safeParseJson(raw: string | undefined): Record<string, any> {

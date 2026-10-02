@@ -150,6 +150,7 @@ export class AgentLoop {
           if (flushTimer) clearInterval(flushTimer);
         }
         if (deltaBuf) this.emit('loop.delta', { step: steps, delta: deltaBuf });
+        if (response.degraded) this.emit('loop.llm_degraded', { step: steps });
         tokensIn += response.usage.inputTokens;
         tokensOut += response.usage.outputTokens;
 
@@ -265,10 +266,17 @@ export class AgentLoop {
     }
   }
 
-  /** 单个工具执行：未知工具 / 审批位 / 异常兜底（call 携带 id — 审批事件与结果预览关联用） */
+  /** 单个工具执行：未知工具（附可用清单，模型可自纠）/ 审批位 / 异常兜底（call 携带 id — 审批事件与结果预览关联用） */
   private async executeTool(tool: Tool | undefined, call: { id: string; name: string; input: Record<string, any> }): Promise<ToolResult> {
     if (!tool) {
-      return { ok: false, error: { code: 'TOOL_NOT_FOUND', message: `工具不存在: ${call.name}`, retryable: false } };
+      return {
+        ok: false,
+        error: {
+          code: 'TOOL_NOT_FOUND',
+          message: `工具 "${call.name}" 不存在。可用工具: ${this.options.tools.map(t => t.name).join(', ')}`,
+          retryable: false,
+        },
+      };
     }
     try {
       if (tool.permission === 'approval') {

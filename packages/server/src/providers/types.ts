@@ -62,6 +62,8 @@ export interface ChatResponse {
   toolCalls: ToolCall[];
   usage: ChatUsage;
   stopReason: StopReason;
+  /** true = 模型把工具调用打印成了文本（如 DeepSeek DSML），已由 provider 解析转正 */
+  degraded?: boolean;
 }
 
 export interface ChatProvider {
