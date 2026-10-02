@@ -151,7 +151,7 @@ CORAL/
 | M3 | MCP bidirectional bridge · scheduled & webhook triggers · progress SDK publishing (npm/PyPI) | ⏳ |
 | M4 | Time-Travel debugger (rewind / fork & replay) · `npx coral` distribution | ⏳ |
 
-Quality baseline: Vitest 236 tests · GitHub Actions on 3 platforms (ubuntu/windows/macos × Node 20/22) · TypeScript strict
+Quality baseline: Vitest 241 tests · GitHub Actions on 3 platforms (ubuntu/windows/macos × Node 20/22) · TypeScript strict
 
 ---
 

@@ -136,6 +136,30 @@ export class LLMClient {
     }
   }
 
+  /**
+   * 流式版 chat（创新点①）：逐 token 回调 + 完整结果返回（含工具调用）。
+   * agent loop 主路径用这个 — 前端逐字直播，工具调用能力不损失。
+   */
+  async chatStream(req: ProviderChatRequest, onDelta: (delta: string) => void): Promise<ProviderChatResponse> {
+    if (this.isDemoMode()) {
+      const r = this.demoChatResponse(req);
+      // demo 也模拟逐字
+      for (const s of chunkText(r.content, 24)) {
+        req.signal?.throwIfAborted?.();
+        try { onDelta(s); } catch { /* ignore */ }
+        await sleep(20);
+      }
+      return r;
+    }
+    try {
+      return await this.provider.stream(req, onDelta);
+    } catch (err: any) {
+      if (isAbortError(err, req.signal)) throw asAbortError(err);
+      if (isQuotaError(err)) throw this.quotaError(err);
+      throw err;
+    }
+  }
+
   // ─── v1 兼容 API（简单消息，无工具调用）───────────────────────────────────────
 
   /** 一次性（非流式）补全 */

@@ -151,7 +151,7 @@ CORAL/
 | M3 | MCP 双向桥 · 定时与 Webhook 触发器 · 进度协议 SDK 发布（npm/PyPI） | ⏳ |
 | M4 | Time-Travel 调试器（回滚/分叉重放）· `npx coral` 单命令分发 | ⏳ |
 
-质量基线：Vitest 236 用例 · GitHub Actions 三平台（ubuntu/windows/macos × Node 20/22）· TypeScript strict
+质量基线：Vitest 241 用例 · GitHub Actions 三平台（ubuntu/windows/macos × Node 20/22）· TypeScript strict
 
 ---
 

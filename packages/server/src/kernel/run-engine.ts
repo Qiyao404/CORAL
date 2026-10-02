@@ -50,6 +50,8 @@ export interface StartRunInput {
 export interface RunEngineDeps {
   llm: {
     chat(req: ChatRequest): Promise<ChatResponse>;
+    /** 创新①：流式 chat — 存在时 loop 走逐 token 直播 */
+    chatStream?(req: ChatRequest, onDelta: (delta: string) => void): Promise<ChatResponse>;
     complete(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, options?: any): Promise<{ content: string }>;
   };
   skillRegistry: FilesystemSkillRegistry;

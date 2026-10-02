@@ -10,7 +10,7 @@ const VOLATILE_EVENT_TYPES: ReadonlySet<string> = new Set([
   'skill.progress',
   // M1-5：v2 run/loop/tool 事件持久化在 events 表（事件溯源），不重复写 audit_events
   'run.created', 'run.started', 'run.completed', 'run.failed', 'run.cancelled', 'run.budget_exceeded',
-  'loop.step_started', 'loop.step_completed', 'loop.context_compressed', 'loop.cancelled', 'loop.failed',
+  'loop.step_started', 'loop.step_completed', 'loop.context_compressed', 'loop.cancelled', 'loop.failed', 'loop.delta',
   'tool.call_started', 'tool.call_completed', 'tool.call_failed',
   'todo.updated', 'checkpoint.created',
   'subagent.started', 'subagent.completed', 'subagent.failed',

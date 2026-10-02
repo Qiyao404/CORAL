@@ -69,7 +69,9 @@ export interface LoopResult {
 
 /** LLM 接口（llmClient 天然满足；测试注入脚本化桩） */
 export interface LoopLLM {
+  /** LLM 接口（llmClient 天然满足；测试注入脚本化桩）。chatStream 可选 — 未注入回退 chat */
   chat(req: ChatRequest): Promise<ChatResponse>;
+  chatStream?(req: ChatRequest, onDelta: (delta: string) => void): Promise<ChatResponse>;
 }
 
 const BASE_SYSTEM = `You are CORAL, a personal local-first agent runtime. You accomplish the user's goal autonomously.
@@ -127,13 +129,27 @@ export class AgentLoop {
         steps++;
         this.emit('loop.step_started', { step: steps, tokensIn, tokensOut });
 
-        const response = await this.llm.chat({
-          system,
-          messages,
-          tools: toolDefs,
-          signal,
-          maxTokens: 4096,
-        });
+        // 创新①：流式直播 — 支持则逐 token 聚为 loop.delta 事件（前端逐字渲染）
+        let deltaBuf = '';
+        const flushTimer = this.llm.chatStream
+          ? setInterval(() => {
+              if (deltaBuf) {
+                this.emit('loop.delta', { step: steps, delta: deltaBuf });
+                deltaBuf = '';
+              }
+            }, 120) // 120ms 聚合批次（防事件风暴）
+          : null;
+        const onDelta = (d: string) => { deltaBuf += d; };
+
+        let response: ChatResponse;
+        try {
+          response = this.llm.chatStream
+            ? await this.llm.chatStream({ system, messages, tools: toolDefs, signal, maxTokens: 4096 }, onDelta)
+            : await this.llm.chat({ system, messages, tools: toolDefs, signal, maxTokens: 4096 });
+        } finally {
+          if (flushTimer) clearInterval(flushTimer);
+        }
+        if (deltaBuf) this.emit('loop.delta', { step: steps, delta: deltaBuf });
         tokensIn += response.usage.inputTokens;
         tokensOut += response.usage.outputTokens;
 

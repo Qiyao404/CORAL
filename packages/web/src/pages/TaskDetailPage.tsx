@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Download, FileText, FileSpreadsheet, Code2, ChevronDown, ChevronRight, X, Maximize2, Minimize2 } from 'lucide-react';
+import { ArrowLeft, Download, FileText, FileSpreadsheet, Code2, ChevronDown, ChevronRight, X, Maximize2, Minimize2, FileDown } from 'lucide-react';
 import { api } from '../api/client';
 import { useTaskStream, type ArtifactItem, type ProgressState } from '../hooks/useTaskStream';
 import { Card, Tag, Button, ProgressBar, EmptyState, Skeleton, ConnectionDot } from '../components/ui';
@@ -246,6 +246,12 @@ export default function TaskDetailPage() {
           </Tag>
           {['planning', 'executing'].includes(task.status) && (
             <Button variant="danger" size="sm" icon={<X className="w-4 h-4" />} onClick={handleCancel}>取消任务</Button>
+          )}
+          {task.metadata?.kind === 'run' && ['completed', 'failed'].includes(task.status) && (
+            <a href={`/api/runs/${taskId}/export.md`} download
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold glass border border-glass-borderStrong text-fg-primary hover:bg-bg-elev/60 cursor-pointer">
+              <FileDown className="w-4 h-4" /> 导出报告
+            </a>
           )}
         </div>
       </div>

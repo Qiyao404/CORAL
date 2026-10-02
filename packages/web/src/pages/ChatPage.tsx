@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bot, Send, FolderOpen, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight,
-  Plus, History, Square, Wrench, ShieldAlert, ListTodo,
+  Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState } from '../components/ui';
@@ -35,10 +35,34 @@ export default function ChatPage() {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string>('');
+  const [uploadNotice, setUploadNotice] = useState('');
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const { events, connected } = useRunStream(activeRunId ?? undefined);
   const view = useMemo(() => deriveRunView(events), [events]);
+
+  // 创新①：流式直播 — 聚合 loop.delta 事件为当前流式文本
+  const streamingText = useMemo(() => {
+    if (view.runStatus) return ''; // 已终态，finalContent 取代
+    return events.filter(e => e.type === 'loop.delta').map(e => e.payload?.delta ?? '').join('');
+  }, [events, view.runStatus]);
+  const uploading = useRef(false);
+
+  const handleUpload = async (file: File) => {
+    if (!workspaceId || uploading.current) { if (!workspaceId) alert('请先选择工作区再上传'); return; }
+    if (file.size > 1024 * 1024) { alert('文件超过 1MB 上限'); return; }
+    uploading.current = true;
+    try {
+      const text = await file.text();
+      await api.uploadWorkspaceFile(workspaceId, file.name, text);
+      setUploadNotice(`已上传 ${file.name} — agent 可通过 fs 工具读取`);
+      setTimeout(() => setUploadNotice(''), 5000);
+    } catch (err: any) {
+      alert('上传失败: ' + err.message);
+    } finally {
+      uploading.current = false;
+    }
+  };
 
   const loadSessions = useCallback(async () => {
     try {
@@ -197,12 +221,13 @@ export default function ChatPage() {
             </div>
           )}
 
-          {activeRunId && <RunLiveView goal={sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? ''} view={view} events={events} onDecide={decide} />}
+          {activeRunId && <RunLiveView goal={sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? ''} view={view} events={events} streamingText={streamingText} onDecide={decide} />}
           <div ref={bottomRef} />
         </div>
 
         {/* 输入区 */}
         <div className="p-4 glass border-t border-glass-border rounded-none">
+          {uploadNotice && <p className="max-w-4xl mx-auto mb-2 text-xs text-status-success flex items-center gap-1"><Type className="w-3 h-3" /> {uploadNotice}</p>}
           <div className="max-w-4xl mx-auto flex gap-3 items-end">
             <Textarea
               value={goal}
@@ -212,6 +237,12 @@ export default function ChatPage() {
               rows={1}
               className="flex-1"
             />
+            {workspaceId && (
+              <label className="cursor-pointer p-2 rounded-lg hover:bg-bg-elev/40 text-fg-muted hover:text-brand" title="上传文件到工作区">
+                <Upload className="w-4 h-4" />
+                <input type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = ''; }} />
+              </label>
+            )}
             {activeRunId && view.runStatus === 'running' ? (
               <Button variant="danger" onClick={cancel} icon={<Square className="w-4 h-4" />}>停止</Button>
             ) : (
@@ -233,11 +264,13 @@ function RunLiveView({
   goal,
   view,
   events,
+  streamingText,
   onDecide,
 }: {
   goal: string;
   view: ReturnType<typeof deriveRunView>;
   events: RunEventItem[];
+  streamingText: string;
   onDecide: (approvalId: string, approved: boolean) => void;
 }) {
   const [openCards, setOpenCards] = useState<Set<string>>(new Set());
@@ -337,6 +370,15 @@ function RunLiveView({
           </div>
         </Card>
       ))}
+
+      {/* 创新①：流式直播中的回答 */}
+      {streamingText && !view.finalContent && (
+        <div className="flex justify-start">
+          <div className="max-w-[85%] glass border border-glass-border rounded-2xl px-4 py-3">
+            <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{streamingText}<span className="animate-pulse">▍</span></p>
+          </div>
+        </div>
+      )}
 
       {/* 最终回答 */}
       {view.finalContent && (

@@ -18,6 +18,9 @@ import { RunEventStore } from './store/run-event-store.js';
 import { CheckpointStore } from './store/checkpoint-store.js';
 import { registerRunRoutes } from './api/run.routes.js';
 import { registerWorkspaceRoutes } from './api/workspace.routes.js';
+import { registerWorkspaceFileRoutes } from './api/workspace-file.routes.js';
+import { registerMemoryRoutes } from './api/memory.routes.js';
+import { registerRunExportRoutes } from './api/run-export.routes.js';
 import { ensureLlmConfigsInitialized } from './services/llm-config-service.js';
 import { getCompanyProfile } from './services/company-profile-service.js';
 import { registerTaskRoutes } from './api/task.routes.js';
@@ -126,6 +129,9 @@ async function main() {
   registerCompanyProfileRoutes(app);
   registerRunRoutes(app, runEngine);
   registerWorkspaceRoutes(app);
+  registerWorkspaceFileRoutes(app);
+  registerMemoryRoutes(app);
+  registerRunExportRoutes(app, runEngine);
 
   // WebSocket 事件推送
   app.get('/ws/events', { websocket: true }, (socket, _request) => {

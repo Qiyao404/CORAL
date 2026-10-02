@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, Monitor, Palette } from 'lucide-react';
+import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, Monitor, Palette, Brain, FileText } from 'lucide-react';
 import { api } from '../api/client';
 import { Card, Button, Input, Textarea, Tag, Select, Skeleton } from '../components/ui';
 import { useTheme, type ThemeMode } from '../contexts/ThemeContext';
@@ -54,6 +54,10 @@ export default function SettingsPage() {
   const [profileMessage, setProfileMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // 创新③：长期记忆
+  const [memoryFiles, setMemoryFiles] = useState<Array<{ name: string; size: number; modifiedAt: string }>>([]);
+  const [memoryName, setMemoryName] = useState('');
+  const [memoryContent, setMemoryContent] = useState('');
 
   const loadAll = async () => {
     const [configRes, llmRes, profileRes] = await Promise.all([
@@ -73,8 +77,36 @@ export default function SettingsPage() {
     setProfileForm(profileRes);
   };
 
+  const loadMemory = async () => {
+    try {
+      const res = await api.listMemory();
+      setMemoryFiles(res.items ?? []);
+    } catch { /* 静默 */ }
+  };
+  const openMemoryFile = async (name: string) => {
+    try {
+      const r = await api.getMemory(name);
+      setMemoryName(name);
+      setMemoryContent(r.content ?? '');
+    } catch (err: any) { alert(err.message); }
+  };
+  const saveMemoryFile = async () => {
+    if (!memoryName) return;
+    try {
+      await api.saveMemory(memoryName, memoryContent);
+      setMemoryFiles((await api.listMemory()).items ?? []);
+      alert('记忆已保存 — agent 下次任务即可使用');
+    } catch (err: any) { alert(err.message); }
+  };
+  const deleteMemoryFile = async (name: string) => {
+    if (!confirm(`删除记忆 ${name}？agent 将不再记得该内容。`)) return;
+    try { await api.deleteMemory(name); if (memoryName === name) { setMemoryName(''); setMemoryContent(''); } setMemoryFiles((await api.listMemory()).items ?? []); }
+    catch (err: any) { alert(err.message); }
+  };
+
   useEffect(() => {
     loadAll().catch(() => {}).finally(() => setLoading(false));
+    loadMemory();
   }, []);
 
   const fillFormFromProfile = (p: LlmProfile) => {
@@ -327,6 +359,37 @@ export default function SettingsPage() {
             <Button variant="secondary" onClick={handleResetProfile} icon={<RefreshCw className="w-4 h-4" />}>恢复默认</Button>
           </div>
           {profileMessage && <p className="text-sm text-fg-muted">{profileMessage}</p>}
+        </div>
+      </Card>
+
+      <Card className="mb-6">
+        <h2 className="font-heading font-semibold text-fg-primary mb-1 flex items-center gap-2">
+          <Brain className="w-5 h-5" /> Agent 长期记忆
+        </h2>
+        <p className="text-xs text-fg-muted mb-4">
+          Agent 跨会话记住的内容（Markdown）。可直接编辑——它下次任务就会按新记忆行事。
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="space-y-1.5 md:col-span-1">
+            {memoryFiles.length === 0 && <p className="text-xs text-fg-muted">记忆为空 — agent 学到新东西后会自动归档到这里</p>}
+            {memoryFiles.map(f => (
+              <div key={f.name} className={`flex items-center gap-1 p-2 rounded-lg cursor-pointer text-xs ${memoryName === f.name ? 'bg-brand-soft text-brand' : 'hover:bg-bg-elev/40 text-fg-secondary'}`} onClick={() => openMemoryFile(f.name)}>
+                <FileText className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate flex-1">{f.name}</span>
+                <button className="text-fg-disabled hover:text-status-danger" onClick={e => { e.stopPropagation(); deleteMemoryFile(f.name); }}>×</button>
+              </div>
+            ))}
+          </div>
+          <div className="md:col-span-2 space-y-2">
+            <div className="flex gap-2 items-center">
+              <input value={memoryName} onChange={e => setMemoryName(e.target.value)} placeholder="文件名（如 user-preferences.md）"
+                className="flex-1 bg-bg-panel/50 border border-glass-border rounded-lg px-3 py-1.5 text-xs font-mono text-fg-primary" />
+              <Button size="sm" onClick={saveMemoryFile} icon={<Save className="w-3.5 h-3.5" />}>保存</Button>
+            </div>
+            <textarea value={memoryContent} onChange={e => setMemoryContent(e.target.value)} rows={10}
+              placeholder="选择左侧文件查看，或输入新文件名创建记忆"
+              className="w-full bg-bg-panel/50 border border-glass-border rounded-lg p-3 text-xs font-mono text-fg-primary font-mono" />
+          </div>
         </div>
       </Card>
 
