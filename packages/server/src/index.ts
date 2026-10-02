@@ -24,6 +24,7 @@ import { registerSkillRoutes } from './api/skill.routes.js';
 import { registerEventRoutes } from './api/event.routes.js';
 import { registerSystemRoutes } from './api/system.routes.js';
 import { registerSkillBuilderRoutes } from './api/skill-builder.routes.js';
+import { registerSkillImportRoutes } from './api/skill-import.routes.js';
 import { registerCompanyProfileRoutes } from './api/company-profile.routes.js';
 import { closeDb } from './store/db.js';
 import { abortAll } from './services/task-abort-registry.js';
@@ -120,6 +121,7 @@ async function main() {
   registerEventRoutes(app);
   registerSystemRoutes(app, registry);
   registerSkillBuilderRoutes(app, skillBuilderService);
+  registerSkillImportRoutes(app, registry);
   registerCompanyProfileRoutes(app);
   registerRunRoutes(app, runEngine);
 
