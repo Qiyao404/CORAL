@@ -9,6 +9,20 @@ import type { DAGScheduler } from '../scheduler/dag-scheduler.js';
 import { createAbortController, abortTask, releaseAbortController } from '../services/task-abort-registry.js';
 import { linkAbortWithTimeout } from '../services/linked-abort.js';
 import { platformConfig } from '../services/config.js';
+import type { RunEngine } from '../kernel/run-engine.js';
+import type { RunEvent } from '../store/run-event-store.js';
+
+/** M1-9：v1 Task 形状的事件（由 v2 RunEvent 映射，供既有前端时间线渲染） */
+function runEventToCoralEvent(e: RunEvent): CoralEvent {
+  return {
+    eventId: e.eventId,
+    type: e.type as CoralEvent['type'],
+    taskId: e.runId,
+    agentId: e.agentId ?? undefined,
+    payload: e.payload,
+    timestamp: e.timestamp,
+  };
+}
 
 /** goal/message 输入上限（直接进 LLM prompt，防成本敞口） */
 const MAX_GOAL_LENGTH = 10_000;
@@ -16,7 +30,9 @@ const MAX_GOAL_LENGTH = 10_000;
 export function registerTaskRoutes(
   app: FastifyInstance,
   planningEngine: PlanningEngine,
-  dagScheduler: DAGScheduler
+  dagScheduler: DAGScheduler,
+  /** M1-9 桥接：可选注入 run-engine — run id 可经 v1 端点透明读取 */
+  runEngine?: RunEngine
 ) {
   // 创建任务
   app.post('/api/tasks', async (request, reply) => {
@@ -80,10 +96,35 @@ export function registerTaskRoutes(
 
   // 任务详情
   // v1.1.1：返回持久化的 agents 实例 + 合并内存 ring buffer 与 audit_logs 持久化事件
-  // 解决任务完成后再次进入详情页时，进度/产物/日志全部丢失的问题（FR-G 持久回放）
+  // M1-9 桥接：id 命中 v2 run 时透明返回 run 详情（Task 形状）— 一套前端两种数据源
   app.get('/api/tasks/:taskId', async (request, reply) => {
     const { taskId } = request.params as any;
-    const task = taskStore.get(taskId);
+
+    const v1Task = taskStore.get(taskId);
+    if (!v1Task && runEngine) {
+      const detail = runEngine.getRunDetail(taskId);
+      if (detail) {
+        const { run, events } = detail;
+        return {
+          task: {
+            taskId: run.id,
+            goal: run.goal,
+            status: run.status === 'waiting_human' ? 'waiting_human' : run.status,
+            result: run.final_content ? { finalContent: run.final_content } : undefined,
+            error: run.error ?? undefined,
+            metadata: { kind: 'run', mode: run.mode, sessionId: run.session_id, budget: run.budget, tokensIn: run.tokens_in, tokensOut: run.tokens_out, endReason: run.end_reason },
+            createdAt: run.created_at,
+            updatedAt: run.updated_at,
+            completedAt: run.completed_at ?? undefined,
+          },
+          plan: null,
+          agents: [],
+          events: events.map(runEventToCoralEvent),
+        };
+      }
+    }
+
+    const task = v1Task;
 
     if (!task) {
       return reply.status(404).send({ error: '任务不存在' });

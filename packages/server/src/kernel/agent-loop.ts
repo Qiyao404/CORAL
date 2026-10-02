@@ -47,8 +47,9 @@ export interface AgentLoopOptions {
   /**
    * 审批回调（permission='approval' 的工具执行前询问）。
    * 未注入时安全默认：拒绝执行（M2-4 审批中心接管前的保守策略）。
+   * callId：本轮工具调用的 id（审批事件关联用，M1-10）。
    */
-  approveTool?: (tool: Tool, input: any) => Promise<boolean>;
+  approveTool?: (tool: Tool, input: any, callId?: string) => Promise<boolean>;
   /** 上下文压缩阈值（字符）与保留条数；summarize 由 run-engine 注入 llmClient */
   maxTotalChars?: number;
   keepRecent?: number;
@@ -248,27 +249,36 @@ export class AgentLoop {
     }
   }
 
-  /** 单个工具执行：未知工具 / 审批位 / 异常兜底 */
-  private async executeTool(tool: Tool | undefined, call: { name: string; input: Record<string, any> }): Promise<ToolResult> {
+  /** 单个工具执行：未知工具 / 审批位 / 异常兜底（call 携带 id — 审批事件与结果预览关联用） */
+  private async executeTool(tool: Tool | undefined, call: { id: string; name: string; input: Record<string, any> }): Promise<ToolResult> {
     if (!tool) {
       return { ok: false, error: { code: 'TOOL_NOT_FOUND', message: `工具不存在: ${call.name}`, retryable: false } };
     }
     try {
       if (tool.permission === 'approval') {
         const approved = this.options.approveTool
-          ? await this.options.approveTool(tool, call.input)
+          ? await this.options.approveTool(tool, call.input, call.id)
           : false; // 安全默认：未接审批通道时拒绝
         if (!approved) {
           return { ok: false, error: { code: 'APPROVAL_DENIED', message: `工具 ${call.name} 需要人工审批，当前未获批准`, retryable: false } };
         }
       }
-      return await tool.invoke(call.input, makeToolContext({
+      const result = await tool.invoke(call.input, makeToolContext({
         runId: this.options.runId,
         agentId: this.options.agentId,
         signal: this.options.signal,
         workspaceDir: this.options.workspaceDir,
         emit: ev => this.emit(ev.type, { tool: call.name, ...ev.payload }),
       }));
+      // 结果预览进事件（M1-8 工具卡片「结果可展开」）
+      if (result.ok) {
+        this.emit('tool.result_preview', {
+          tool: call.name,
+          callId: call.id,
+          preview: preview(result.data),
+        });
+      }
+      return result;
     } catch (err: any) {
       if (this.options.signal.aborted || err?.name === 'AbortError') throw err; // 取消向上传播
       return { ok: false, error: { code: 'TOOL_CRASHED', message: err?.message ?? String(err), retryable: false } };

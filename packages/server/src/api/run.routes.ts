@@ -16,7 +16,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void
       goal?: string;
       sessionId?: string;
       budget?: { maxSteps?: number; maxTokens?: number; maxCostUsd?: number };
-      workspaceDir?: string;
+      workspaceId?: string;
       extraSystem?: string;
     };
 
@@ -29,7 +29,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void
         goal: body.goal,
         sessionId: body.sessionId,
         budget: body.budget,
-        workspaceDir: body.workspaceDir,
+        workspaceId: body.workspaceId,
         extraSystem: body.extraSystem,
       });
       return reply.status(201).send({ runId, sessionId, status: 'running' });
@@ -78,6 +78,23 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void
     const result = engine.cancelRun(runId);
     if (!result.ok) return reply.status(404).send({ error: result.message });
     return { success: true, message: result.message };
+  });
+
+  // M1-10：审批流 — 解决一个待审批（diff 卡片的 通过/拒绝）
+  app.post('/api/runs/:runId/approvals/:approvalId', async (request, reply) => {
+    const { runId, approvalId } = request.params as any;
+    const body = (request.body || {}) as { approved?: boolean };
+    const ok = engine.resolveApproval(runId, approvalId, Boolean(body.approved));
+    if (!ok) return reply.status(404).send({ error: '审批不存在或已处理' });
+    return { success: true, approved: Boolean(body.approved) };
+  });
+
+  // 待审批列表（刷新页面后重取）
+  app.get('/api/runs/:runId/approvals', async (request, reply) => {
+    const { runId } = request.params as any;
+    const run = engine.store.get(runId);
+    if (!run) return reply.status(404).send({ error: 'run 不存在' });
+    return { items: engine.listPendingApprovals(runId) };
   });
 
   // SSE — run 专用实时流

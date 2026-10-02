@@ -190,6 +190,10 @@ export type CoralEventType =
   | 'todo.updated' | 'checkpoint.created'
   /** M1-4：sub-agent 生命周期 */
   | 'subagent.started' | 'subagent.completed' | 'subagent.failed'
+  /** M1-10（D11-D14）：工作区审批流 */
+  | 'tool.approval_required' | 'tool.approval_resolved'
+  /** M1-3：工具结果预览（事件流） */
+  | 'tool.result_preview'
   /** M1-11（D18）：记忆整理 */
   | 'memory.distilled';
 

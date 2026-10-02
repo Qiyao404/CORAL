@@ -12,7 +12,13 @@ import { makePastRunsTool } from '../tools/builtin/past-runs.js';
 import { makeSpawnTool } from '../tools/builtin/spawn.js';
 import { makeMemoryTools, MEMORY_GUIDE } from '../tools/builtin/memory.js';
 import { MemoryService, distillMemory } from '../services/memory-service.js';
-import type { Tool } from '../tools/types.js';
+import { WorkspaceService, type Workspace } from '../services/workspace-service.js';
+import { fsSearchTool } from '../tools/builtin/fs-search.js';
+import { unifiedDiff } from '../tools/diff.js';
+import { resolveWorkspacePath } from '../tools/workspace-path.js';
+import { readFileSync, existsSync } from 'fs';
+import { nanoid } from 'nanoid';
+import type { Tool, ToolPermission } from '../tools/types.js';
 import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-registry.js';
 import type { SkillExecutor } from '../skill-runtime/skill-executor.js';
 import { taskStore } from '../store/index.js';
@@ -36,7 +42,8 @@ export interface StartRunInput {
   /** D17 多会话挂靠 */
   sessionId?: string;
   budget?: RunBudgetInput;
-  workspaceDir?: string;
+  /** M1-10：绑定工作区（目录 + 权限档）— 不传则无 fs/shell 工具 */
+  workspaceId?: string;
   extraSystem?: string;
 }
 
@@ -84,6 +91,13 @@ export class RunEngine {
     }
     const sessionId = input.sessionId ? String(input.sessionId).slice(0, 64) : undefined;
 
+    // M1-10：解析工作区（不传 = 无 fs/shell 工具；传了不存在 = 报错）
+    let workspace: Workspace | null = null;
+    if (input.workspaceId) {
+      workspace = new WorkspaceService().get(input.workspaceId);
+      if (!workspace) throw new Error(`工作区不存在: ${input.workspaceId}`);
+    }
+
     const budget = {
       maxSteps: Math.min(Math.max(input.budget?.maxSteps ?? platformConfig.runMaxSteps, 1), MAX_STEPS_CAP),
       maxTokens: Math.min(Math.max(input.budget?.maxTokens ?? platformConfig.runMaxTokens, 1000), MAX_TOKENS_CAP),
@@ -92,11 +106,16 @@ export class RunEngine {
 
     const runId = newRunId();
     this.deps.runStore.insert({ id: runId, goal, mode: 'free', sessionId, budget });
-    this.emitRunEvent(runId, 'run.created', { goal, sessionId, budget });
+    this.emitRunEvent(runId, 'run.created', {
+      goal,
+      sessionId,
+      budget,
+      ...(workspace ? { workspace: { id: workspace.id, name: workspace.name, permission: workspace.permission } } : {}),
+    });
 
     const controller = createAbortController(runId);
     // 异步执行（与 v1 executeTask 同风格：调用方立即拿到 runId）
-    void this.executeRun(runId, input, controller.signal).catch(err => {
+    void this.executeRun(runId, input, workspace, controller.signal).catch(err => {
       console.error(`[RunEngine] run ${runId} 执行异常:`, err);
     });
 
@@ -111,6 +130,7 @@ export class RunEngine {
       return { ok: true, message: `run 已处于终态（${run.status}）` };
     }
     abortTask(runId); // 立即中止 loop / 工具 / LLM
+    this.rejectAllApprovals(runId); // 挂起的审批直接拒绝（loop 不悬挂）
     this.deps.runStore.update(runId, { status: 'cancelled', endReason: 'cancelled' });
     this.emitRunEvent(runId, 'run.cancelled', { reason: 'user_cancelled' });
     return { ok: true, message: 'run 已取消' };
@@ -128,7 +148,7 @@ export class RunEngine {
 
   // ─── 内部 ────────────────────────────────────────────────
 
-  private async executeRun(runId: string, input: StartRunInput, signal: AbortSignal): Promise<void> {
+  private async executeRun(runId: string, input: StartRunInput, workspace: Workspace | null, signal: AbortSignal): Promise<void> {
     try {
       this.deps.runStore.update(runId, { status: 'running' });
       this.emitRunEvent(runId, 'run.started', {});
@@ -136,7 +156,7 @@ export class RunEngine {
       const run = this.deps.runStore.get(runId)!;
       const budget = (run.budget ?? {}) as { maxSteps?: number; maxTokens?: number };
 
-      const tools = this.buildTools(runId);
+      const tools = this.buildTools(runId, workspace);
       const loop = new AgentLoop(this.deps.llm, {
         runId,
         agentId: 'main',
@@ -147,11 +167,15 @@ export class RunEngine {
           maxTokens: budget.maxTokens ?? platformConfig.runMaxTokens,
         },
         signal,
-        workspaceDir: input.workspaceDir,
+        workspaceDir: workspace?.dir,
         // D18：记忆使用指引常驻系统提示；调用方的 extraSystem 追加在后
         extraSystem: input.extraSystem ? `${MEMORY_GUIDE}\n\n${input.extraSystem}` : MEMORY_GUIDE,
         onEvent: e => this.onLoopEvent(runId, e),
         saveCheckpoint: cp => this.saveCheckpoint(runId, cp),
+        // M1-10：工作区存在时启用审批流（ask/auto 的 approval 工具 + shell）
+        approveTool: workspace
+          ? (tool, inp, callId) => this.requestApproval(runId, tool, inp, callId, workspace)
+          : undefined,
         summarize: async transcript => this.summarizeTranscript(transcript),
       });
 
@@ -197,6 +221,7 @@ export class RunEngine {
       this.emitRunEvent(runId, 'run.failed', { error: err?.message ?? String(err) });
     } finally {
       this.releaseSeq(runId);
+      this.rejectAllApprovals(runId); // 挂起的审批随 run 结束一并落定（防泄漏/悬挂）
       releaseAbortController(runId);
     }
   }
@@ -270,16 +295,35 @@ export class RunEngine {
     } catch { /* 总线异常不影响执行 */ }
   }
 
-  /** 工具集：默认 registry（内置+技能）+ D19 两工具 + agent_spawn（M1-4）；
-   *  每次 run 现建（技能热重载天然生效）。
+  /** 工具集：默认 registry（内置+技能）+ D19/D18/M1-4 工具，按工作区权限档过滤（M1-10）。
+   *  · 无工作区    → 无 fs/shell 工具（模型根本看不到）
+   *  · readonly    → 只读 fs（list/read/search）
+   *  · ask（默认） → fs 全量（写改 approval）+ shell（如启用，approval）
+   *  · auto        → fs 权限位提为 auto；shell 保持 approval（D13）
    *  注意：todo_write 的 emit 是构造时注入的闭包（不走 ctx.emit），必须显式路由到本 run 的事件流 */
-  private buildTools(runId: string): Tool[] {
+  private buildTools(runId: string, workspace: Workspace | null): Tool[] {
     const registry = createDefaultToolRegistry({
       skillRegistry: this.deps.skillRegistry,
       skillExecutor: this.deps.skillExecutor,
-      enableShell: platformConfig.shellToolEnabled,
+      includeFs: Boolean(workspace),
+      enableShell: Boolean(workspace) && platformConfig.shellToolEnabled,
     });
-    const tools = registry.list();
+    let tools = registry.list();
+
+    // M1-10：按权限档过滤/提升
+    const perm = workspace?.permission ?? null;
+    const FS_WRITE = new Set(['fs_write', 'fs_edit']);
+    tools = tools.filter(t => {
+      if (!t.name.startsWith('fs_') && t.name !== 'shell_run') return true; // 非工作区工具不受影响
+      if (perm === 'readonly') return t.name === 'fs_list' || t.name === 'fs_read' || t.name === 'fs_search';
+      return true;
+    });
+    if (perm === 'auto') {
+      tools = tools.map(t => (FS_WRITE.has(t.name) ? withPermission(t, 'auto') : t));
+    }
+    // D20：fs_search 仅在绑定工作区时可用
+    if (workspace) tools.push(fsSearchTool);
+
     tools.push(makeTodoTool(ev => this.onLoopEvent(runId, { type: ev.type, payload: ev.payload })));
     tools.push(makePastRunsTool(taskStore as any));
     tools.push(...makeMemoryTools(new MemoryService(platformConfig.memoryDir)));
@@ -300,6 +344,102 @@ export class RunEngine {
     });
     tools.push(spawn);
     return tools;
+  }
+
+  // ─── M1-10：审批流（waiting_human → 人工决定 → 恢复）──────────────────
+
+  private pendingApprovals = new Map<string, { runId: string; tool: string; resolve: (v: boolean) => void }>();
+
+  /** fs 工具的改动预览（diff 卡片数据）；其他工具返回 null */
+  private previewDiff(toolName: string, input: any, workspaceDir: string): string | null {
+    try {
+      if (toolName === 'fs_write') {
+        const r = resolveWorkspacePath(workspaceDir, String(input?.path ?? ''));
+        if (!r.ok) return null;
+        const before = existsSync(r.absPath) ? readFileSync(r.absPath, 'utf-8') : '';
+        return unifiedDiff(before, String(input?.content ?? ''), String(input?.path ?? ''));
+      }
+      if (toolName === 'fs_edit') {
+        const r = resolveWorkspacePath(workspaceDir, String(input?.path ?? ''));
+        if (!r.ok) return null;
+        if (!existsSync(r.absPath)) return null;
+        const before = readFileSync(r.absPath, 'utf-8');
+        const oldText = String(input?.old_text ?? '');
+        const newText = String(input?.new_text ?? '');
+        if (!oldText || !before.includes(oldText)) return null;
+        const after = input?.replace_all
+          ? before.split(oldText).join(newText)
+          : before.replace(oldText, newText);
+        return unifiedDiff(before, after, String(input?.path ?? ''));
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+
+  /** 审批请求：emit tool.approval_required（带 diff 预览）→ 挂起等待 → 状态机 waiting_human */
+  private async requestApproval(
+    runId: string,
+    tool: Tool,
+    input: any,
+    callId: string | undefined,
+    workspace: Workspace
+  ): Promise<boolean> {
+    const approvalId = nanoid(10);
+    const diff = this.previewDiff(tool.name, input, workspace.dir);
+
+    this.deps.runStore.update(runId, { status: 'waiting_human' });
+    this.emitRunEvent(runId, 'tool.approval_required', {
+      approvalId,
+      tool: tool.name,
+      ...(callId ? { callId } : {}),
+      input,
+      diff,
+      workspace: { id: workspace.id, name: workspace.name },
+    });
+
+    const approved = await new Promise<boolean>(resolve => {
+      this.pendingApprovals.set(approvalId, { runId, tool: tool.name, resolve });
+    });
+
+    // 恢复（若已被取消等改写终态则保持终态）
+    const run = this.deps.runStore.get(runId);
+    if (run?.status === 'waiting_human') {
+      this.deps.runStore.update(runId, { status: 'running' });
+    }
+    this.emitRunEvent(runId, 'tool.approval_resolved', { approvalId, approved, tool: tool.name });
+    return approved;
+  }
+
+  /** API 调用：解决一个待审批（approved=true 放行 / false 拒绝） */
+  resolveApproval(runId: string, approvalId: string, approved: boolean): boolean {
+    const pending = this.pendingApprovals.get(approvalId);
+    if (!pending || pending.runId !== runId) return false;
+    this.pendingApprovals.delete(approvalId);
+    pending.resolve(approved);
+    return true;
+  }
+
+  /** 某 run 的待审批列表（刷新页面后重取） */
+  listPendingApprovals(runId: string): Array<{ approvalId: string; tool: string }> {
+    return [...this.pendingApprovals.entries()]
+      .filter(([, p]) => p.runId === runId)
+      .map(([approvalId, p]) => ({ approvalId, tool: p.tool }));
+  }
+
+  private rejectAllApprovals(runId: string): void {
+    for (const [approvalId, pending] of [...this.pendingApprovals.entries()]) {
+      if (pending.runId === runId) {
+        this.pendingApprovals.delete(approvalId);
+        pending.resolve(false);
+      }
+    }
+  }
+
+  /** 权限位提升副本（fs_write/fs_edit 在 auto 档直接执行） */
+  private withPermissionLocal(t: Tool, permission: ToolPermission): Tool {
+    return { ...t, permission };
   }
 
   /** M1-11：把本次 run 的对话转录交给 LLM 提炼长期记忆（失败不影响 run 终态） */
@@ -331,4 +471,9 @@ export class RunEngine {
     );
     return content;
   }
+}
+
+/** M1-10：权限位提升副本（fs_write/fs_edit 在 auto 档直接执行） */
+function withPermission(t: Tool, permission: ToolPermission): Tool {
+  return { ...t, permission };
 }

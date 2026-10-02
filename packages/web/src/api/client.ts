@@ -160,4 +160,34 @@ export const api = {
     if (params?.type) qs.set('type', params.type);
     return request<any>(`/events?${qs}`);
   },
+
+  // ─── M1-8：v2 Runs（Free 模式 agent 会话）────────────────
+  createRun: (payload: { goal: string; sessionId?: string; workspaceId?: string; budget?: { maxSteps?: number; maxTokens?: number } }) =>
+    request<any>('/runs', { method: 'POST', body: JSON.stringify(payload) }),
+  listRuns: (params?: { sessionId?: string; status?: string; limit?: number }) => {
+    const qs = new URLSearchParams();
+    if (params?.sessionId) qs.set('sessionId', params.sessionId);
+    if (params?.status) qs.set('status', params.status);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    return request<any>(`/runs?${qs}`);
+  },
+  getRun: (runId: string) => request<any>(`/runs/${runId}`),
+  getRunEvents: (runId: string, afterSeq = 0) =>
+    request<any>(`/runs/${runId}/events?afterSeq=${afterSeq}`),
+  cancelRun: (runId: string) =>
+    request<any>(`/runs/${runId}/cancel`, { method: 'POST' }),
+  resolveApproval: (runId: string, approvalId: string, approved: boolean) =>
+    request<any>(`/runs/${runId}/approvals/${approvalId}`, {
+      method: 'POST',
+      body: JSON.stringify({ approved }),
+    }),
+
+  // ─── M1-10：工作区 ────────────────────────────────────────
+  listWorkspaces: () => request<any>('/workspaces'),
+  createWorkspace: (payload: { name: string; dir: string; permission?: string }) =>
+    request<any>('/workspaces', { method: 'POST', body: JSON.stringify(payload) }),
+  activateWorkspace: (id: string) =>
+    request<any>(`/workspaces/${id}/activate`, { method: 'POST' }),
+  deleteWorkspace: (id: string) =>
+    request<any>(`/workspaces/${id}`, { method: 'DELETE' }),
 };

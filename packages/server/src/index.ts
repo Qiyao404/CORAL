@@ -17,6 +17,7 @@ import { RunStore } from './store/run-store.js';
 import { RunEventStore } from './store/run-event-store.js';
 import { CheckpointStore } from './store/checkpoint-store.js';
 import { registerRunRoutes } from './api/run.routes.js';
+import { registerWorkspaceRoutes } from './api/workspace.routes.js';
 import { ensureLlmConfigsInitialized } from './services/llm-config-service.js';
 import { getCompanyProfile } from './services/company-profile-service.js';
 import { registerTaskRoutes } from './api/task.routes.js';
@@ -116,7 +117,7 @@ async function main() {
   await app.register(websocket);
 
   // 注册 API 路由
-  registerTaskRoutes(app, planningEngine, dagScheduler);
+  registerTaskRoutes(app, planningEngine, dagScheduler, runEngine);
   registerSkillRoutes(app, registry, executor);
   registerEventRoutes(app);
   registerSystemRoutes(app, registry);
@@ -124,6 +125,7 @@ async function main() {
   registerSkillImportRoutes(app, registry);
   registerCompanyProfileRoutes(app);
   registerRunRoutes(app, runEngine);
+  registerWorkspaceRoutes(app);
 
   // WebSocket 事件推送
   app.get('/ws/events', { websocket: true }, (socket, _request) => {
