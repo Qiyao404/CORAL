@@ -115,7 +115,8 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void
     const writeSse = (e: any) => {
       try {
         reply.raw.write(`id: ${e.eventId ?? e.id}\n`);
-        reply.raw.write(`event: ${e.type}\n`);
+        // 不发 event: 名 — 客户端 onmessage 只收无名事件（实时性修复：
+        // v1 客户端按类型 addEventListener，v2 useRunStream 只挂 onmessage）
         reply.raw.write(`data: ${JSON.stringify(e)}\n\n`);
       } catch { /* 客户端已断开 */ }
     };

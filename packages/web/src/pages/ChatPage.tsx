@@ -44,7 +44,10 @@ export default function ChatPage() {
   // 创新①：流式直播 — 聚合 loop.delta 事件为当前流式文本
   const streamingText = useMemo(() => {
     if (view.runStatus) return ''; // 已终态，finalContent 取代
-    return events.filter(e => e.type === 'loop.delta').map(e => e.payload?.delta ?? '').join('');
+    const raw = events.filter(e => e.type === 'loop.delta').map(e => e.payload?.delta ?? '').join('');
+    // DSML 抑制兜底：退化原文若混入增量，截到第一个特殊标记前
+    const cut = raw.indexOf('<｜');
+    return cut >= 0 ? raw.slice(0, cut) : raw;
   }, [events, view.runStatus]);
   const uploading = useRef(false);
 

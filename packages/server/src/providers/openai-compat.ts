@@ -144,8 +144,12 @@ export class OpenAICompatProvider implements ChatProvider {
           }
           if (delta?.content) {
             full += delta.content;
-            delivered = true;
-            try { onChunk(delta.content); } catch { /* 消费者异常不中断流 */ }
+            // DSML 抑制（创新①配套）：一旦发现退化标记，停止向消费者发增量
+            // （否则退化原文会以「回答」形态流式显示；最终仍会被归一化为 tool_calls）
+            if (!full.includes('<｜') && !full.includes('DSML')) {
+              delivered = true;
+              try { onChunk(delta.content); } catch { /* 消费者异常不中断流 */ }
+            }
           }
           for (const tc of delta?.tool_calls ?? []) {
             const slot = toolAcc.get(tc.index) ?? { id: '', name: '', args: '' };

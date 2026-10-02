@@ -52,9 +52,10 @@ export function makeTodoTool(): Tool {
       }
       const cleaned: TodoItem[] = [];
       for (const t of todos) {
-        const content = String(t?.content ?? '').trim();
+        // 健壮性（用户实测反馈）：模型常用 task/text 误作键名 — 接受别名
+        const content = String(t?.content ?? t?.task ?? t?.text ?? '').trim();
         const status = String(t?.status ?? '');
-        if (!content) return toolError('BAD_INPUT', 'todo.content 不能为空');
+        if (!content) return toolError('BAD_INPUT', '清单项缺少文本：请用 "content" 键（每项 {content, status}）');
         if (!STATUS_SET.has(status)) {
           return toolError('BAD_INPUT', `todo.status 非法: ${status}（须为 pending/in_progress/completed）`);
         }

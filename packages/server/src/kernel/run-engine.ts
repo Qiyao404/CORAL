@@ -14,6 +14,7 @@ import { makeMemoryTools, MEMORY_GUIDE } from '../tools/builtin/memory.js';
 import { MemoryService, distillMemory } from '../services/memory-service.js';
 import { WorkspaceService, type Workspace } from '../services/workspace-service.js';
 import { fsSearchTool } from '../tools/builtin/fs-search.js';
+import { docxTools } from '../tools/builtin/docx.js';
 import { unifiedDiff } from '../tools/diff.js';
 import { resolveWorkspacePath } from '../tools/workspace-path.js';
 import { readFileSync, existsSync } from 'fs';
@@ -324,7 +325,10 @@ export class RunEngine {
       tools = tools.map(t => (FS_WRITE.has(t.name) ? withPermission(t, 'auto') : t));
     }
     // D20：fs_search 仅在绑定工作区时可用
-    if (workspace) tools.push(fsSearchTool);
+    if (workspace) {
+      tools.push(fsSearchTool);
+      tools.push(...docxTools); // 真实 .docx 读/写（用户实测：会议纪要→Word 文档）
+    }
 
     tools.push(makeTodoTool()); // 事件经 ctx.emit → loop 注入 agentId
     tools.push(makePastRunsTool(taskStore as any));
