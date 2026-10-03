@@ -80,24 +80,26 @@ export const fsReadTool: Tool = {
   permission: 'auto',
 
   async invoke(input: any, ctx): Promise<ToolResult> {
-    const r = resolveWorkspacePath(ctx.workspaceDir, String(input?.path ?? ''));
-        if (!r.ok) return toolError(r.code, r.message);
-    if (!existsFile(r.absPath)) return toolError('FILE_NOT_FOUND', `文件不存在: ${input?.path}`);
+    // 健壮性：模型偶用 file 误作键名 — 接受别名
+    const relPath = String(input?.path ?? input?.file ?? '');
+    const r = resolveWorkspacePath(ctx.workspaceDir, relPath);
+    if (!r.ok) return toolError(r.code, r.message);
+    if (!existsFile(r.absPath)) return toolError('FILE_NOT_FOUND', `文件不存在: ${relPath}`);
 
     const buf = readFileSync(r.absPath);
     if (buf.slice(0, 8192).includes(0)) {
       return toolOk({
-        path: String(input?.path),
+        path: relPath,
         binary: true,
         size: buf.length,
-        note: '二进制文件，内容未回传',
+        note: '二进制文件，内容未回传（Word 文档请用 docx_read）',
       });
     }
 
     const text = buf.toString('utf-8');
     const truncated = text.length > MAX_READ_BYTES;
     return toolOk({
-      path: String(input?.path),
+      path: relPath,
       content: truncated ? text.slice(0, MAX_READ_BYTES) : text,
       size: buf.length,
       truncated,

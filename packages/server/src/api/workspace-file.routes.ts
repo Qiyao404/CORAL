@@ -10,6 +10,17 @@ import { resolveWorkspacePath } from '../tools/workspace-path.js';
  */
 const MAX_FILE_BYTES = 1024 * 1024;
 
+/** 文本通道防护：内容若按 utf-8 读写会损坏（控制字符/NUL 密集）→ 要求 base64 */
+function looksBinary(text: string): boolean {
+  const sample = text.slice(0, 8000);
+  let suspicious = 0;
+  for (let i = 0; i < sample.length; i++) {
+    const c = sample.charCodeAt(i);
+    if (c === 0 || (c < 9 && c !== 0) || (c > 13 && c < 32)) suspicious++;
+  }
+  return suspicious / sample.length > 0.1;
+}
+
 export function registerWorkspaceFileRoutes(
   app: FastifyInstance,
   workspaceService = new WorkspaceService()
@@ -24,9 +35,15 @@ export function registerWorkspaceFileRoutes(
     const content = typeof body.content === 'string' ? body.content : '';
 
     if (!relPath) return reply.status(400).send({ error: '缺少 path（工作区内相对路径）' });
-    if (!content) return reply.status(400).send({ error: '缺少 content（文本内容）' });
-    if (Buffer.byteLength(content, 'utf-8') > MAX_FILE_BYTES) {
-      return reply.status(413).send({ error: '文件过大（上限 1MB）— 大文件请直接放入工作区目录' });
+    if (!content) return reply.status(400).send({ error: '缺少 content' });
+    // encoding: 'base64' 通道 — 二进制文件（.docx/.xlsx/.png…）用 base64 保真传输
+    const isB64 = body.encoding === 'base64';
+    const byteLen = isB64 ? Buffer.byteLength(content, 'base64') : Buffer.byteLength(content, 'utf-8');
+    if (byteLen > MAX_FILE_BYTES) {
+      return reply.status(413).send({ error: `文件过大（${(byteLen / 1024).toFixed(0)}KB，上限 1MB）— 大文件请直接放入工作区目录` });
+    }
+    if (!isB64 && looksBinary(content)) {
+      return reply.status(400).send({ error: '内容疑似二进制 — 请以 base64 编码上传（encoding: "base64"）' });
     }
 
     // 三层守卫（与 fs 工具同规则）
@@ -39,11 +56,11 @@ export function registerWorkspaceFileRoutes(
     try {
       const parent = r.absPath.replace(/[/\\][^/\\]+$/, '') || r.absPath;
       mkdirSync(parent, { recursive: true });
-      const encoding = body.encoding === 'base64' ? ('base64' as const) : 'utf-8';
-      writeFileSync(r.absPath, content, encoding as any);
+      writeFileSync(r.absPath, content, isB64 ? ('base64' as any) : 'utf-8');
       return reply.status(201).send({
         written: relPath.replace(/\\/g, '/'),
-        bytes: Buffer.byteLength(content, encoding as any),
+        bytes: byteLen,
+        binary: isB64,
       });
     } catch (err: any) {
       return reply.status(500).send({ error: `写入失败: ${err?.message ?? err}` });

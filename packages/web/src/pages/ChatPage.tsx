@@ -56,9 +56,14 @@ export default function ChatPage() {
     if (file.size > 1024 * 1024) { alert('文件超过 1MB 上限'); return; }
     uploading.current = true;
     try {
-      const text = await file.text();
-      await api.uploadWorkspaceFile(workspaceId, file.name, text);
-      setUploadNotice(`已上传 ${file.name} — agent 可通过 fs 工具读取`);
+      // 二进制类型走 base64 保真通道（.docx/.xlsx 等）；文本直传
+      const binaryExts = /\.(docx|xlsx|pptx|pdf|zip|png|jpe?g|gif|webp|woff2?|ttf|mp3|mp4|sqlite)$/i;
+      const isBinary = binaryExts.test(file.name);
+      const payload = isBinary
+        ? { path: file.name, content: btoa(String.fromCharCode(...new Uint8Array(await file.arrayBuffer()))), encoding: 'base64' }
+        : { path: file.name, content: await file.text() };
+      await api.uploadWorkspaceFile(workspaceId, payload.path, payload.content);
+      setUploadNotice(`已上传 ${file.name} — agent 可通过 fs/docx 工具读取`);
       setTimeout(() => setUploadNotice(''), 5000);
     } catch (err: any) {
       alert('上传失败: ' + err.message);

@@ -196,8 +196,8 @@ export const api = {
     request<any>(`/workspaces/${id}`, { method: 'DELETE' }),
 
   // ─── 创新点：上传 / 记忆 / 导出 ──────────────────────────
-  uploadWorkspaceFile: (id: string, path: string, content: string) =>
-    request<any>(`/workspaces/${id}/files`, { method: 'POST', body: JSON.stringify({ path, content }) }),
+  uploadWorkspaceFile: (id: string, path: string, content: string, encoding?: 'base64') =>
+    request<any>(`/workspaces/${id}/files`, { method: 'POST', body: JSON.stringify({ path, content, encoding }) }),
   listWorkspaceFiles: (id: string) => request<any>(`/workspaces/${id}/files`),
   listMemory: () => request<any>('/memory'),
   getMemory: (name: string) => request<any>(`/memory/${encodeURIComponent(name)}`),
