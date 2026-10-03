@@ -22,8 +22,9 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '__pycache__
 export const fsSearchTool: Tool = {
   name: 'fs_search',
   description:
-    'Search for a keyword across text files in the bound workspace (recursive, case-insensitive, ' +
-    'returns file/line/text matches). Optional extension filter like ".ts,.md". Use it to locate code, config or notes before reading whole files.',
+    'Search a keyword across TEXT files in the bound workspace (recursive, case-insensitive, file/line/text matches). ' +
+    'NOTE: binary formats (.docx/.xlsx/.pdf/images) are skipped — do NOT use this to check whether files exist; use fs_list for that, ' +
+    'and docx_read to read Word files. This tool only does keyword search (query), not glob patterns.',
   inputSchema: {
     type: 'object',
     required: ['query'],
@@ -39,7 +40,12 @@ export const fsSearchTool: Tool = {
 
   async invoke(input: any, ctx): Promise<ToolResult> {
     const query = String(input?.query ?? '').trim().toLowerCase();
-    if (!query) return toolError('BAD_INPUT', 'query 必填');
+    if (!query) {
+      const hint = input?.pattern !== undefined
+        ? 'fs_search 不支持 glob 通配符（pattern）— 它做关键词检索（query="关键词"）；列出全部文件请用 fs_list'
+        : 'query 必填（关键词检索）；列出全部文件请用 fs_list';
+      return toolError('BAD_INPUT', hint);
+    }
 
     const r = resolveWorkspacePath(ctx.workspaceDir, String(input?.path ?? '.'));
     if (!r.ok) return toolError(r.code, r.message);
@@ -53,6 +59,7 @@ export const fsSearchTool: Tool = {
 
     const matches: Array<{ file: string; line: number; text: string }> = [];
     let scanned = 0;
+    let skippedBinary = 0;
     let truncated = false;
 
     const walk = (dir: string) => {
@@ -72,7 +79,7 @@ export const fsSearchTool: Tool = {
           continue;
         }
         if (!entry.isFile() || scanned >= MAX_FILES_SCANNED) continue;
-        if (BINARY_EXTS.has(entry.name.slice(entry.name.lastIndexOf('.')).toLowerCase())) continue;
+        if (BINARY_EXTS.has(entry.name.slice(entry.name.lastIndexOf('.')).toLowerCase())) { skippedBinary++; continue; }
         if (extFilter.length > 0 && !extFilter.some(e => entry.name.toLowerCase().endsWith(e))) continue;
         scanned++;
 
@@ -106,12 +113,17 @@ export const fsSearchTool: Tool = {
       walk(root);
     } catch { /* 尽力而为 */ }
 
+    const notes: string[] = [];
+    if (matches.length === 0) notes.push('无匹配');
+    if (skippedBinary > 0) {
+      notes.push(`${skippedBinary} 个二进制文件被跳过（.docx/.xlsx 等，搜索不可见）— 列出全部文件请用 fs_list`);
+    }
     return toolOk({
       query,
       scanned,
       matches,
       truncated,
-      note: matches.length === 0 ? '无匹配' : undefined,
+      note: notes.length > 0 ? notes.join('；') : undefined,
     });
   },
 };

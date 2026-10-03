@@ -50,8 +50,12 @@ export default function ChatPage() {
     return cut >= 0 ? raw.slice(0, cut) : raw;
   }, [events, view.runStatus]);
   const uploading = useRef(false);
-  // 新会话时清空已上传文件列表
-  useEffect(() => { if (!activeRunId) setUploadedFiles([]); }, [activeRunId === null]);
+  // run 到达终态后清空已上传文件列表（文件已交给 agent 处理完，不再常驻）
+  useEffect(() => {
+    if (view.runStatus && ['completed', 'failed', 'cancelled'].includes(view.runStatus)) {
+      setUploadedFiles([]);
+    }
+  }, [view.runStatus]);
 
   const handleUpload = async (file: File) => {
     if (!workspaceId || uploading.current) { if (!workspaceId) alert('请先选择工作区再上传'); return; }
