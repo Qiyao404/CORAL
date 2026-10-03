@@ -182,6 +182,20 @@ describe('M1-10：工作区 + 审批流（run-engine）', () => {
     expect(eventStore.listByRun(runId).map(e => e.type)).not.toContain('tool.approval_required');
   });
 
+  it('auto 档：docx_write 也直接执行（无审批事件）', async () => {
+    script = [{
+      stopReason: 'tool_use',
+      toolCalls: [{ id: 'dw', name: 'docx_write', input: { path: 'auto-纪要.docx', content: '# 浓缩版\n自动档直写内容' } }],
+      content: '',
+    }, { stopReason: 'end', content: '完成' }];
+    (engine.deps.llm as any).calls = 0;
+    const r2 = engine.startRun({ goal: 'auto 生成 word', workspaceId: wsAuto });
+    await waitTerminal(r2.runId);
+
+    expect(eventStore.listByRun(r2.runId).map(e => e.type)).not.toContain('tool.approval_required');
+    expect(existsSync(join(autoDir, 'auto-纪要.docx'))).toBe(true);
+  });
+
   it('无工作区：fs 工具不在工具集；不存在的 workspaceId 报错', async () => {
     script = [{ stopReason: 'end', content: '无工作区也能干活' }];
     (engine.deps.llm as any).calls = 0;

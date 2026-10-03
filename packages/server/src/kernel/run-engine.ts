@@ -370,7 +370,15 @@ export class RunEngine {
 
     // M1-10：按权限档过滤/提升
     const perm = workspace?.permission ?? null;
-    const FS_WRITE = new Set(['fs_write', 'fs_edit']);
+    // auto 档提升范围：工作区内落盘工具（fs 写改 + docx 生成）。
+    // shell 不在此列 — D13 独立决策：即使 auto 档也每次审批
+    const FS_WRITE = new Set(['fs_write', 'fs_edit', 'docx_write']);
+    // D20/D11：fs_search 与 docx 工具仅在绑定工作区时可用
+    // （必须先加入再提升 — 否则 docx_write 的 auto 提升扫不到它）
+    if (workspace) {
+      tools.push(fsSearchTool);
+      tools.push(...docxTools);
+    }
     tools = tools.filter(t => {
       if (!t.name.startsWith('fs_') && t.name !== 'shell_run') return true; // 非工作区工具不受影响
       if (perm === 'readonly') return t.name === 'fs_list' || t.name === 'fs_read' || t.name === 'fs_search';
@@ -378,11 +386,6 @@ export class RunEngine {
     });
     if (perm === 'auto') {
       tools = tools.map(t => (FS_WRITE.has(t.name) ? withPermission(t, 'auto') : t));
-    }
-    // D20：fs_search 仅在绑定工作区时可用
-    if (workspace) {
-      tools.push(fsSearchTool);
-      tools.push(...docxTools); // 真实 .docx 读/写（用户实测：会议纪要→Word 文档）
     }
 
     tools.push(makeTodoTool()); // 事件经 ctx.emit → loop 注入 agentId
