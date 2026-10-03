@@ -25,7 +25,7 @@ function runEventToCoralEvent(e: RunEvent): CoralEvent {
 }
 
 /** goal/message 输入上限（直接进 LLM prompt，防成本敞口） */
-const MAX_GOAL_LENGTH = 10_000;
+const MAX_GOAL_LENGTH = 50_000;
 
 export function registerTaskRoutes(
   app: FastifyInstance,

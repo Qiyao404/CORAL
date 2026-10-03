@@ -71,10 +71,11 @@ export function loadConfig(): PlatformConfig {
     llmProfileName: env('LLM_PROFILE_NAME', DEFAULT_LLM_PROFILE_NAME),
     llmMaxRetries: envInt('LLM_MAX_RETRIES', 2),
     llmRetryBaseDelayMs: envInt('LLM_RETRY_BASE_DELAY_MS', 500),
+    llmMaxOutputTokens: envInt('LLM_MAX_OUTPUT_TOKENS', 8192),
     demoMode: process.argv.includes('--demo') || envBool('CORAL_DEMO_MODE', false),
     shellToolEnabled: envBool('SHELL_TOOL_ENABLED', false),
-    runMaxSteps: envInt('RUN_MAX_STEPS', 25),
-    runMaxTokens: envInt('RUN_MAX_TOKENS', 200_000),
+    runMaxSteps: envInt('RUN_MAX_STEPS', 40),
+    runMaxTokens: envInt('RUN_MAX_TOKENS', 500_000),
     memoryDir: resolveDir(env('MEMORY_DIR', './data/memory')),
     memoryDistillEnabled: envBool('MEMORY_DISTILL', true),
     corsAllowedOrigins: parseCorsOrigins(

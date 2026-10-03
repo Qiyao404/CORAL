@@ -2,6 +2,7 @@ import type { ChatMessage, ChatRequest, ChatResponse, ToolDefinition } from '../
 import type { Tool, ToolResult } from '../tools/types.js';
 import { makeToolContext } from '../tools/types.js';
 import { clipToolResults, compressIfNeeded } from './context-window.js';
+import { platformConfig } from '../services/config.js';
 import { resolveToolName } from '../tools/alias.js';
 
 /**
@@ -350,7 +351,7 @@ export class AgentLoop {
       system: this.buildSystemPrompt(),
       messages: [...messages, note],
       signal: this.options.signal,
-      maxTokens: 2048,
+      maxTokens: 8192,
     });
   }
 

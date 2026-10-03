@@ -452,11 +452,17 @@ export default function ChatPage() {
           <div className="max-w-4xl mx-auto flex gap-3 items-end">
             <Textarea
               value={goal}
-              onChange={e => setGoal(e.target.value)}
+              onChange={e => {
+                setGoal(e.target.value);
+                // 输入框自适应高度（2~12 行）
+                const el = e.target as HTMLTextAreaElement;
+                el.style.height = 'auto';
+                el.style.height = Math.min(el.scrollHeight, 288) + 'px';
+              }}
               onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }}
               placeholder="描述你的目标…（Enter 发送，Shift+Enter 换行）"
-              rows={1}
-              className="flex-1"
+              rows={2}
+              className="flex-1 resize-none"
             />
             <label
               className="cursor-pointer p-2 rounded-lg hover:bg-bg-elev/40 text-fg-muted hover:text-brand"

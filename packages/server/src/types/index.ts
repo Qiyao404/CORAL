@@ -220,6 +220,8 @@ export interface PlatformConfig {
   /** M0-4：LLM 传输层重试（网络/429/5xx），不含首次尝试 */
   llmMaxRetries: number;
   llmRetryBaseDelayMs: number;
+  /** 单次 LLM 调用输出上限（默认 8192 — 过小会把长脚本写截断） */
+  llmMaxOutputTokens: number;
   /** M0-5：显式演示模式（--demo 启动参数或 CORAL_DEMO_MODE=1），LLM 返回带标记的模拟数据 */
   demoMode: boolean;
   /** M1-2（D13）：shell_run 工具开关 — 默认关闭，SHELL_TOOL_ENABLED=true 显式开启 */
