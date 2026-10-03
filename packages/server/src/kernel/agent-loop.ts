@@ -408,7 +408,12 @@ export class AgentLoop {
   private buildSystemPrompt(): string {
     const parts = [BASE_SYSTEM];
     if (this.options.workspaceDir) {
-      parts.push(`A local workspace directory is bound. File tools operate inside it with relative paths.`);
+      parts.push(
+        `A local workspace directory is bound. File tools operate inside it with relative paths. ` +
+        `IMPORTANT: web access tools (http_fetch, skill_web-reader) are ALWAYS available even with a workspace bound — ` +
+        `if the user mentions a URL or asks to read/search any website, call http_fetch or skill_web-reader ` +
+        `directly; never claim you cannot access the web.`
+      );
     }
     if (this.options.extraSystem) {
       parts.push(this.options.extraSystem);

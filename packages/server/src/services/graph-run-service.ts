@@ -34,6 +34,10 @@ interface PendingNodeApproval {
   runId: string;
   nodeId: string;
   skill: string;
+  /** 挂起时的节点输入（审批中心展示/改参数基准） */
+  input: Record<string, any>;
+  /** run 目标（审批中心上下文） */
+  goal: string;
   resolve: (v: { approved: boolean; input?: Record<string, any> }) => void;
 }
 
@@ -163,13 +167,16 @@ export class GraphRunService {
     approvalId: string;
     node: string;
     skill: string;
-    createdAt?: string;
+    input: Record<string, any>;
+    goal: string;
   }> {
     return [...this.pendingApprovals.entries()].map(([approvalId, p]) => ({
       runId: p.runId,
       approvalId,
       node: p.nodeId,
       skill: p.skill,
+      input: p.input,
+      goal: p.goal,
     }));
   }
 
@@ -268,6 +275,7 @@ export class GraphRunService {
     signal: AbortSignal
   ): Promise<{ approved: boolean; input?: Record<string, any> }> {
     const approvalId = nanoid(10);
+    const run = this.deps.runStore.get(runId);
     this.deps.runStore.update(runId, { status: 'waiting_human' });
     this.emitRunEvent(runId, 'node.approval_required', {
       approvalId,
@@ -281,6 +289,8 @@ export class GraphRunService {
         runId,
         nodeId: def.id,
         skill: def.skill,
+        input,
+        goal: run?.goal ?? '',
         resolve: v => {
           const run = this.deps.runStore.get(runId);
           if (run?.status === 'waiting_human') {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   GitBranch, Play, CheckCircle2, XCircle, Loader2, ShieldAlert, RotateCcw,
-  AlertTriangle, Trash2, FileCode2, Sparkles,
+  AlertTriangle, Trash2, FileCode2, Sparkles, HelpCircle, ChevronDown, ChevronRight, Package,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { useRunStream, type RunEventItem } from '../hooks/useRunStream';
@@ -11,7 +11,7 @@ import { Tag } from '../components/ui';
 /**
  * M2-6：Workflow 页 — Graph 模式的创作与运行台。
  * YAML 编辑（本地草稿）→ 服务端校验（拓扑序回显）→ 运行（SSE 直播节点状态 DAG）
- * → 节点审批卡（改参数后继续）→ 中断 run 一键 resume（M2-5 DoD）。
+ * → 节点审批卡（改参数后继续）→ 结果面板（节点产出）→ 中断 run 一键 resume（M2-5 DoD）。
  */
 
 const DEFAULT_YAML = `name: my-workflow
@@ -42,15 +42,16 @@ interface GraphNodeView {
   skill: string;
   status: NodeStatus;
   error?: string;
+  outputs?: unknown;
 }
 
-/** 从事件流派生节点状态（graph.node_* + node.approval_*） */
+/** 从事件流派生节点状态（graph.node_* + node.approval_*）与终态产出 */
 function deriveGraphView(events: RunEventItem[], graphYamlNodes: GraphNodeView[]) {
   const nodes = new Map<string, GraphNodeView>(
     graphYamlNodes.map(n => [n.id, { ...n }])
   );
   let runStatus: string | null = null;
-  const approval: { approvalId: string; node: string; input: any } | null = null;
+  let runError: string | null = null;
   let currentApproval: { approvalId: string; node: string; input: any } | null = null;
 
   for (const ev of events) {
@@ -65,6 +66,7 @@ function deriveGraphView(events: RunEventItem[], graphYamlNodes: GraphNodeView[]
         if (n) {
           n.status = ev.type.replace('graph.node_', '') as NodeStatus;
           if (p.error) n.error = String(p.error);
+          if (ev.type === 'graph.node_completed' && p.outputs !== undefined) n.outputs = p.outputs;
         }
         break;
       }
@@ -82,26 +84,52 @@ function deriveGraphView(events: RunEventItem[], graphYamlNodes: GraphNodeView[]
       case 'run.failed':
       case 'run.cancelled':
         runStatus = ev.type.replace('run.', '');
+        if (p.error) runError = String(p.error);
         break;
     }
   }
-  return { nodes: [...nodes.values()], runStatus, approval: currentApproval };
+  return { nodes: [...nodes.values()], runStatus, runError, approval: currentApproval };
 }
 
 /** 从 YAML 文本提取节点骨架（编辑态预览；运行态以服务端 graph 为准） */
 function nodesFromYaml(text: string): GraphNodeView[] {
   const out: GraphNodeView[] = [];
-  for (const m of text.matchAll(/^\s*-\s*id:\s*(\S+)[\s\S]*?(?=^\s*-\s*id:|^\s*\w+:|$)/gm)) {
-    out.push({ id: m[1], skill: '', status: 'pending' });
-  }
-  // skill 名（同段的 skill: 行）
   const blocks = text.split(/^\s*-\s*id:/m);
   blocks.forEach((b, i) => {
-    if (i === 0 || out[i - 1] === undefined) return;
+    if (i === 0) return;
+    const id = b.trim().split(/\s+/)[0]?.replace(/:.*/, '');
+    if (!id) return;
     const sm = b.match(/^\s*.*?\bskill:\s*(\S+)/m);
-    if (sm) out[i - 1].skill = sm[1];
+    out.push({ id, skill: sm?.[1] ?? '', status: 'pending' });
   });
   return out;
+}
+
+/** 使用指引（M2 概念解释 — 用户实测反馈"没看懂"） */
+function GuidePanel() {
+  const [open, setOpen] = useState(() => localStorage.getItem('coral.guide.dismissed') !== '1');
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="text-xs text-fg-muted flex items-center gap-1 cursor-pointer hover:text-brand">
+        <HelpCircle className="w-3.5 h-3.5" /> 什么是 Graph 模式？怎么用？
+      </button>
+    );
+  }
+  return (
+    <div className="glass rounded-xl border border-glass-border p-4 text-xs text-fg-secondary leading-6">
+      <div className="flex items-center gap-2 mb-2">
+        <HelpCircle className="w-4 h-4 text-brand" />
+        <span className="font-medium text-fg-primary">Workflow（Graph 模式）使用指引</span>
+        <span className="flex-1" />
+        <button onClick={() => { setOpen(false); localStorage.setItem('coral.guide.dismissed', '1'); }}
+          className="text-fg-muted hover:text-fg-primary cursor-pointer">收起</button>
+      </div>
+      <p><b>和「对话」模式的区别</b>：对话里 Agent 自主决定下一步（自由但每次路径可能不同）；Workflow 把步骤<b>预先写成一张确定的依赖图（DAG）</b>——哪个节点先跑、结果传给谁，全部由你定义，模型只负责执行每个节点。适合可重复的固定流程。</p>
+      <p className="mt-2"><b>三步使用</b>：① 在「目标描述」写一句话点 <b>AI 编排</b>（自动生成 YAML，也可手写）→ ② 点<b>校验</b>确认无误 → ③ 点<b>运行 Graph</b>，下方实时显示每个节点的状态与产出。</p>
+      <p className="mt-2"><b>节点级审批</b>：给节点写 <code className="text-brand">permission: approval</code>，它执行前会<b>暂停等你批准</b>（run 显示 waiting_human）。「审批中心」页汇聚了所有等待中的审批（含对话模式的文件修改审批）：可以<b>通过 / 拒绝 / 先修改参数 JSON 再通过</b>——改完的参数就是该节点实际使用的输入。</p>
+      <p className="mt-2"><b>断点恢复</b>：Graph 每完成一个节点就存档（checkpoint）。如果服务中途重启，页面顶部会出现黄色横幅列出中断的 run——点「恢复」从断点继续，<b>已完成的节点不会重跑</b>，只有未完成的继续执行。</p>
+    </div>
+  );
 }
 
 export default function WorkflowPage() {
@@ -116,6 +144,7 @@ export default function WorkflowPage() {
   const [error, setError] = useState<string | null>(null);
   const [compiling, setCompiling] = useState(false);
   const [inputDraft, setInputDraft] = useState(''); // 审批改参数的 JSON 草稿
+  const [openOutputs, setOpenOutputs] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const { events, connected } = useRunStream(activeRunId ?? undefined);
@@ -157,14 +186,16 @@ export default function WorkflowPage() {
 
   const run = async () => {
     setError(null);
+    setValidation(null);
     try {
       const res = await api.createGraphRun({ goal: goal.trim() || yaml.match(/^name:\s*(\S+)/m)?.[1] || 'graph run', graph: yaml });
       setActiveRunId(res.runId);
       setRunGoal(goal.trim() || 'graph run');
       setRunGraphNodes(nodesFromYaml(yaml));
       setInputDraft('');
+      setOpenOutputs(new Set());
     } catch (err: any) {
-      setError(err.message);
+      setError(err.message || '创建失败');
     }
   };
 
@@ -197,10 +228,17 @@ export default function WorkflowPage() {
     }
   };
 
+  const toggleOutput = (id: string) => setOpenOutputs(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
   const previewNodes = useMemo(() => nodesFromYaml(yaml), [yaml]);
+  const completedNodes = view.nodes.filter(n => n.status === 'completed');
 
   return (
-    <div className="p-6 max-w-6xl mx-auto space-y-6">
+    <div className="p-6 max-w-6xl mx-auto space-y-5">
       <div className="flex items-center gap-3">
         <div className="w-10 h-10 bg-brand-soft rounded-xl flex items-center justify-center border border-brand/30">
           <GitBranch className="w-5 h-5 text-brand" />
@@ -210,6 +248,8 @@ export default function WorkflowPage() {
           <p className="text-xs text-fg-muted">Graph 模式 — 确定性 DAG · 节点级审批 · 断点恢复</p>
         </div>
       </div>
+
+      <GuidePanel />
 
       {/* 中断 run 恢复条（M2-5） */}
       {resumable.length > 0 && (
@@ -262,7 +302,7 @@ export default function WorkflowPage() {
           <input
             value={goal}
             onChange={e => setGoal(e.target.value)}
-            placeholder="目标描述（可选，默认取 graph 名）"
+            placeholder="目标描述（AI 编排必填；运行时可选）"
             className="w-full glass border border-glass-border rounded-lg px-3 py-2 text-sm text-fg-primary outline-none focus:border-brand/40"
           />
           <div className="flex gap-2 flex-wrap">
@@ -281,7 +321,11 @@ export default function WorkflowPage() {
               </button>
             )}
           </div>
-          {error && <p className="text-xs text-status-danger">{error}</p>}
+          {error && (
+            <div className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/30 rounded-lg px-2.5 py-2 break-all">
+              {error}
+            </div>
+          )}
 
           {/* 编辑态预览（未运行时） */}
           {!activeRunId && previewNodes.length > 0 && (
@@ -290,7 +334,7 @@ export default function WorkflowPage() {
             </div>
           )}
 
-          {/* 运行态：节点 DAG + 状态 */}
+          {/* 运行态：节点 DAG + 状态 + 结果 */}
           {activeRunId && (
             <div className="space-y-3 flex-1">
               <div className="flex items-center gap-2 text-xs">
@@ -302,8 +346,21 @@ export default function WorkflowPage() {
                   : <Tag variant="info">运行中</Tag>}
                 <span className="text-fg-muted truncate flex-1">{runGoal}</span>
               </div>
+
+              {/* 失败详情（用户实测：失败后"什么都没有"） */}
+              {view.runStatus === 'failed' && (
+                <div className="text-xs text-status-danger bg-status-danger/10 border border-status-danger/30 rounded-lg px-2.5 py-2 space-y-1">
+                  <p className="font-medium">Graph 执行失败：</p>
+                  {view.nodes.filter(n => n.status === 'failed').map(n => (
+                    <p key={n.id}>节点 <b>{n.id}</b>（{n.skill}）：{n.error ?? '未知错误'}</p>
+                  ))}
+                  {view.runError && <p className="text-fg-muted">{view.runError}</p>}
+                  <p className="text-fg-muted">常见原因：技能名写错（先到「技能列表」核对）、技能执行报错（看上方节点列表的错误信息）。</p>
+                </div>
+              )}
+
               {runGraphNodes.length > 0 && (
-                <div className="h-[280px] rounded-xl border border-glass-border overflow-hidden">
+                <div className="h-[240px] rounded-xl border border-glass-border overflow-hidden">
                   <AgentDag
                     agents={view.nodes.map(n => ({ agentId: n.id, name: n.id, role: 'skill', skill: n.skill || 'skill' }))}
                     edges={[]}
@@ -328,12 +385,37 @@ export default function WorkflowPage() {
                 ))}
               </div>
 
+              {/* 结果面板：每个完成节点的产出（用户实测：成功后"什么都没有"） */}
+              {view.runStatus === 'completed' && completedNodes.length > 0 && (
+                <div className="glass rounded-xl border border-status-success/25 p-3 space-y-2">
+                  <p className="text-xs font-medium text-fg-secondary flex items-center gap-1.5">
+                    <Package className="w-3.5 h-3.5 text-status-success" /> 执行结果（{completedNodes.length} 个节点产出）
+                  </p>
+                  {completedNodes.map(n => {
+                    const open = openOutputs.has(n.id);
+                    const text = typeof n.outputs === 'string' ? n.outputs : JSON.stringify(n.outputs ?? {}, null, 2);
+                    return (
+                      <div key={n.id} className="text-xs">
+                        <button onClick={() => toggleOutput(n.id)} className="flex items-center gap-1.5 w-full text-left cursor-pointer text-fg-primary hover:text-brand">
+                          {open ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
+                          <span className="font-medium">{n.id}</span>
+                          <span className="text-fg-muted truncate flex-1">{text.slice(0, 80)}</span>
+                        </button>
+                        {open && (
+                          <pre className="mt-1 max-h-52 overflow-y-auto glass border border-glass-border rounded-lg p-2 whitespace-pre-wrap break-words text-fg-secondary">{text}</pre>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* 节点审批卡（M2-4：改参数后继续） */}
               {view.approval && (
                 <div className="glass rounded-xl border border-status-warning/40 p-3 space-y-2">
                   <p className="text-xs text-fg-secondary flex items-center gap-1.5">
                     <ShieldAlert className="w-3.5 h-3.5 text-status-warning" />
-                    节点 <b>{view.approval.node}</b> 等待审批 — 可修改参数后通过
+                    节点 <b>{view.approval.node}</b> 等待审批 — 可修改参数后通过（也可到「审批中心」处理）
                   </p>
                   <textarea
                     value={inputDraft || JSON.stringify(view.approval.input ?? {}, null, 2)}

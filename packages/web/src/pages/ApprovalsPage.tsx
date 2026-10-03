@@ -14,6 +14,8 @@ interface PendingItem {
   tool?: string;
   node?: string;
   skill?: string;
+  goal?: string;
+  input?: Record<string, any>;
 }
 
 export default function ApprovalsPage() {
@@ -64,6 +66,10 @@ export default function ApprovalsPage() {
           {loading ? <Loader2 className="w-4 h-4 animate-spin text-fg-muted" /> : <RefreshCw className="w-4 h-4 text-fg-muted" />}
         </button>
       </div>
+      <div className="glass rounded-xl border border-glass-border p-3 text-xs text-fg-secondary leading-6">
+        <p><b>这里汇聚什么？</b>两类需要你点头才能继续的操作：① <b>工具审批</b>（对话模式里 Agent 要改工作区文件、跑命令时弹的 diff 卡片）；② <b>节点审批</b>（Workflow 里标了 <code className="text-brand">permission: approval</code> 的节点，执行前挂起）。</p>
+        <p className="mt-1"><b>三个选择</b>：<b>通过</b>＝按原参数放行；<b>拒绝</b>＝该操作/节点失败（Graph 里其后代节点会级联跳过）；<b>改参数后通过</b>＝只在节点审批出现 — 编辑参数 JSON 再点通过，改后的参数就是节点实际使用的输入（比如改采集的站点、摘要的字数）。</p>
+      </div>
 
       {items.length === 0 && (
         <div className="glass rounded-xl border border-glass-border p-8 text-center">
@@ -81,14 +87,20 @@ export default function ApprovalsPage() {
             <span className="flex-1" />
             <span className="text-fg-muted font-mono">{item.runId}</span>
           </div>
+          {item.goal && (
+            <p className="text-xs text-fg-muted">所属任务：{item.goal}</p>
+          )}
           {item.kind === 'node' && (
-            <textarea
-              value={edits[item.approvalId] ?? ''}
-              onChange={e => setEdits(prev => ({ ...prev, [item.approvalId]: e.target.value }))}
-              placeholder='（可选）修改参数 JSON — 留空则按原参数执行'
-              spellCheck={false}
-              className="w-full h-20 glass border border-glass-border rounded-lg p-2 font-mono text-xs text-fg-primary outline-none focus:border-brand/40 resize-none"
-            />
+            <>
+              <pre className="text-xs text-fg-muted glass border border-glass-border rounded-lg p-2 max-h-24 overflow-y-auto whitespace-pre-wrap break-words">当前参数：{JSON.stringify(item.input ?? {}, null, 2)}</pre>
+              <textarea
+                value={edits[item.approvalId] ?? ''}
+                onChange={e => setEdits(prev => ({ ...prev, [item.approvalId]: e.target.value }))}
+                placeholder='（可选）修改参数 JSON — 留空则按上面显示的原参数执行'
+                spellCheck={false}
+                className="w-full h-20 glass border border-glass-border rounded-lg p-2 font-mono text-xs text-fg-primary outline-none focus:border-brand/40 resize-none"
+              />
+            </>
           )}
           <div className="flex gap-2">
             <button onClick={() => decide(item.runId, item.approvalId, true)}

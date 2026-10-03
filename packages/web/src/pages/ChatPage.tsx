@@ -124,7 +124,8 @@ export default function ChatPage() {
     try {
       const res = await api.listRuns({ limit: 100 });
       const bySession = new Map<string, SessionItem>();
-      for (const run of res.items ?? []) {
+      for (const run of (res.items ?? []).filter((r: any) => r.mode !== 'graph')) {
+        // graph 模式 run 不属于对话 — 它们在 Workflow 页管理（防止空会话/混淆）
         const key = run.session_id ?? '(未分组)';
         if (!bySession.has(key)) bySession.set(key, { sessionId: run.session_id, runs: [] });
         bySession.get(key)!.runs.push({ id: run.id, goal: run.goal, status: run.status, createdAt: run.created_at });
@@ -162,7 +163,7 @@ export default function ChatPage() {
     if (!sid) { setSessionRuns([]); return; }
     try {
       const res = await api.listRuns({ sessionId: sid, limit: 100 });
-      const items = (res.items ?? [])
+      const items = (res.items ?? []).filter((r: any) => r.mode !== 'graph')
         .map((r: any) => ({ id: r.id, goal: r.goal, final_content: r.final_content, created_at: r.created_at }))
         .sort((a: any, b: any) => (a.created_at || '').localeCompare(b.created_at || ''));
       setSessionRuns(items);
