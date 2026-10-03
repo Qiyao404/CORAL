@@ -2,6 +2,7 @@ import type { ChatMessage, ChatRequest, ChatResponse, ToolDefinition } from '../
 import type { Tool, ToolResult } from '../tools/types.js';
 import { makeToolContext } from '../tools/types.js';
 import { clipToolResults, compressIfNeeded } from './context-window.js';
+import { resolveToolName } from '../tools/alias.js';
 
 /**
  * M1-3：Agent Loop — v2 的心脏（V2_PLAN §4.2）。
@@ -277,7 +278,19 @@ export class AgentLoop {
 
   /** 单个工具执行：未知工具（附可用清单，模型可自纠）/ 审批位 / 异常兜底（call 携带 id — 审批事件与结果预览关联用） */
   private async executeTool(tool: Tool | undefined, call: { id: string; name: string; input: Record<string, any> }): Promise<ToolResult> {
-    if (!tool) {
+    // M1 打磨（用户实测）：常见幻觉名自动纠正（web_fetch → http_fetch 等），
+    // 纠正时在结果里附备注让模型知道实际执行的名字（后续轮次改用正确名）
+    let resolvedTool = tool;
+    let correctedFrom: string | undefined;
+    if (!resolvedTool) {
+      const fixed = resolveToolName(call.name, this.options.tools);
+      if (fixed) {
+        resolvedTool = fixed.tool;
+        correctedFrom = fixed.correctedFrom;
+      }
+    }
+
+    if (!resolvedTool) {
       return {
         ok: false,
         error: {
@@ -288,15 +301,15 @@ export class AgentLoop {
       };
     }
     try {
-      if (tool.permission === 'approval') {
+      if (resolvedTool.permission === 'approval') {
         const approved = this.options.approveTool
-          ? await this.options.approveTool(tool, call.input, call.id)
+          ? await this.options.approveTool(resolvedTool, call.input, call.id)
           : false; // 安全默认：未接审批通道时拒绝
         if (!approved) {
-          return { ok: false, error: { code: 'APPROVAL_DENIED', message: `工具 ${call.name} 需要人工审批，当前未获批准`, retryable: false } };
+          return { ok: false, error: { code: 'APPROVAL_DENIED', message: `工具 ${resolvedTool.name} 需要人工审批，当前未获批准`, retryable: false } };
         }
       }
-      const result = await tool.invoke(call.input, makeToolContext({
+      const result = await resolvedTool.invoke(call.input, makeToolContext({
         runId: this.options.runId,
         agentId: this.options.agentId,
         signal: this.options.signal,
@@ -306,10 +319,17 @@ export class AgentLoop {
       // 结果预览进事件（M1-8 工具卡片「结果可展开」）
       if (result.ok) {
         this.emit('tool.result_preview', {
-          tool: call.name,
+          tool: resolvedTool.name,
           callId: call.id,
           preview: preview(result.data),
         });
+      }
+      if (correctedFrom) {
+        // 让模型看到纠正（下一轮直接用正确名）
+        const data = (result.ok && result.data && typeof result.data === 'object')
+          ? { ...(result.data as any), _tool_name_corrected: `"${correctedFrom}" 已自动纠正为 "${resolvedTool.name}"，后续请直接使用 ${resolvedTool.name}` }
+          : result.data;
+        return { ...result, data };
       }
       return result;
     } catch (err: any) {

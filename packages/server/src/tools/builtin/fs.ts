@@ -38,7 +38,7 @@ export const fsListTool: Tool = {
         if (!r.ok) return toolError(r.code, r.message);
     if (!existsDir(r.absPath)) return toolError('NOT_A_DIRECTORY', `不是目录: ${input?.path ?? '.'}`);
 
-    const entries: Array<{ path: string; type: 'file' | 'dir'; size?: number }> = [];
+    const entries: Array<{ path: string; type: 'file' | 'dir'; size?: number; modifiedAt?: string }> = [];
     const walk = (dir: string, recursive: boolean) => {
       for (const name of readdirSync(dir)) {
         if (entries.length >= MAX_LIST_ENTRIES) return;
@@ -50,7 +50,7 @@ export const fsListTool: Tool = {
           entries.push({ path: rel, type: 'dir' });
           if (recursive) walk(abs, true);
         } else {
-          entries.push({ path: rel, type: 'file', size: st.size });
+          entries.push({ path: rel, type: 'file', size: st.size, modifiedAt: st.mtime.toISOString() });
         }
       }
     };

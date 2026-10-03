@@ -175,11 +175,16 @@ export default function ChatPage() {
       // 修复（用户反馈）：无会话时生成一个并记住 — 连续多次对话落在同一会话
       const sid = currentSessionId ?? `sess_${Date.now().toString(36)}`;
       setCurrentSessionId(sid);
+      // 上传上下文注入：明确告诉 agent 用户刚传了哪些文件（消除与磁盘旧文件的歧义）
+      const uploadNote = uploadedFiles.length > 0
+        ? `## 用户刚上传的文件（工作区根目录）\n${uploadedFiles.map(f => `- ${f}`).join('\n')}\n当用户提到"这份文件 / 我上传的文件 / 刚传的文件"时，优先指上述文件（而非工作区里的其他旧文件）。`
+        : undefined;
       const res = await api.createRun({
         goal: goal.trim(),
         sessionId: sid,
         workspaceId: workspaceId || undefined,
         continueSession: true, // 同会话多轮：带上此前的完整对话上下文
+        extraSystem: uploadNote,
       });
       setGoal('');
       setActiveRunId(res.runId);
