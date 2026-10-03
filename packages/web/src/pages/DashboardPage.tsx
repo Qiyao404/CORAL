@@ -43,7 +43,7 @@ export default function DashboardPage() {
   const [recentTasks, setRecentTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
+  const load = () => {
     Promise.all([
       api.stats().catch(() => null),
       api.listTasks({ limit: 5 }).catch(() => ({ items: [] })),
@@ -52,6 +52,13 @@ export default function DashboardPage() {
       setRecentTasks(t?.items || []);
       setLoading(false);
     });
+  };
+
+  useEffect(() => {
+    load();
+    // 控制台同步：10s 轮询刷新统计与最近任务
+    const timer = setInterval(load, 10000);
+    return () => clearInterval(timer);
   }, []);
 
   if (loading) {

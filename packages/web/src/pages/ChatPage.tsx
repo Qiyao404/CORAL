@@ -3,9 +3,10 @@ import { useNavigate } from 'react-router-dom';
 import {
   Bot, Send, FolderOpen, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight,
   Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type, Trash2, MessageSquare,
+  FolderPlus, Activity, ChevronDown as ChevronDownIcon,
 } from 'lucide-react';
 import { api } from '../api/client';
-import { Button, Card, Tag, Textarea, Select, EmptyState } from '../components/ui';
+import { Button, Card, Tag, Textarea, Select, EmptyState, Modal, Input } from '../components/ui';
 import { useRunStream, deriveRunView, type RunEventItem } from '../hooks/useRunStream';
 
 /**
@@ -36,6 +37,7 @@ export default function ChatPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   // 工作区选择持久化：刷新/重开浏览器不丢（存在性在列表加载后校验）
   const [workspaceId, setWorkspaceId] = useState<string>(() => localStorage.getItem('coral.workspaceId') ?? '');
+  const [wsModal, setWsModal] = useState<{ open: boolean; name: string; dir: string; permission: string; error: string }>({ open: false, name: '', dir: '', permission: 'ask', error: '' });
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   // 最终回答全文（run.completed 事件只带 500 字预览，终态后从详情拉全文）
   const [fullFinal, setFullFinal] = useState<string | null>(null);
@@ -71,6 +73,26 @@ export default function ChatPage() {
     }).catch(() => {});
     return () => { cancelled = true; };
   }, [activeRunId, view.runStatus]);
+
+  const handleCreateWorkspace = async () => {
+    setWsModal(m => ({ ...m, error: '' }));
+    try {
+      const ws = await api.createWorkspace({ name: wsModal.name, dir: wsModal.dir, permission: wsModal.permission });
+      setWsModal({ open: false, name: '', dir: '', permission: 'ask', error: '' });
+      await loadWorkspaces();
+      setWorkspaceId(ws.id);
+    } catch (err: any) {
+      setWsModal(m => ({ ...m, error: err.message }));
+    }
+  };
+
+  const changePermission = async (perm: string) => {
+    if (!workspaceId) return;
+    try {
+      await api.updateWorkspace(workspaceId, { permission: perm });
+      await loadWorkspaces();
+    } catch (err: any) { alert('权限修改失败: ' + err.message); }
+  };
 
   const handleUpload = async (file: File) => {
     if (!workspaceId || uploading.current) { if (!workspaceId) alert('请先选择工作区再上传'); return; }
@@ -310,27 +332,41 @@ export default function ChatPage() {
               自主规划 · 工具调用 · 全程可观测 {connected ? '· 实时已连接' : ''}
             </p>
           </div>
-          {/* 工作区选择器 */}
+          {/* 工作区选择器 + 快捷新建 + 权限快改 */}
           <div className="flex items-center gap-2 text-xs">
             <FolderOpen className="w-4 h-4 text-fg-muted" />
             <Select
               value={workspaceId}
-              onChange={e => setWorkspaceId(e.target.value)}
-              className="!w-56 text-xs"
+              onChange={e => {
+                if (e.target.value === '__new__') { setWsModal({ open: true, name: '', dir: '', permission: 'ask', error: '' }); return; }
+                setWorkspaceId(e.target.value);
+              }}
+              className="!w-52 text-xs"
             >
-              <option value="">{workspaces.length === 0 ? "未创建工作区（设置页可创建）" : "不绑定工作区"}</option>
+              <option value="">{workspaces.length === 0 ? '未绑定工作区' : '不绑定工作区'}</option>
               {workspaces.map(w => (
-                <option key={w.id} value={w.id}>
-                  {w.name}（{w.permission}）
-                </option>
+                <option key={w.id} value={w.id}>{w.name}</option>
               ))}
+              <option value="__new__">＋ 新建工作区…</option>
             </Select>
+            {workspaceId && (
+              <Select
+                value={workspaces.find(w => w.id === workspaceId)?.permission ?? 'ask'}
+                onChange={e => changePermission(e.target.value)}
+                className="!w-24 text-xs"
+                title="工作区权限档：写改是否需要审批"
+              >
+                <option value="readonly">只读</option>
+                <option value="ask">写改询问</option>
+                <option value="auto">全自动</option>
+              </Select>
+            )}
             <button
-              onClick={() => navigate('/settings')}
-              className="text-fg-muted hover:text-brand cursor-pointer"
-              title="管理工作区（设置页）"
+              onClick={() => setWsModal({ open: true, name: '', dir: '', permission: 'ask', error: '' })}
+              className="p-1 rounded-md text-fg-muted hover:text-brand hover:bg-bg-elev/40 cursor-pointer"
+              title="新建工作区"
             >
-              管理
+              <FolderPlus className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -363,6 +399,7 @@ export default function ChatPage() {
                 <div className="flex justify-end">
                   <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{r.goal}</div>
                 </div>
+                <ProcessSection runId={r.id} defaultOpen={false} />
                 {(r.final_content || '').trim() && (
                   <div className="flex justify-start">
                     <div className="max-w-[85%] glass border border-glass-border rounded-2xl px-4 py-3">
@@ -412,8 +449,170 @@ export default function ChatPage() {
             )}
           </div>
         </div>
+
+        {/* 新建工作区弹窗 */}
+        <Modal
+          open={wsModal.open}
+          onClose={() => setWsModal(m => ({ ...m, open: false }))}
+          title="新建工作区"
+          footer={
+            <>
+              <Button variant="ghost" onClick={() => setWsModal(m => ({ ...m, open: false }))}>取消</Button>
+              <Button onClick={handleCreateWorkspace} disabled={!wsModal.name.trim() || !wsModal.dir.trim()}>创建并使用</Button>
+            </>
+          }
+        >
+          <div className="space-y-3 text-sm">
+            <div>
+              <label className="block text-xs text-fg-muted mb-1">名称</label>
+              <Input value={wsModal.name} onChange={e => setWsModal(m => ({ ...m, name: e.target.value }))} placeholder="我的项目" />
+            </div>
+            <div>
+              <label className="block text-xs text-fg-muted mb-1">本地文件夹完整路径（须已存在）</label>
+              <Input value={wsModal.dir} onChange={e => setWsModal(m => ({ ...m, dir: e.target.value }))} placeholder="D:\\projects\\my-notes" />
+              <p className="text-[10px] text-fg-muted mt-1">提示：资源管理器地址栏复制路径粘贴即可</p>
+            </div>
+            <div>
+              <label className="block text-xs text-fg-muted mb-1">权限档</label>
+              <Select value={wsModal.permission} onChange={e => setWsModal(m => ({ ...m, permission: e.target.value }))}>
+                <option value="ask">询问（默认，写改弹 diff 批准）</option>
+                <option value="readonly">只读</option>
+                <option value="auto">全自动（写改直接执行）</option>
+              </Select>
+            </div>
+            {wsModal.error && <p className="text-xs text-status-danger">{wsModal.error}</p>}
+          </div>
+        </Modal>
       </div>
     </div>
+  );
+}
+
+/**
+ * 执行过程区块（深度思考式）：liveView 提供时 = 活跃 run 直播（终态自动折叠）；
+ * 否则 = 历史轮次，首次展开时从 API 拉事件回放。
+ */
+function ProcessSection({
+  runId,
+  liveView,
+  defaultOpen = false,
+}: {
+  runId?: string;
+  liveView?: ReturnType<typeof deriveRunView>;
+  defaultOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const [loaded, setLoaded] = useState<ReturnType<typeof deriveRunView> | null>(null);
+
+  useEffect(() => {
+    if (!open || liveView || loaded || !runId) return;
+    let cancelled = false;
+    api.getRun(runId).then((d: any) => {
+      if (!cancelled) setLoaded(deriveRunView(d.events ?? []));
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [open, runId, liveView, loaded]);
+
+  const isTerminal = Boolean(liveView?.runStatus && ['completed', 'failed', 'cancelled'].includes(liveView.runStatus));
+  const prevTerminal = useRef(false);
+  useEffect(() => {
+    if (isTerminal && !prevTerminal.current) setOpen(false);
+    prevTerminal.current = isTerminal;
+  }, [isTerminal]);
+
+  const v = liveView ?? loaded;
+  const toolCount = v?.toolCards.length ?? 0;
+  const running = Boolean(liveView) && !liveView!.runStatus;
+
+  return (
+    <div className="glass rounded-xl border border-glass-border overflow-hidden">
+      <button
+        className="w-full flex items-center gap-2 px-3 py-2 text-xs cursor-pointer text-left hover:bg-bg-elev/30"
+        onClick={() => setOpen(o => !o)}
+      >
+        {running
+          ? <Loader2 className="w-3.5 h-3.5 text-status-info animate-spin shrink-0" />
+          : <Activity className="w-3.5 h-3.5 text-fg-muted shrink-0" />}
+        <span className="text-fg-secondary font-medium">{running ? '正在执行…' : '执行过程'}</span>
+        {v && (
+          <span className="text-fg-muted">
+            {toolCount} 次工具调用{v.todos.length > 0 ? ' · ' + v.todos.filter(t => t.status === 'completed').length + '/' + v.todos.length + ' 项任务' : ''}
+          </span>
+        )}
+        <span className="flex-1" />
+        {open ? <ChevronDownIcon className="w-3.5 h-3.5 text-fg-muted" /> : <ChevronRight className="w-3.5 h-3.5 text-fg-muted" />}
+      </button>
+      {open && (
+        <div className="px-3 pb-3 space-y-2 max-h-[480px] overflow-y-auto">
+          {!v && <p className="text-xs text-fg-muted py-2">加载事件中…</p>}
+          {v && <ToolCardsView view={v} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** todo 清单 + 工具卡片（ProcessSection 内容体，直播/回放共用） */
+function ToolCardsView({ view }: { view: ReturnType<typeof deriveRunView> }) {
+  const [openCards, setOpenCards] = useState<Set<string>>(new Set());
+  const toggle = (id: string) => setOpenCards(prev => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+
+  return (
+    <>
+      {view.todos.length > 0 && (
+        <div className="pt-1">
+          <h4 className="text-[10px] text-fg-muted mb-1 flex items-center gap-1"><ListTodo className="w-3 h-3" /> 任务清单</h4>
+          <ul className="space-y-1">
+            {view.todos.map((t, i) => (
+              <li key={i} className="flex items-start gap-2 text-xs">
+                {t.status === 'completed' ? <CheckCircle2 className="w-3.5 h-3.5 text-status-success shrink-0 mt-0.5" />
+                  : t.status === 'in_progress' ? <Loader2 className="w-3.5 h-3.5 text-status-info animate-spin shrink-0 mt-0.5" />
+                  : <span className="w-3.5 h-3.5 rounded-full border border-glass-borderStrong shrink-0 mt-0.5" />}
+                <span className={t.status === 'completed' ? 'text-fg-muted line-through' : 'text-fg-primary'}>{t.content}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {view.toolCards.map(card => {
+        const open = openCards.has(card.callId);
+        const subAgent = card.agentId !== 'main';
+        return (
+          <div key={card.callId} className={'rounded-lg border ' + (card.status === 'failed' ? 'border-status-danger/30' : 'border-glass-border') + ' bg-bg-panel/40' + (subAgent ? ' ml-4' : '')}>
+            <button className="w-full flex items-center gap-2 px-2.5 py-2 cursor-pointer text-left" onClick={() => toggle(card.callId)}>
+              {card.status === 'running' ? <Loader2 className="w-3.5 h-3.5 text-status-info animate-spin shrink-0" />
+                : card.status === 'ok' ? <CheckCircle2 className="w-3.5 h-3.5 text-status-success shrink-0" />
+                : <XCircle className="w-3.5 h-3.5 text-status-danger shrink-0" />}
+              <Wrench className="w-3 h-3 text-fg-muted shrink-0" />
+              <span className="text-xs font-medium text-fg-primary flex-1 truncate">{card.tool}</span>
+              {subAgent && <Tag variant="brand">{card.agentId}</Tag>}
+              {open ? <ChevronDown className="w-3.5 h-3.5 text-fg-muted" /> : <ChevronRight className="w-3.5 h-3.5 text-fg-muted" />}
+            </button>
+            {open && (
+              <div className="px-2.5 pb-2 space-y-1.5">
+                {card.inputPreview && (
+                  <div>
+                    <p className="text-[10px] text-fg-muted mb-0.5">输入</p>
+                    <pre className="bg-bg-panel/70 rounded p-1.5 text-[10px] font-mono text-fg-secondary overflow-auto max-h-32 whitespace-pre-wrap break-all">{card.inputPreview}</pre>
+                  </div>
+                )}
+                {card.resultPreview && (
+                  <div>
+                    <p className="text-[10px] text-fg-muted mb-0.5">结果</p>
+                    <pre className="bg-bg-panel/70 rounded p-1.5 text-[10px] font-mono text-fg-secondary overflow-auto max-h-40 whitespace-pre-wrap break-all">{card.resultPreview}</pre>
+                  </div>
+                )}
+                {card.error && <p className="text-[10px] text-status-danger">{card.error}</p>}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </>
   );
 }
 
@@ -455,25 +654,11 @@ function RunLiveView({
         <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{goal}</div>
       </div>
 
-      {/* todo checklist */}
-      {view.todos.length > 0 && (
-        <Card className="!p-4">
-          <h3 className="text-xs font-semibold text-fg-primary mb-2 flex items-center gap-1"><ListTodo className="w-4 h-4 text-brand" /> 任务清单</h3>
-          <ul className="space-y-1.5">
-            {view.todos.map((t, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm">
-                {t.status === 'completed' ? <CheckCircle2 className="w-4 h-4 text-status-success shrink-0 mt-0.5" />
-                  : t.status === 'in_progress' ? <Loader2 className="w-4 h-4 text-status-info animate-spin shrink-0 mt-0.5" />
-                  : <span className="w-4 h-4 rounded-full border border-glass-borderStrong shrink-0 mt-0.5" />}
-                <span className={t.status === 'completed' ? 'text-fg-muted line-through' : 'text-fg-primary'}>{t.content}</span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
+      {/* 执行过程（深度思考式：运行中实时展开，完成后折叠可回看） */}
+      <ProcessSection liveView={view} defaultOpen={!view.runStatus} />
 
-      {/* 工具卡片 */}
-      {view.toolCards.map(card => {
+      {/* 工具卡片（保留用于直播中紧跟过程展示 — ProcessSection 已含，此块留空防重复） */}
+      {false && view.toolCards.map(card => {
         const open = openCards.has(card.callId);
         const subAgent = card.agentId !== 'main';
         return (

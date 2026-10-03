@@ -192,6 +192,8 @@ export const api = {
     request<any>('/workspaces', { method: 'POST', body: JSON.stringify(payload) }),
   activateWorkspace: (id: string) =>
     request<any>(`/workspaces/${id}/activate`, { method: 'POST' }),
+  updateWorkspace: (id: string, patch: { name?: string; permission?: string }) =>
+    request<any>(`/workspaces/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
   deleteWorkspace: (id: string) =>
     request<any>(`/workspaces/${id}`, { method: 'DELETE' }),
 

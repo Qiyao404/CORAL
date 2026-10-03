@@ -1,4 +1,5 @@
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { useEffect, useState } from 'react';
 import {
   LayoutDashboard,
   ListChecks,
@@ -22,6 +23,7 @@ import { useGlobalStream } from './hooks/useGlobalStream';
 import { ConnectionDot } from './components/ui';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { useTheme } from './contexts/ThemeContext';
+import { api } from './api/client';
 
 const navItems = [
   { path: '/', label: '控制台', icon: LayoutDashboard },
@@ -117,9 +119,7 @@ function Sidebar() {
             </span>
           )}
         </div>
-        <div className="px-2 text-xs text-fg-muted">
-          CORAL v1.1.0 · kimi-k2.5
-        </div>
+        <ModelFooter />
       </div>
     </aside>
   );
@@ -146,5 +146,56 @@ export default function App() {
         </main>
       </div>
     </BrowserRouter>
+  );
+}
+
+/** 左下角：动态版本号 + 当前模型 + 一键切换模型配置（用户反馈 #5） */
+function ModelFooter() {
+  const [version, setVersion] = useState('…');
+  const [model, setModel] = useState('');
+  const [profiles, setProfiles] = useState<Array<{ profileId: string; name: string; model: string; isActive: boolean }>>([]);
+
+  const load = async () => {
+    try {
+      const [health, config, llm] = await Promise.all([
+        api.health().catch(() => null),
+        api.config().catch(() => null),
+        api.listLlmConfigs().catch(() => null),
+      ]);
+      if (health?.version) setVersion(health.version);
+      if (config?.llmModel) setModel(config.llmModel);
+      if (llm?.items) setProfiles(llm.items);
+    } catch { /* 静默 */ }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const switchTo = async (profileId: string) => {
+    try {
+      await api.activateLlmConfig(profileId);
+      await load();
+    } catch (err: any) {
+      alert('切换失败: ' + err.message);
+    }
+  };
+
+  return (
+    <div className="px-2 text-xs text-fg-muted space-y-1.5">
+      <div>CORAL v{version}</div>
+      <div className="flex items-center gap-1.5">
+        <span className="text-fg-disabled shrink-0">模型</span>
+        <select
+          value={profiles.find(p => p.isActive)?.profileId ?? ''}
+          onChange={e => switchTo(e.target.value)}
+          className="flex-1 min-w-0 bg-bg-panel/60 border border-glass-border rounded-md px-1.5 py-1 text-[11px] text-fg-secondary cursor-pointer truncate"
+          title="切换模型配置（在设置页可新增）"
+        >
+          {profiles.length === 0 && <option value="">{model || '未配置'}</option>}
+          {profiles.map(p => (
+            <option key={p.profileId} value={p.profileId}>{p.name} · {p.model}</option>
+          ))}
+        </select>
+      </div>
+    </div>
   );
 }
