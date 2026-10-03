@@ -13,6 +13,7 @@ import { PlanningEngine } from './planning/planning-engine.js';
 import { DAGScheduler } from './scheduler/dag-scheduler.js';
 import { SkillBuilderService } from './services/skill-builder-service.js';
 import { RunEngine } from './kernel/run-engine.js';
+import { GraphRunService } from './services/graph-run-service.js';
 import { RunStore } from './store/run-store.js';
 import { RunEventStore } from './store/run-event-store.js';
 import { CheckpointStore } from './store/checkpoint-store.js';
@@ -85,6 +86,19 @@ async function main() {
     checkpointStore: new CheckpointStore(),
   });
 
+  // M2：Graph 模式（GraphEngine 接线：durable execution + HITL + resume）
+  const graphRunService = new GraphRunService({
+    skillExecutor: executor,
+    runStore: new RunStore(),
+    eventStore: new RunEventStore(),
+    checkpointStore: new CheckpointStore(),
+  });
+  // M2-5：启动扫描 — 上次进程退出时仍在跑的 graph run 标记为可恢复
+  const interrupted = graphRunService.markInterruptedGraphRuns();
+  if (interrupted > 0) {
+    console.log(`[Graph] 检测到 ${interrupted} 个中断的 graph run（可在 Workflow 页一键恢复）`);
+  }
+
   // 创建 Fastify 应用
   const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
 
@@ -127,7 +141,7 @@ async function main() {
   registerSkillBuilderRoutes(app, skillBuilderService);
   registerSkillImportRoutes(app, registry);
   registerCompanyProfileRoutes(app);
-  registerRunRoutes(app, runEngine);
+  registerRunRoutes(app, runEngine, graphRunService);
   registerWorkspaceRoutes(app);
   registerWorkspaceFileRoutes(app);
   registerMemoryRoutes(app);

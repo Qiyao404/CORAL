@@ -76,11 +76,13 @@ export class RunStore {
     sessionId?: string;
     budget?: Record<string, any>;
     modelProfileId?: string;
+    /** M2：graph 模式的 DSL 定义（graph_json 列） */
+    graph?: Record<string, any>;
   }): void {
     const ts = nowIso();
     this.stmt(
-      `INSERT INTO runs (id, goal, mode, status, session_id, budget_json, model_profile_id, cost_usd, tokens_in, tokens_out, created_at, updated_at)
-       VALUES (?, ?, ?, 'created', ?, ?, ?, 0, 0, 0, ?, ?)`
+      `INSERT INTO runs (id, goal, mode, status, session_id, budget_json, model_profile_id, graph_json, cost_usd, tokens_in, tokens_out, created_at, updated_at)
+       VALUES (?, ?, ?, 'created', ?, ?, ?, ?, 0, 0, 0, ?, ?)`
     ).run(
       input.id,
       input.goal,
@@ -88,6 +90,7 @@ export class RunStore {
       input.sessionId ?? null,
       input.budget ? JSON.stringify(input.budget) : null,
       input.modelProfileId ?? null,
+      input.graph ? JSON.stringify(input.graph) : null,
       ts,
       ts
     );
@@ -101,7 +104,7 @@ export class RunStore {
   update(id: string, partial: {
     status?: RunStatus;
     finalContent?: string;
-    endReason?: string;
+    endReason?: string | null;
     tokensIn?: number;
     tokensOut?: number;
     costUsd?: number;
@@ -117,7 +120,7 @@ export class RunStore {
     ).run(
       partial.status ?? existing.status,
       partial.finalContent ?? existing.final_content ?? null,
-      partial.endReason ?? existing.end_reason ?? null,
+      partial.endReason !== undefined ? partial.endReason : (existing.end_reason ?? null),
       partial.tokensIn ?? existing.tokens_in,
       partial.tokensOut ?? existing.tokens_out,
       partial.costUsd ?? existing.cost_usd,
@@ -130,12 +133,16 @@ export class RunStore {
     return this.get(id);
   }
 
-  list(filter: { sessionId?: string; status?: string; limit?: number; offset?: number } = {}): { total: number; items: Run[] } {
+  list(filter: { sessionId?: string; status?: string; mode?: string; limit?: number; offset?: number } = {}): { total: number; items: Run[] } {
     const where: string[] = [];
     const params: any[] = [];
     if (filter.sessionId) {
       where.push('session_id = ?');
       params.push(filter.sessionId);
+    }
+    if (filter.mode) {
+      where.push('mode = ?');
+      params.push(filter.mode);
     }
     if (filter.status) {
       where.push('status = ?');

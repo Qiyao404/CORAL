@@ -1,16 +1,23 @@
 import type { FastifyInstance } from 'fastify';
 import type { RunEngine } from '../kernel/run-engine.js';
+import type { GraphRunService } from '../services/graph-run-service.js';
+import { parseAndValidateGraphYaml } from '../kernel/graph/dsl.js';
 
 /**
- * M1-5：Free 模式 run API。
- *  · POST /api/runs                    创建并异步执行（goal + sessionId + 预算覆盖）
- *  · GET  /api/runs                    列表（session/status 过滤 + 分页）
+ * M1-5：Free 模式 run API；M2：Graph 模式接入。
+ *  · POST /api/runs                    创建并异步执行（mode=free：goal + sessionId + 预算覆盖；
+ *                                      mode=graph：goal + graph（YAML 文本）+ input 运行时输入）
+ *  · GET  /api/runs                    列表（session/status/mode 过滤 + 分页）
  *  · GET  /api/runs/:id                详情（run + 全量事件 + checkpoint 元数据）
  *  · GET  /api/runs/:id/events         事件增量分页（afterSeq 游标，M1-9）
- *  · POST /api/runs/:id/cancel         取消（立即中止 loop/工具/LLM）
+ *  · POST /api/runs/:id/cancel         取消（立即中止 loop/工具/LLM/图节点）
  *  · GET  /api/runs/:id/stream         SSE 实时流（taskId=runId 路由 + 心跳）
+ *  · POST /api/runs/:id/resume         M2-5：中断的 graph run 从 checkpoint 续跑
+ *  · GET  /api/runs/graph/resumable    M2-5：可恢复列表（重启提示）
+ *  · POST /api/graphs/validate         M2-2：YAML 校验（Workflow 编辑器用）
+ *  · GET  /api/approvals/pending       M2-4：审批中心 — 跨 run 待审批列表
  */
-export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void {
+export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graphSvc?: GraphRunService): void {
   app.post('/api/runs', async (request, reply) => {
     const body = (request.body || {}) as {
       goal?: string;
@@ -19,10 +26,38 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void
       workspaceId?: string;
       extraSystem?: string;
       continueSession?: boolean;
+      mode?: 'free' | 'graph';
+      /** mode=graph：graph DSL 的 YAML 文本（前端编辑器直传） */
+      graph?: string;
+      /** mode=graph：运行时输入（覆盖 graph.input 默认值） */
+      input?: Record<string, any>;
     };
 
     if (typeof body.goal !== 'string' || body.goal.trim().length === 0) {
       return reply.status(400).send({ error: '缺少 goal 参数' });
+    }
+
+    // M2：Graph 模式分支
+    if (body.mode === 'graph') {
+      if (!graphSvc) return reply.status(501).send({ error: 'graph 模式未启用' });
+      if (typeof body.graph !== 'string' || !body.graph.trim()) {
+        return reply.status(400).send({ error: 'graph 模式需要 graph 参数（YAML 文本）' });
+      }
+      const parsed = parseAndValidateGraphYaml(body.graph);
+      if (!parsed.ok) {
+        return reply.status(400).send({ error: 'graph 校验失败', issues: parsed.issues });
+      }
+      try {
+        const { runId, sessionId } = graphSvc.startGraphRun({
+          goal: body.goal,
+          graph: parsed.graph!,
+          input: body.input,
+          sessionId: body.sessionId,
+        });
+        return reply.status(201).send({ runId, sessionId, status: 'running', mode: 'graph' });
+      } catch (err: any) {
+        return reply.status(400).send({ error: err?.message ?? '创建 graph run 失败' });
+      }
     }
 
     try {
@@ -41,10 +76,11 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void
   });
 
   app.get('/api/runs', async (request) => {
-    const { sessionId, status, limit, offset } = request.query as any;
+    const { sessionId, status, mode, limit, offset } = request.query as any;
     return engine.store.list({
       sessionId: sessionId || undefined,
       status: status || undefined,
+      mode: mode || undefined,
       limit: parseInt(limit) || 50,
       offset: parseInt(offset) || 0,
     });
@@ -77,9 +113,60 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void
 
   app.post('/api/runs/:runId/cancel', async (request, reply) => {
     const { runId } = request.params as any;
-    const result = engine.cancelRun(runId);
+    const run = engine.store.get(runId);
+    const result = run?.mode === 'graph' && graphSvc
+      ? graphSvc.cancelGraphRun(runId)
+      : engine.cancelRun(runId);
     if (!result.ok) return reply.status(404).send({ error: result.message });
     return { success: true, message: result.message };
+  });
+
+  // ── M2：Graph 模式端点 ──────────────────────────────────
+
+  // M2-5：可恢复列表（服务重启后的提示）
+  app.get('/api/runs/graph/resumable', async () => {
+    if (!graphSvc) return { items: [] };
+    return { items: graphSvc.listResumable() };
+  });
+
+  // M2-5：从最近 checkpoint 续跑
+  app.post('/api/runs/:runId/resume', async (request, reply) => {
+    const { runId } = request.params as any;
+    if (!graphSvc) return reply.status(501).send({ error: 'graph 模式未启用' });
+    const result = graphSvc.resumeGraphRun(runId);
+    if (!result.ok) return reply.status(400).send({ error: result.message });
+    return { success: true, message: result.message };
+  });
+
+  // M2-2：YAML 校验（Workflow 编辑器的「校验」按钮）
+  app.post('/api/graphs/validate', async (request, reply) => {
+    const body = (request.body || {}) as { graph?: string };
+    if (typeof body.graph !== 'string') {
+      return reply.status(400).send({ error: '缺少 graph 参数（YAML 文本）' });
+    }
+    const parsed = parseAndValidateGraphYaml(body.graph);
+    return {
+      ok: parsed.ok,
+      issues: parsed.issues,
+      ...(parsed.ok ? { topoOrder: parsed.topoOrder, graph: parsed.graph } : {}),
+    };
+  });
+
+  // M2-4：审批中心 — 跨 run 待审批（free 工具审批 + graph 节点审批合并）
+  app.get('/api/approvals/pending', async () => {
+    const items: Array<Record<string, any>> = [];
+    for (const r of engine.store.list({ limit: 50 }).items) {
+      if (r.status !== 'waiting_human') continue;
+      for (const p of engine.listPendingApprovals(r.id)) {
+        items.push({ runId: r.id, kind: 'tool', ...p });
+      }
+    }
+    if (graphSvc) {
+      for (const p of graphSvc.listAllPendingApprovals()) {
+        items.push({ kind: 'node', ...p });
+      }
+    }
+    return { items };
   });
 
   // M1 复审补（用户反馈）：删除对话 — 单个 run / 整个会话
@@ -100,8 +187,12 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void
   // M1-10：审批流 — 解决一个待审批（diff 卡片的 通过/拒绝）
   app.post('/api/runs/:runId/approvals/:approvalId', async (request, reply) => {
     const { runId, approvalId } = request.params as any;
-    const body = (request.body || {}) as { approved?: boolean };
-    const ok = engine.resolveApproval(runId, approvalId, Boolean(body.approved));
+    const body = (request.body || {}) as { approved?: boolean; input?: Record<string, any> };
+    const run = engine.store.get(runId);
+    // M2-4：graph 节点审批支持改参数后继续（input 覆盖节点输入）
+    const ok = run?.mode === 'graph' && graphSvc
+      ? graphSvc.resolveApproval(runId, approvalId, Boolean(body.approved), body.input)
+      : engine.resolveApproval(runId, approvalId, Boolean(body.approved));
     if (!ok) return reply.status(404).send({ error: '审批不存在或已处理' });
     return { success: true, approved: Boolean(body.approved) };
   });

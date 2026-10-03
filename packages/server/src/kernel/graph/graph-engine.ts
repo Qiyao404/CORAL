@@ -4,6 +4,7 @@ import {
   validateGraph,
   expandTemplates,
 } from './dsl.js';
+export type { GraphNodeDefinition } from './dsl.js';
 
 /**
  * M2-1：GraphEngine — 确定性 DAG 执行内核（durable execution）。
