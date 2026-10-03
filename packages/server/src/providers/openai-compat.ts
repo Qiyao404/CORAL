@@ -139,10 +139,23 @@ export class OpenAICompatProvider implements ChatProvider {
     const toolAcc = new Map<number, { id: string; name: string; args: string }>();
     // M0-4 语义保留：已向消费者交付过 chunk 则不重试（避免重复输出）
     let delivered = false;
+    // DSML 抑制 v3：显示缓冲 — 末尾疑似标记前缀/标记延续的内容扣住不发
     let pending = '';
+    let emitted = 0;
+
+    // 可安全下发的长度：最后一个 '<' 若开启疑似标记（<｜ / << 的前缀或延续）→ 扣住其后全部
+    const safeLen = (buf: string): number => {
+      const lt = buf.lastIndexOf('<');
+      if (lt < 0) return buf.length;
+      const tail = buf.slice(lt);
+      const potential = '<｜'.startsWith(tail) || '<<'.startsWith(tail);
+      const confirmed = tail.startsWith('<｜') || tail.startsWith('<<');
+      return potential || confirmed ? lt : buf.length;
+    };
 
     await withRetry(
       async () => {
+        pending = ''; emitted = 0; // 每次尝试重置显示缓冲（full 独立累积不受影响）
         const stream = await this.client.chat.completions.create(params, { signal: req.signal });
         for await (const chunk of stream as any) {
           const delta = chunk?.choices?.[0]?.delta;
@@ -154,22 +167,18 @@ export class OpenAICompatProvider implements ChatProvider {
           }
           if (delta?.content) {
             full += delta.content;
-            // DSML 抑制 v2（标记感知扣留）：'< ' 与 '｜' 常在不同 delta 到达，
-            // 朴素 includes 检查会漏 — 末尾疑似标记前缀的内容扣住不发，
-            // 确认非标记（后续是普通文本）后放行；确认是标记则永久抑制
+            // DSML 抑制 v3（标记感知扣留）：
+            // '<' 与 '｜' 常在不同 delta 到达。策略：pending 中最后一个 '<'
+            // 之后若为疑似标记（<｜ / << 的前缀或延续）→ 扣住其后内容不发；
+            // 确认是普通文本（'<' 后跟其他字符）→ 全部放行。
+            // 绝不提前退出流 — 剩余 chunk（含 tool_calls 分片/finish_reason）必须继续消费。
             pending += delta.content;
-            const lt = pending.lastIndexOf('<');
-            if (lt >= 0) {
-              const tail = pending.slice(lt);
-              const potential =
-                '<｜'.startsWith(tail) || '<<'.startsWith(tail) ||
-                tail.startsWith('<｜') || tail.startsWith('<<');
-              if (potential) return; // 扣住（可能是不完整标记）
-            }
-            if (pending) {
+            const cut = safeLen(pending);
+            if (cut > emitted) {
+              const out = pending.slice(emitted, cut);
+              emitted = cut;
               delivered = true;
-              try { onChunk(pending); } catch { /* 消费者异常不中断流 */ }
-              pending = '';
+              try { onChunk(out); } catch { /* 消费者异常不中断流 */ }
             }
           }
           for (const tc of delta?.tool_calls ?? []) {
@@ -191,7 +200,18 @@ export class OpenAICompatProvider implements ChatProvider {
           console.warn(`[LLM/openai-compat] 流式瞬时错误，${delayMs}ms 后第 ${attempt} 次重试: ${describeError(err)}`),
       }
     );
-    pending = '';
+    // 流结束：放行尾部普通文本残留；疑似标记残留丢弃（完整内容在 full，归一化已处理）
+    const tailCut = (() => {
+      const lt = pending.lastIndexOf('<');
+      if (lt < 0) return pending.length;
+      const tail = pending.slice(lt);
+      return tail.startsWith('<｜') || tail.startsWith('<<') || tail.includes('DSML') ? lt : pending.length;
+    })();
+    if (tailCut > emitted) {
+      delivered = true;
+      try { onChunk(pending.slice(emitted, tailCut)); } catch { /* ignore */ }
+    }
+    pending = ''; emitted = 0;
 
     return normalizeDegradedToolCalls({
       content: full,

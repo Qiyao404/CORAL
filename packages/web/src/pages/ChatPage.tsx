@@ -59,13 +59,8 @@ export default function ChatPage() {
     return cut >= 0 ? raw.slice(0, cut) : raw;
   }, [events, view.runStatus]);
   const uploading = useRef(false);
-  // run 到达终态后：清空已上传文件列表 + 拉取最终回答全文（事件只带 500 字预览）
-  useEffect(() => {
-    if (view.runStatus && ['completed', 'failed', 'cancelled'].includes(view.runStatus)) {
-      setUploadedFiles([]);
-    }
-  }, [view.runStatus]);
-
+  // 上传文件清单保留（用户实测反馈：上传后消失导致 agent 无法关联文件）—
+  // 仅在点击「新建会话」时清空；拉取最终回答全文（事件只带 500 字预览）
   useEffect(() => {
     setFullFinal(null);
     if (!activeRunId || !view.runStatus || !['completed', 'failed', 'cancelled'].includes(view.runStatus)) return;
