@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bot, Send, FolderOpen, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight,
-  Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type, Trash2,
+  Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type, Trash2, MessageSquare,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState } from '../components/ui';
@@ -34,7 +34,8 @@ export default function ChatPage() {
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
-  const [workspaceId, setWorkspaceId] = useState<string>('');
+  // 工作区选择持久化：刷新/重开浏览器不丢（存在性在列表加载后校验）
+  const [workspaceId, setWorkspaceId] = useState<string>(() => localStorage.getItem('coral.workspaceId') ?? '');
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   // 最终回答全文（run.completed 事件只带 500 字预览，终态后从详情拉全文）
   const [fullFinal, setFullFinal] = useState<string | null>(null);
@@ -116,9 +117,17 @@ export default function ChatPage() {
   const loadWorkspaces = useCallback(async () => {
     try {
       const res = await api.listWorkspaces();
-      setWorkspaces(res.items ?? []);
+      const items = res.items ?? [];
+      setWorkspaces(items);
+      // 已存的选中项失效（被删）则清空
+      setWorkspaceId(prev => (prev && !items.some((w: any) => w.id === prev) ? '' : prev));
     } catch { /* 静默 */ }
   }, []);
+
+  useEffect(() => {
+    if (workspaceId) localStorage.setItem('coral.workspaceId', workspaceId);
+    else localStorage.removeItem('coral.workspaceId');
+  }, [workspaceId]);
 
   useEffect(() => {
     loadSessions().then(() => {
@@ -234,47 +243,55 @@ export default function ChatPage() {
             <Plus className="w-3.5 h-3.5" /> 新建
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-2 space-y-3">
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {sessions.length === 0 && <p className="text-xs text-fg-muted p-2">暂无历史</p>}
-          {sessions.map(s => (
-            <div key={s.sessionId}>
-              <div className="flex items-center justify-between px-2 mb-1">
-                <p className="text-[10px] text-fg-disabled truncate flex-1" title={s.sessionId ?? '未分组'}>
-                  {s.sessionId ? (s.runs[0]?.goal?.slice(0, 18) || '对话') + `（${s.runs.length}）` : '未分组'}
-                </p>
+          {sessions.map(s => {
+            // 一个会话 = 一个条目（未分组的旧 run 仍按单条展示）
+            const isSession = Boolean(s.sessionId);
+            const active = isSession
+              ? currentSessionId === s.sessionId
+              : activeRunId === s.runs[0]?.id;
+            const title = isSession
+              ? (s.runs[0]?.goal?.slice(0, 24) || '对话')
+              : (s.runs[0]?.goal?.slice(0, 24) || '对话');
+            return (
+              <div
+                key={s.sessionId ?? `ungrouped-${s.runs[0]?.id}`}
+                className={`group flex items-center gap-2 w-full text-left p-2.5 rounded-lg text-xs transition-colors cursor-pointer ${
+                  active ? 'bg-brand-soft text-brand border border-brand/20' : 'text-fg-secondary hover:bg-bg-elev/40 border border-transparent'
+                }`}
+                onClick={() => {
+                  if (isSession) {
+                    // 打开整条会话线程，聚焦最近一轮
+                    setCurrentSessionId(s.sessionId);
+                    setActiveRunId(s.runs[0]?.id ?? null);
+                  } else {
+                    setActiveRunId(s.runs[0]?.id ?? null);
+                    setCurrentSessionId(null);
+                  }
+                }}
+              >
+                <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+                <div className="flex-1 min-w-0">
+                  <p className="truncate">{title}</p>
+                  <p className="text-[10px] text-fg-muted mt-0.5">
+                    {s.runs.length > 1 ? `${s.runs.length} 轮对话 · ` : ''}{statusLabel(s.runs[0]?.status ?? '')} · {new Date(s.runs[0]?.createdAt ?? 0).toLocaleDateString('zh-CN')}
+                  </p>
+                </div>
                 <button
-                  onClick={() => handleDeleteSession(s.sessionId)}
-                  title="删除整个会话"
-                  className="text-fg-disabled hover:text-status-danger cursor-pointer shrink-0"
+                  onClick={e => {
+                    e.stopPropagation();
+                    if (isSession) handleDeleteSession(s.sessionId);
+                    else handleDeleteRun(s.runs[0]?.id ?? '');
+                  }}
+                  title={isSession ? '删除整个会话' : '删除此对话'}
+                  className="opacity-0 group-hover:opacity-100 text-fg-disabled hover:text-status-danger cursor-pointer shrink-0 transition-opacity"
                 >
-                  <Trash2 className="w-3 h-3" />
+                  <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
-              {s.runs.map(r => (
-                <button
-                  key={r.id}
-                  onClick={() => { setActiveRunId(r.id); setCurrentSessionId(s.sessionId); }}
-                  className={`w-full text-left p-2 rounded-lg text-xs transition-colors cursor-pointer ${
-                    activeRunId === r.id ? 'bg-brand-soft text-brand' : 'text-fg-secondary hover:bg-bg-elev/40'
-                  }`}
-                >
-                  <p className="truncate">{r.goal}</p>
-                  <div className="flex items-center justify-between gap-1 mt-0.5">
-                    <p className="text-[10px] text-fg-muted truncate">
-                      {statusLabel(r.status)} · {new Date(r.createdAt).toLocaleTimeString('zh-CN')}
-                    </p>
-                    <button
-                      onClick={e => { e.stopPropagation(); handleDeleteRun(r.id); }}
-                      title="删除此对话"
-                      className="text-fg-disabled hover:text-status-danger cursor-pointer shrink-0"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  </div>
-                </button>
-              ))}
-            </div>
-          ))}
+            );
+          })}
         </div>
       </aside>
 
