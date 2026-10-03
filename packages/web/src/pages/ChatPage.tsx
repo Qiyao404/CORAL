@@ -36,6 +36,8 @@ export default function ChatPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string>('');
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
+  // 最终回答全文（run.completed 事件只带 500 字预览，终态后从详情拉全文）
+  const [fullFinal, setFullFinal] = useState<string | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const { events, connected } = useRunStream(activeRunId ?? undefined);
@@ -50,12 +52,22 @@ export default function ChatPage() {
     return cut >= 0 ? raw.slice(0, cut) : raw;
   }, [events, view.runStatus]);
   const uploading = useRef(false);
-  // run 到达终态后清空已上传文件列表（文件已交给 agent 处理完，不再常驻）
+  // run 到达终态后：清空已上传文件列表 + 拉取最终回答全文（事件只带 500 字预览）
   useEffect(() => {
     if (view.runStatus && ['completed', 'failed', 'cancelled'].includes(view.runStatus)) {
       setUploadedFiles([]);
     }
   }, [view.runStatus]);
+
+  useEffect(() => {
+    setFullFinal(null);
+    if (!activeRunId || !view.runStatus || !['completed', 'failed', 'cancelled'].includes(view.runStatus)) return;
+    let cancelled = false;
+    api.getRun(activeRunId).then((d: any) => {
+      if (!cancelled && d?.run?.final_content) setFullFinal(d.run.final_content);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [activeRunId, view.runStatus]);
 
   const handleUpload = async (file: File) => {
     if (!workspaceId || uploading.current) { if (!workspaceId) alert('请先选择工作区再上传'); return; }
@@ -284,7 +296,7 @@ export default function ChatPage() {
             </div>
           )}
 
-          {activeRunId && <RunLiveView goal={sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? ''} view={view} events={events} streamingText={streamingText} onDecide={decide} />}
+          {activeRunId && <RunLiveView goal={sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? ''} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} onDecide={decide} />}
           <div ref={bottomRef} />
         </div>
 
@@ -339,12 +351,14 @@ function RunLiveView({
   view,
   events,
   streamingText,
+  fullFinal,
   onDecide,
 }: {
   goal: string;
   view: ReturnType<typeof deriveRunView>;
   events: RunEventItem[];
   streamingText: string;
+  fullFinal: string | null;
   onDecide: (approvalId: string, approved: boolean) => void;
 }) {
   const [openCards, setOpenCards] = useState<Set<string>>(new Set());
@@ -455,10 +469,10 @@ function RunLiveView({
       )}
 
       {/* 最终回答 */}
-      {view.finalContent && (
+      {(fullFinal ?? view.finalContent) && (
         <div className="flex justify-start">
           <div className="max-w-[85%] glass border border-glass-border rounded-2xl px-4 py-3">
-            <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{view.finalContent}</p>
+            <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{fullFinal ?? view.finalContent}</p>
             {view.endReason === 'budget_exceeded' && (
               <p className="text-xs text-status-warn mt-2">⚠ 预算达到上限，以上为部分成果总结</p>
             )}
