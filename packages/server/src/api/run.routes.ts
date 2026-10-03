@@ -169,6 +169,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
       name: m.name,
       description: m.description,
       inputSchema: m.inputSchema,
+      outputSchema: m.outputSchema,
       ...(m.xPlanning ? { xPlanning: m.xPlanning } : {}),
     }));
     const result = await compileGoalToGraph(body.goal, hints, llmClient as any);

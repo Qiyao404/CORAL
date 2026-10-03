@@ -143,6 +143,7 @@ export default function WorkflowPage() {
   const [resumable, setResumable] = useState<Array<{ runId: string; goal: string; createdAt: string }>>([]);
   const [error, setError] = useState<string | null>(null);
   const [compiling, setCompiling] = useState(false);
+  const [runInput, setRunInput] = useState(''); // graph.input 运行时覆盖（JSON）
   const [inputDraft, setInputDraft] = useState(''); // 审批改参数的 JSON 草稿
   const [openOutputs, setOpenOutputs] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -187,8 +188,12 @@ export default function WorkflowPage() {
   const run = async () => {
     setError(null);
     setValidation(null);
+    let input: Record<string, any> | undefined;
+    if (runInput.trim()) {
+      try { input = JSON.parse(runInput); } catch { setError('运行输入不是合法 JSON'); return; }
+    }
     try {
-      const res = await api.createGraphRun({ goal: goal.trim() || yaml.match(/^name:\s*(\S+)/m)?.[1] || 'graph run', graph: yaml });
+      const res = await api.createGraphRun({ goal: goal.trim() || yaml.match(/^name:\s*(\S+)/m)?.[1] || 'graph run', graph: yaml, input });
       setActiveRunId(res.runId);
       setRunGoal(goal.trim() || 'graph run');
       setRunGraphNodes(nodesFromYaml(yaml));
@@ -304,6 +309,13 @@ export default function WorkflowPage() {
             onChange={e => setGoal(e.target.value)}
             placeholder="目标描述（AI 编排必填；运行时可选）"
             className="w-full glass border border-glass-border rounded-lg px-3 py-2 text-sm text-fg-primary outline-none focus:border-brand/40"
+          />
+          <textarea
+            value={runInput}
+            onChange={e => setRunInput(e.target.value)}
+            placeholder='运行输入 JSON（可选，覆盖 graph 里的 input 默认值），如 {"url": "https://..."}'
+            spellCheck={false}
+            className="w-full h-14 glass border border-glass-border rounded-lg p-2 font-mono text-xs text-fg-primary outline-none focus:border-brand/40 resize-none"
           />
           <div className="flex gap-2 flex-wrap">
             <button onClick={compile} disabled={compiling}

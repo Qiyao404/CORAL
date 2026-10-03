@@ -17,6 +17,8 @@ export interface SkillPlanningHint {
   name: string;
   description: string;
   inputSchema?: Record<string, any>;
+  /** 输出字段（模板引用键名的依据：\${{ nodes.<id>.outputs.<key> }}） */
+  outputSchema?: Record<string, any>;
   /** x-planning 扩展（站点别名/典型用法等，原样序列化进提示） */
   xPlanning?: Record<string, any>;
 }
@@ -52,6 +54,10 @@ Output rules:
   edges:
     - { from: <id>, to: <id> }
 - Use ONLY skills from the catalog. Never invent a skill name.
+- The graph 'input:' block holds DEFAULT VALUES ONLY (e.g. url: https://example.com) — NEVER JSON Schema definitions (no type/items/properties there).
+- Every node input field MUST match the skill's input_schema type: a string field gets ONE string (pick \${{ input.urls.0 }} for the first of a list, or emit one node per URL), a number gets a number. Never wire an array/object into a string field.
+- Reference upstream outputs ONLY by the keys listed in that skill's output_fields (e.g. \${{ nodes.read.outputs.content }}) — never invent keys like 'markdown' or 'text'.
+- Web skills only READ given URLs — there is no web-search skill. If the goal says 'search', put concrete seed URLs in input defaults (e.g. a search results page or the site's index) and say so in the description.
 - Keep graphs minimal: fewest nodes that accomplish the goal (usually 1-4).
 - Wire data flow through input templates; avoid nodes with no meaningful input.
 - The graph must be a DAG (no cycles).`;
@@ -62,6 +68,9 @@ function catalogSection(skills: SkillPlanningHint[]): string {
       const lines = [`- ${s.name}: ${s.description}`];
       if (s.inputSchema && Object.keys(s.inputSchema).length > 0) {
         lines.push(`  input_schema: ${JSON.stringify(s.inputSchema)}`);
+      }
+      if (s.outputSchema?.properties && Object.keys(s.outputSchema.properties).length > 0) {
+        lines.push(`  output_fields: ${JSON.stringify(Object.keys(s.outputSchema.properties))}`);
       }
       if (s.xPlanning && Object.keys(s.xPlanning).length > 0) {
         lines.push(`  x-planning: ${JSON.stringify(s.xPlanning)}`);

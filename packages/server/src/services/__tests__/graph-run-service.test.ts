@@ -208,6 +208,35 @@ describe('GraphRunService — 接线与生命周期（M2-4/M2-5）', () => {
     expect(svc.listAllPendingApprovals().filter(p => p.runId === runId)).toHaveLength(0);
   });
 
+  it('类型守卫：数组传给 string 字段 → 快失败并给可操作提示（替代 "[object Object]"）', async () => {
+    // 桩 registry：web-reader 的 url 是 string
+    const reg = {
+      getByName: (name: string) => name === 'web-reader'
+        ? { name, inputSchema: { properties: { url: { type: 'string' } } } }
+        : null,
+    };
+    const guardedSvc = new GraphRunService({
+      skillExecutor: stub,
+      skillRegistry: reg as any,
+      runStore,
+      eventStore,
+      checkpointStore,
+    });
+    const { runId } = guardedSvc.startGraphRun({
+      goal: '类型守卫',
+      graph: {
+        name: 'guard-test',
+        nodes: [{ id: 'r', type: 'skill', skill: 'web-reader', input: { url: '${{ input.urls }}' } }],
+        edges: [],
+        input: { urls: ['https://a.com', 'https://b.com'] },
+      },
+    });
+    expect(await waitForTerminal(runId)).toBe('failed');
+    const run = runStore.get(runId)!;
+    expect(run.final_content).toContain('类型不匹配');
+    expect(run.final_content).toContain('url');
+  });
+
   it('非法 graph 启动即拒（校验前置）', () => {
     expect(() =>
       svc.startGraphRun({

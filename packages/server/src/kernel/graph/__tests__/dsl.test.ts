@@ -105,6 +105,18 @@ describe('Graph DSL — 结构校验（M2-2）', () => {
     expect(r.issues[0].message).toContain('环');
   });
 
+  it('input 默认值写成 JSON Schema（AI 编排实测踩坑）→ 校验拦截并给出可读提示', () => {
+    const r = validateGraph(graph({
+      input: { urls: { type: 'array', items: { type: 'string' }, description: 'URL 列表' } },
+    }));
+    expect(r.ok).toBe(false);
+    const issue = r.issues.find(i => i.path === 'input.urls')!;
+    expect(issue.message).toContain('JSON Schema');
+    // 正常对象默认值不受影响（无 items/properties 组合）
+    const ok = validateGraph(graph({ input: { url: 'https://example.com', meta: { kind: 'x' } } }));
+    expect(ok.ok).toBe(true);
+  });
+
   it('YAML 文本入口：语法错误包装为 issue；合法文本返回 graph', () => {
     const bad = parseAndValidateGraphYaml('nodes: [unclosed');
     expect(bad.ok).toBe(false);

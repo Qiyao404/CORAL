@@ -89,6 +89,7 @@ async function main() {
   // M2：Graph 模式（GraphEngine 接线：durable execution + HITL + resume）
   const graphRunService = new GraphRunService({
     skillExecutor: executor,
+    skillRegistry: registry,
     runStore: new RunStore(),
     eventStore: new RunEventStore(),
     checkpointStore: new CheckpointStore(),

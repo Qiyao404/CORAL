@@ -6,6 +6,7 @@ import { CheckpointStore } from '../store/checkpoint-store.js';
 import { eventBus } from '../event/event-bus.js';
 import { createAbortController, abortTask, releaseAbortController } from './task-abort-registry.js';
 import type { SkillExecutor } from '../skill-runtime/skill-executor.js';
+import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-registry.js';
 import { nanoid } from 'nanoid';
 
 /**
@@ -25,9 +26,43 @@ export interface StartGraphRunInput {
 
 export interface GraphRunServiceDeps {
   skillExecutor: SkillExecutor;
+  /** M2 实测补：节点执行前按 manifest input_schema 做类型守卫（快失败 + 可读错误） */
+  skillRegistry?: FilesystemSkillRegistry;
   runStore: RunStore;
   eventStore: RunEventStore;
   checkpointStore: CheckpointStore;
+}
+
+const SCALAR_TYPES: Record<string, string> = {
+  string: 'string',
+  number: 'number',
+  integer: 'number',
+  boolean: 'boolean',
+};
+
+/** 轻量类型守卫：节点输入 vs 技能 input_schema 的顶层字段类型（不引 ajv，报错可操作） */
+function checkInputTypes(
+  skillName: string,
+  input: Record<string, any>,
+  schema?: Record<string, any>
+): string | null {
+  const props = schema?.properties;
+  if (!props || typeof props !== 'object') return null;
+  for (const [field, def] of Object.entries(props) as Array<[string, any]>) {
+    const expected = SCALAR_TYPES[typeof def?.type === 'string' ? def.type : ''];
+    const value = input?.[field];
+    if (!expected || value === undefined || value === null) continue;
+    if (def.nullable === true && value === null) continue;
+    if (typeof value !== expected) {
+      const hint = expected === 'string' && Array.isArray(value)
+        ? '（引用数组请取具体元素，如 ${{ nodes.x.outputs.list.0 }}）'
+        : expected === 'string' && typeof value === 'object'
+          ? '（input 默认值写成了 JSON Schema？input 应是具体值）'
+          : '';
+      return `节点输入字段 "${field}" 类型不匹配：技能 ${skillName} 要求 ${def.type}，实际收到 ${Array.isArray(value) ? 'array' : typeof value} ${hint}`;
+    }
+  }
+  return null;
 }
 
 interface PendingNodeApproval {
@@ -213,6 +248,14 @@ export class GraphRunService {
         resumeFrom: input.resumeFrom,
         executor: {
           execute: async (def, nodeInput, ctx) => {
+            // 类型守卫：模板展开后的输入 vs 技能 schema（快失败，替代脚本里 "[object Object]"）
+            if (this.deps.skillRegistry) {
+              const manifest = this.deps.skillRegistry.getByName(def.skill);
+              const typeError = manifest ? checkInputTypes(def.skill, nodeInput, manifest.inputSchema as any) : null;
+              if (typeError) {
+                return { ok: false, error: { message: typeError, retryable: false } };
+              }
+            }
             const r = await this.deps.skillExecutor.execute({
               skillName: def.skill,
               input: nodeInput,

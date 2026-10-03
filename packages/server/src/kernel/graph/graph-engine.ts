@@ -213,6 +213,11 @@ export class GraphEngine {
       });
       const expanded = value as Record<string, any>;
       this.state.nodes[id].input = expanded;
+      if (missing.length > 0) {
+        // 上游输出键名对不上（如引用了不存在的 markdown 字段）— 保留执行但留痕，
+        // 空串/undefined 传入技能通常表现为"空输入"类错误，此事件帮助定位真因
+        this.emit('graph.node_input_missing', { node: id, missing });
+      }
 
       // M1-10/M2-4：节点级审批（可改参数后继续）
       if (def.permission === 'approval' && this.opts.approveNode) {

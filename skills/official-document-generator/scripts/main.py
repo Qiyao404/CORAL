@@ -3,6 +3,7 @@
 official-document-generator: 生成符合 GB/T 9704-2012 标准的党政机关公文 Word 文档
 """
 import sys
+import tempfile
 import json
 import os
 import re
@@ -172,25 +173,21 @@ def generate_document(inputs):
     # 生成文件名
     safe_title = re.sub(r'[\\\\/:*?\"<>|]', '_', title)[:30]
     filename = f"{safe_title}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
-    output_path = os.path.join('/tmp', filename)
+    output_path = os.path.join(tempfile.gettempdir(), filename)
     
     # 保存文档
     doc.save(output_path)
     
-    # 读取文件内容并上报为 artifact
-    with open(output_path, 'rb') as f:
-        file_content = f.read()
-    
-    artifact_id = emit_artifact(filename, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 
-                                file_content, inline=False)
-    
-    emit_progress(100, 100, '完成')
-    
     # 生成预览文本
     preview = main_body[:500] + '...' if len(main_body) > 500 else main_body
     
+    # 上报产物（coral_progress 契约：name + path + type + preview）
+    emit_artifact(filename, output_path, 'file', preview=preview[:200])
+    
+    emit_progress(100, 100, '完成')
+    
     return {
-        "document_url": f"coral://artifact/{artifact_id}",
+        "document_path": output_path,
         "preview_text": preview,
         "format_check": {
             "page_setup": True,

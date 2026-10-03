@@ -117,6 +117,20 @@ export function validateGraph(raw: unknown): GraphValidationResult {
   }
   if (g.input !== undefined && !isPlainObject(g.input)) {
     issues.push({ path: 'input', message: 'input 须为对象（运行时输入默认值）' });
+  } else if (isPlainObject(g.input)) {
+    // 用户实测（AI 编排产物）：把 JSON Schema 写进了 input 默认值 —
+    // 运行时模板会解出 schema 对象本身传给技能（"无效 URL: [object Object]"）
+    for (const [k, v] of Object.entries(g.input)) {
+      if (
+        isPlainObject(v) && typeof v.type === 'string' &&
+        (v.items !== undefined || v.properties !== undefined)
+      ) {
+        issues.push({
+          path: `input.${k}`,
+          message: `疑似把 JSON Schema 写成了默认值（${JSON.stringify(v).slice(0, 60)}…）— input 是运行时默认值（如 url: https://example.com），不是 schema 定义`,
+        });
+      }
+    }
   }
 
   // ── 节点 ──
