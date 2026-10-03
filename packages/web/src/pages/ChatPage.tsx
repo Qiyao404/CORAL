@@ -249,6 +249,30 @@ export default function ChatPage() {
     } catch (err: any) { alert('删除失败: ' + err.message); }
   };
 
+  // 预算超限后续接：同会话新 run，checkpoint 续接上一轮进度，预算按 run 重置
+  const continueRun = async () => {
+    if (!currentSessionId || submitting) return;
+    setSubmitting(true);
+    try {
+      const uploadNote = uploadedFiles.length > 0
+        ? `## 用户刚上传的文件（工作区根目录）\n${uploadedFiles.map(f => `- ${f}`).join('\n')}`
+        : undefined;
+      const res = await api.createRun({
+        goal: '继续完成上一个未完成的任务：请从上一次的进度接着做（已完成的部分不要重做），直到产出最终成果。',
+        sessionId: currentSessionId,
+        workspaceId: workspaceId || undefined,
+        continueSession: true,
+        extraSystem: uploadNote,
+      });
+      setActiveRunId(res.runId);
+      loadSessions();
+    } catch (err: any) {
+      alert('续接失败: ' + err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const cancel = async () => {
     if (!activeRunId) return;
     try {
@@ -409,7 +433,7 @@ export default function ChatPage() {
                 )}
               </div>
             ))}
-          {activeRunId && <RunLiveView goal={sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? sessionRuns.find(r => r.id === activeRunId)?.goal ?? ''} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} onDecide={decide} />}
+          {activeRunId && <RunLiveView goal={sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? sessionRuns.find(r => r.id === activeRunId)?.goal ?? ''} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} onDecide={decide} onContinue={continueRun} />}
           <div ref={bottomRef} />
         </div>
 
@@ -628,6 +652,7 @@ function RunLiveView({
   streamingText,
   fullFinal,
   onDecide,
+  onContinue,
 }: {
   goal: string;
   view: ReturnType<typeof deriveRunView>;
@@ -635,6 +660,7 @@ function RunLiveView({
   streamingText: string;
   fullFinal: string | null;
   onDecide: (approvalId: string, approved: boolean) => void;
+  onContinue?: () => void;
 }) {
   const [openCards, setOpenCards] = useState<Set<string>>(new Set());
   const toggle = (id: string) => setOpenCards(prev => {
@@ -735,7 +761,12 @@ function RunLiveView({
           <div className="max-w-[85%] glass border border-glass-border rounded-2xl px-4 py-3">
             <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{fullFinal ?? view.finalContent}</p>
             {view.endReason === 'budget_exceeded' && (
-              <p className="text-xs text-status-warn mt-2">⚠ 预算达到上限，以上为部分成果总结</p>
+              <div className="mt-2 flex items-center gap-2">
+                <p className="text-xs text-status-warn">⚠ 预算达到上限，以上为部分成果总结</p>
+                {onContinue && (
+                  <Button size="sm" variant="secondary" onClick={onContinue}>继续执行</Button>
+                )}
+              </div>
             )}
           </div>
         </div>
