@@ -180,11 +180,25 @@ export const api = {
     request<any>(`/runs/${runId}`, { method: 'DELETE' }),
   deleteSession: (sessionId: string) =>
     request<any>(`/sessions/${sessionId}`, { method: 'DELETE' }),
-  resolveApproval: (runId: string, approvalId: string, approved: boolean) =>
+  resolveApproval: (runId: string, approvalId: string, approved: boolean, input?: Record<string, any>) =>
     request<any>(`/runs/${runId}/approvals/${approvalId}`, {
       method: 'POST',
-      body: JSON.stringify({ approved }),
+      body: JSON.stringify({ approved, ...(input ? { input } : {}) }),
     }),
+
+  // ─── M2：Graph 模式 ───────────────────────────────────────
+  createGraphRun: (payload: { goal: string; graph: string; input?: Record<string, any> }) =>
+    request<any>('/runs', {
+      method: 'POST',
+      body: JSON.stringify({ ...payload, mode: 'graph' }),
+    }),
+  validateGraph: (graph: string) =>
+    request<any>('/graphs/validate', { method: 'POST', body: JSON.stringify({ graph }) }),
+  compileGraph: (goal: string) =>
+    request<any>('/graphs/compile', { method: 'POST', body: JSON.stringify({ goal }) }),
+  listResumable: () => request<any>('/runs/graph/resumable'),
+  resumeRun: (runId: string) => request<any>(`/runs/${runId}/resume`, { method: 'POST' }),
+  listPendingApprovals: () => request<any>('/approvals/pending'),
 
   // ─── M1-10：工作区 ────────────────────────────────────────
   listWorkspaces: () => request<any>('/workspaces'),

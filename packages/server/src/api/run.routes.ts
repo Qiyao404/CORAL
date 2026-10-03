@@ -152,6 +152,30 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
     };
   });
 
+  // M2-3：goal→graph AI 编译（x-planning 提示随技能清单注入；校验失败自愈重试一次）
+  app.post('/api/graphs/compile', async (request, reply) => {
+    const body = (request.body || {}) as { goal?: string };
+    if (!graphSvc) return reply.status(501).send({ error: 'graph 模式未启用' });
+    if (typeof body.goal !== 'string' || !body.goal.trim()) {
+      return reply.status(400).send({ error: '缺少 goal 参数' });
+    }
+    const { llmClient } = await import('../services/llm-client.js');
+    const { FilesystemSkillRegistry } = await import('../skill-runtime/filesystem-registry.js');
+    const { platformConfig } = await import('../services/config.js');
+    const { compileGoalToGraph } = await import('../kernel/graph/graph-compiler.js');
+    const registry = new FilesystemSkillRegistry(platformConfig.skillsDir);
+    await registry.reloadAll();
+    const hints = registry.listAll().map((m: any) => ({
+      name: m.name,
+      description: m.description,
+      inputSchema: m.inputSchema,
+      ...(m.xPlanning ? { xPlanning: m.xPlanning } : {}),
+    }));
+    const result = await compileGoalToGraph(body.goal, hints, llmClient as any);
+    if (!result.ok) return reply.status(422).send({ error: result.error, issues: result.issues });
+    return { graph: result.graph, yaml: result.yaml, attempts: result.attempts };
+  });
+
   // M2-4：审批中心 — 跨 run 待审批（free 工具审批 + graph 节点审批合并）
   app.get('/api/approvals/pending', async () => {
     const items: Array<Record<string, any>> = [];

@@ -144,7 +144,7 @@ Tested against DeepSeek and DashScope (Kimi); OpenRouter / Ollama and any OpenAI
 | Persistence | SQLite (better-sqlite3, WAL, versioned schema migrations) |
 | Skills | YAML frontmatter (gray-matter) + chokidar hot reload |
 | Progress protocol | Custom `[CORAL_PROGRESS]` single-line JSON on stderr (Python + Node SDKs, see [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)) |
-| Quality | Vitest (263 tests) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
+| Quality | Vitest (299 tests) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
 
 ---
 
@@ -291,11 +291,11 @@ CORAL/
 |------|------|:---:|
 | M0 | Foundation: SQLite / real cancel / real timeout / retry semantics / safe defaults / tests + CI | ✅ |
 | M1 | Harness kernel: Agent Loop · sub-agents · Agentic Workspace · long-term memory · dual provider · skill import · Chat sessions · five innovations | ✅ |
-| M2 | Graph mode: deterministic DAG + checkpoints / human approval center / resume | 🚧 in progress |
+| M2 | Graph mode: DSL + event-driven engine + goal→graph AI compiler + node approvals (patch-and-continue) + resume + Workflow page | ✅ |
 | M3 | MCP bridge · scheduled & webhook triggers · progress-protocol SDK (npm/PyPI) | ⏳ |
 | M4 | Time-Travel debugger (rollback/fork-replay) · `npx coral` distribution | ⏳ |
 
-Quality baseline: Vitest 263 tests green · GitHub Actions three platforms (ubuntu/windows/macos × Node 20/22) · TypeScript strict
+Quality baseline: Vitest 299 tests green · GitHub Actions three platforms (ubuntu/windows/macos × Node 20/22) · TypeScript strict
 
 ---
 

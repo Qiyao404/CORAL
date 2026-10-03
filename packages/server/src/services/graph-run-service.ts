@@ -341,7 +341,12 @@ export class GraphRunService {
   }
 
   private nextSeq(runId: string): number {
-    const next = (this.seqCounters.get(runId) ?? 0) + 1;
+    // 惰性种子：本进程首次触达该 run 时从已持久化的最大 seq 续接
+    //（重启后计数器归零 — 覆盖 interrupted 扫描/resume 等全部发射路径，防 seq 撞车）
+    if (!this.seqCounters.has(runId)) {
+      this.seqCounters.set(runId, this.deps.eventStore.maxSeq(runId));
+    }
+    const next = this.seqCounters.get(runId)! + 1;
     this.seqCounters.set(runId, next);
     return next;
   }

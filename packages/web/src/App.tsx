@@ -11,12 +11,16 @@ import {
   Sun,
   Moon,
   Monitor,
+  GitBranch,
+  ShieldAlert,
 } from 'lucide-react';
 import DashboardPage from './pages/DashboardPage';
 import TasksPage from './pages/TasksPage';
 import TaskDetailPage from './pages/TaskDetailPage';
 import SkillsPage from './pages/SkillsPage';
 import ChatPage from './pages/ChatPage';
+import WorkflowPage from './pages/WorkflowPage';
+import ApprovalsPage from './pages/ApprovalsPage';
 import SettingsPage from './pages/SettingsPage';
 import SkillBuilderPage from './pages/SkillBuilderPage';
 import { useGlobalStream } from './hooks/useGlobalStream';
@@ -31,6 +35,8 @@ const navItems = [
   { path: '/skills', label: '技能列表', icon: Sparkles },
   { path: '/skill-builder', label: '技能创建', icon: Wand2 },
   { path: '/chat', label: '对话', icon: MessageSquare },
+  { path: '/workflows', label: 'Workflow', icon: GitBranch },
+  { path: '/approvals', label: '审批中心', icon: ShieldAlert },
   { path: '/settings', label: '设置', icon: SettingsIcon },
 ];
 
@@ -140,6 +146,8 @@ export default function App() {
               <Route path="/skill-builder" element={<SkillBuilderPage />} />
               <Route path="/skill-builder/:sessionId" element={<SkillBuilderPage />} />
               <Route path="/chat" element={<ChatPage />} />
+              <Route path="/workflows" element={<WorkflowPage />} />
+              <Route path="/approvals" element={<ApprovalsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
             </Routes>
           </ErrorBoundary>
