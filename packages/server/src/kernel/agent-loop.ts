@@ -82,7 +82,7 @@ const BASE_SYSTEM = `You are CORAL, a personal local-first agent runtime. You ac
 
 Working rules:
 - Use the provided tools to gather information and take actions. Prefer tools over guessing.
-- BEFORE doing any work, call todo_write to lay out your plan (2-6 items). This is mandatory for any task needing more than one tool call — the user watches this checklist live. Update item statuses (in_progress/completed) as you progress.
+- BEFORE doing any work, call todo_write to lay out your plan (2-6 items). This is mandatory for any task needing more than one tool call — the user watches this checklist live. Update item statuses (in_progress/completed) as you progress, and mark EVERY item completed before writing your final answer.
 - Tool results come back as JSON. Read them carefully before deciding the next step.
 - If a tool fails, read the error: retry only when it says retryable, otherwise adapt your approach. If a TOOL_NOT_FOUND error lists available tools, switch to one of those exact names.
 - To see WHAT FILES exist in the workspace, always use fs_list first. fs_search only scans text files and silently skips binary formats (.docx/.xlsx) — never conclude a workspace is "empty" from fs_search results alone.
@@ -92,6 +92,9 @@ Working rules:
 - Never fabricate results you did not obtain from tools.`;
 
 export class AgentLoop {
+  // 最新一份 todo 清单（todo_write 每次全量替换时更新，终态收口用）
+  private lastTodos: Array<{ content: string; status: string }> | null = null;
+
   constructor(
     private llm: LoopLLM,
     private options: AgentLoopOptions
@@ -172,6 +175,7 @@ export class AgentLoop {
         // 模型给出最终回答
         if (response.stopReason !== 'tool_use' || response.toolCalls.length === 0) {
           messages.push({ role: 'assistant', content: response.content });
+          this.closeTodos('completed');
           this.checkpoint(steps, messages);
           this.emit('loop.step_completed', { step: steps, final: true });
           return {
@@ -250,6 +254,7 @@ export class AgentLoop {
           // 优雅收尾：最后一次不带工具的调用，让模型总结进展（不继续干活）
           const wrapUp = await this.wrapUp(messages, stepsExhausted ? 'maxSteps' : 'maxTokens');
           messages.push({ role: 'assistant', content: wrapUp.content });
+          this.closeTodos('stopped');
           this.emit('loop.budget_exceeded', {
             reason: stepsExhausted ? 'maxSteps' : 'maxTokens',
             steps,
@@ -270,6 +275,7 @@ export class AgentLoop {
     } catch (err: any) {
       if (signal.aborted || err?.name === 'AbortError') {
         this.checkpoint(steps, messages);
+        this.closeTodos('stopped');
         this.emit('loop.cancelled', { step: steps });
         return {
           status: 'cancelled',
@@ -283,6 +289,7 @@ export class AgentLoop {
         };
       }
       this.emit('loop.failed', { step: steps, error: err?.message ?? String(err) });
+      this.closeTodos('stopped');
       return {
         status: 'failed',
         finalContent: '',
@@ -374,6 +381,18 @@ export class AgentLoop {
     });
   }
 
+  /**
+   * 清单收尾：终态时代替模型收口最后一版 todo（事件流合成 todo.updated，UI 自动跟进）。
+   * kind='completed'：in_progress→completed（最终回答已交付，正在做的即已完成；pending 保持）
+   * kind='stopped'：in_progress→pending（取消/失败/预算耗尽，如实反映未完成）
+   */
+  private closeTodos(kind: 'completed' | 'stopped'): void {
+    if (!this.lastTodos || !this.lastTodos.some(t => t.status === 'in_progress')) return;
+    const settled = kind === 'completed' ? 'completed' : 'pending';
+    const closed = this.lastTodos.map(t => (t.status === 'in_progress' ? { ...t, status: settled } : t));
+    this.emit('todo.updated', { todos: closed, _closedBy: 'run_end' });
+  }
+
   private checkpoint(step: number, messages: ChatMessage[]): void {
     const every = this.options.checkpointEvery ?? 1;
     if (!this.options.saveCheckpoint || step % every !== 0) return;
@@ -399,7 +418,11 @@ export class AgentLoop {
 
   private emit(type: string, payload?: Record<string, any>): void {
     // agentId 注入：主循环 'main'，sub-agent 各自 id（M1-4 — 事件流区分来源）
-    const enriched = { agentId: this.options.agentId, ...payload };
+    const enriched: Record<string, any> = { agentId: this.options.agentId, ...payload };
+    // 清单跟踪：todo_write 的每次全量替换都记下最新版本（终态收口用）
+    if (type === 'todo.updated' && Array.isArray(enriched.todos)) {
+      this.lastTodos = enriched.todos;
+    }
     try {
       this.options.onEvent({ type, payload: enriched });
     } catch { /* 事件消费者异常不中断循环 */ }

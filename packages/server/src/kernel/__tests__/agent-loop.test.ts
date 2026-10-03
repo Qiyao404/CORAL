@@ -359,3 +359,72 @@ describe('AgentLoop — todo 清单保障（可观测性）', () => {
     expect(events.some(e => e.type === 'loop.todo_reminder')).toBe(false);
   });
 });
+
+describe('AgentLoop — todo 终态收口（清单不再永远转圈）', () => {
+  const todoTool = (): Tool => ({
+    name: 'todo_write',
+    description: 'write todos',
+    inputSchema: { type: 'object' },
+    source: 'builtin',
+    permission: 'auto',
+    invoke: async (input: any, ctx: any) => {
+      // 与真实工具一致：清单经 ctx.emit 进入事件流
+      ctx?.emit({ type: 'todo.updated', payload: { todos: input.todos ?? [] } });
+      return { ok: true, data: { todos: input.todos ?? [] } };
+    },
+  });
+
+  it('最终回答时仍有 in_progress 项 → 合成 todo.updated 全部收口（in_progress→completed）', async () => {
+    const llm = new ScriptedLLM([
+      // 第 1 轮：建清单（一项 in_progress），模型最终回答前忘了更新
+      { stopReason: 'tool_use', toolCalls: [toolCall('t', 'todo_write', { todos: [
+        { content: 'read file', status: 'completed' },
+        { content: 'summarize', status: 'in_progress' },
+      ] })], content: '' },
+      { stopReason: 'end', content: 'SUMMARY' },
+    ]);
+    const { loop, events } = harness({ llm, tools: [todoTool()] });
+    const r = await loop.run();
+
+    expect(r.status).toBe('completed');
+    const todoEvents = events.filter(e => e.type === 'todo.updated');
+    expect(todoEvents).toHaveLength(2); // 工具 1 次 + 引擎收口 1 次
+    const closed = todoEvents[1].payload!.todos as Array<{ status: string }>;
+    expect(closed.map(t => t.status)).toEqual(['completed', 'completed']);
+    expect(todoEvents[1].payload!._closedBy).toBe('run_end');
+  });
+
+  it('取消 → in_progress 置回 pending（如实反映未完成）', async () => {
+    const abortErr = new Error('cancelled');
+    abortErr.name = 'AbortError';
+    const llm = new ScriptedLLM([
+      { stopReason: 'tool_use', toolCalls: [toolCall('t', 'todo_write', { todos: [
+        { content: 'a', status: 'in_progress' },
+      ] })], content: '' },
+      abortErr,
+    ]);
+    const { loop, events } = harness({ llm, tools: [todoTool()] });
+    await loop.run();
+
+    const todoEvents = events.filter(e => e.type === 'todo.updated');
+    expect(todoEvents).toHaveLength(2);
+    expect(todoEvents[1].payload!.todos[0].status).toBe('pending');
+  });
+
+  it('没有未完成项 / 从未建清单 → 不合成收口事件', async () => {
+    const llm = new ScriptedLLM([
+      { stopReason: 'tool_use', toolCalls: [toolCall('t', 'todo_write', { todos: [
+        { content: 'a', status: 'completed' },
+      ] })], content: '' },
+      { stopReason: 'end', content: 'ok' },
+    ]);
+    const { loop, events } = harness({ llm, tools: [todoTool()] });
+    await loop.run();
+    expect(events.filter(e => e.type === 'todo.updated')).toHaveLength(1);
+
+    const llm2 = new ScriptedLLM([{ stopReason: 'end', content: 'ok' }]);
+    const { loop: loop2, events: events2 } = harness({ llm: llm2, tools: [echoTool()] });
+    await loop2.run();
+    expect(events2.filter(e => e.type === 'todo.updated')).toHaveLength(0);
+  });
+});
