@@ -38,6 +38,8 @@ export default function ChatPage() {
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   // 最终回答全文（run.completed 事件只带 500 字预览，终态后从详情拉全文）
   const [fullFinal, setFullFinal] = useState<string | null>(null);
+  // 会话线程：当前会话全部 run（时间升序，含 final_content）— ChatGPT 式连续对话视图
+  const [sessionRuns, setSessionRuns] = useState<Array<{ id: string; goal: string; final_content?: string | null; created_at: string }>>([]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const { events, connected } = useRunStream(activeRunId ?? undefined);
@@ -125,6 +127,26 @@ export default function ChatPage() {
     });
     loadWorkspaces();
   }, [loadSessions, loadWorkspaces]);
+
+  const loadSessionThread = useCallback(async (sid: string | null) => {
+    if (!sid) { setSessionRuns([]); return; }
+    try {
+      const res = await api.listRuns({ sessionId: sid, limit: 100 });
+      const items = (res.items ?? [])
+        .map((r: any) => ({ id: r.id, goal: r.goal, final_content: r.final_content, created_at: r.created_at }))
+        .sort((a: any, b: any) => (a.created_at || '').localeCompare(b.created_at || ''));
+      setSessionRuns(items);
+    } catch { setSessionRuns([]); }
+  }, []);
+
+  useEffect(() => { loadSessionThread(currentSessionId); }, [currentSessionId, loadSessionThread]);
+
+  // 活跃 run 终态后刷新线程（补上它的最终回答）
+  useEffect(() => {
+    if (view.runStatus && ['completed', 'failed', 'cancelled'].includes(view.runStatus)) {
+      loadSessionThread(currentSessionId);
+    }
+  }, [view.runStatus, currentSessionId, loadSessionThread]);
 
   // 会话列表加载后，若无当前会话则选中最近的（保持续接）
   useEffect(() => {
@@ -217,7 +239,9 @@ export default function ChatPage() {
           {sessions.map(s => (
             <div key={s.sessionId}>
               <div className="flex items-center justify-between px-2 mb-1">
-                <p className="text-[10px] text-fg-disabled truncate flex-1">{s.sessionId ?? '未分组'}</p>
+                <p className="text-[10px] text-fg-disabled truncate flex-1" title={s.sessionId ?? '未分组'}>
+                  {s.sessionId ? (s.runs[0]?.goal?.slice(0, 18) || '对话') + `（${s.runs.length}）` : '未分组'}
+                </p>
                 <button
                   onClick={() => handleDeleteSession(s.sessionId)}
                   title="删除整个会话"
@@ -309,7 +333,24 @@ export default function ChatPage() {
             </div>
           )}
 
-          {activeRunId && <RunLiveView goal={sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? ''} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} onDecide={decide} />}
+          {/* 会话线程：此前的轮次（静态问答气泡）— 多轮对话连续视图 */}
+          {sessionRuns
+            .filter(r => r.id !== activeRunId)
+            .map(r => (
+              <div key={r.id} className="space-y-3">
+                <div className="flex justify-end">
+                  <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{r.goal}</div>
+                </div>
+                {(r.final_content || '').trim() && (
+                  <div className="flex justify-start">
+                    <div className="max-w-[85%] glass border border-glass-border rounded-2xl px-4 py-3">
+                      <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{r.final_content}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          {activeRunId && <RunLiveView goal={sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? sessionRuns.find(r => r.id === activeRunId)?.goal ?? ''} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} onDecide={decide} />}
           <div ref={bottomRef} />
         </div>
 
