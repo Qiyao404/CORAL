@@ -46,6 +46,7 @@ export function parseSkillMd(skillDir: string): ParsedSkillManifest | null {
       scriptRuntime: fm.script_runtime,
       scriptTimeoutMs: fm.script_timeout_ms,
       humanGate: fm.human_gate ?? false,
+      xPlanning: (fm as any)['x-planning'],
       estimatedDurationMs: fm.estimated_duration_ms || 10000,
       costLevel: fm.cost_level || 'low',
       status: fm.status || 'stable',

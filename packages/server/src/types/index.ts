@@ -149,6 +149,8 @@ export interface ParsedSkillManifest {
   promptContent: string;
   referenceContent?: string;
   loadedAt: string;
+  /** M2-3：x-planning 扩展（graph-compiler 用：站点别名/适用场景等规划提示，内核不解释语义） */
+  xPlanning?: Record<string, any>;
   fileHash: string;
   /** v1.1.0 新增 */
   source: SkillSource;
