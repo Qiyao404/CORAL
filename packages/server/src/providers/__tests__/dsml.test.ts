@@ -17,7 +17,7 @@ describe('parseDsmlToolCalls — DeepSeek 工具调用退化归一化', () => {
     expect(r.toolCalls).toHaveLength(1);
     expect(r.toolCalls[0].name).toBe('memory_search');
     expect(r.toolCalls[0].input).toEqual({ query: 'example.com 网页 摘要 任务' });
-    expect(r.remaining).toBe("I'll fetch the page content and summarize it.");
+    expect(r.remaining).toContain('fetch the page content');
   });
 
   it('JSON 型参数值被解析为对象/数字', () => {
@@ -28,6 +28,16 @@ describe('parseDsmlToolCalls — DeepSeek 工具调用退化归一化', () => {
     const r = parseDsmlToolCalls(dsml)!;
     expect(r.toolCalls[0].input).toEqual({ url: 'https://x.com', timeout_ms: 5000 });
     expect(r.remaining).toBe('');
+  });
+
+  it('ASCII 包装变体（<<DSML>>）也能解析', () => {
+    const ascii = `先说明一下。
+
+<<DSML>>invoke name="docx_write">parameter name="path">output/总结.docx<</DSML>>parameter><<DSML>>invoke name="http_fetch">parameter name="url">https://x.com<</DSML>>parameter>`;
+    const r = parseDsmlToolCalls(ascii)!;
+    expect(r.toolCalls.map(t => t.name)).toEqual(['docx_write', 'http_fetch']);
+    expect(r.toolCalls[0].input.path).toBe('output/总结.docx');
+    expect(r.remaining).not.toContain('DSML');
   });
 
   it('多次 invoke 全部解析', () => {

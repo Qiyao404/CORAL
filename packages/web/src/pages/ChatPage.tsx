@@ -52,8 +52,10 @@ export default function ChatPage() {
   const streamingText = useMemo(() => {
     if (view.runStatus) return ''; // 已终态，finalContent 取代
     const raw = events.filter(e => e.type === 'loop.delta').map(e => e.payload?.delta ?? '').join('');
-    // DSML 抑制兜底：退化原文若混入增量，截到第一个特殊标记前
-    const cut = raw.indexOf('<｜');
+    // DSML 抑制兜底：退化原文若混入增量，截到第一个标记前（全角/ASCII 双形态）
+    let cut = raw.indexOf('<｜');
+    const cut2 = raw.indexOf('<<');
+    if (cut2 >= 0 && (cut < 0 || cut2 < cut)) cut = cut2;
     return cut >= 0 ? raw.slice(0, cut) : raw;
   }, [events, view.runStatus]);
   const uploading = useRef(false);

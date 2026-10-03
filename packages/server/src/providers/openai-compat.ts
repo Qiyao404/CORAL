@@ -5,47 +5,56 @@ import type {
 import { withRetry, classifyProviderError, describeError, type RetryPolicy } from './retry.js';
 
 /**
- * M1 复审补丁：DeepSeek V3.2 系模型的「工具调用退化」——
- * 间歇性地把工具调用以 DSML 特殊标记文本（<｜｜DSML｜｜ invoke name="...">）打印在
- * content 里而不是走标准 tool_calls 字段。这里做归一化：检测 → 解析 → 转标准
- * tool_calls，循环层无感。同时保留 degraded 标记供上层告警。
+ * 检测并解析 DSML 文本型工具调用（对包装形态免疫：全角 ｜ / ASCII 变体均可）。
+ * 策略：统一 ｜→| 后按 `invoke name="..."` 分段，段内抽取 parameter 键值。
+ * 无 DSML 或解析不出 → null。
  */
-
-const DSML_INVOKE_RE = /invoke\s+name="([^"]+)"([\s\S]*?)(?=<｜｜?DSML｜｜?\s*invoke|<\/｜｜?DSML｜｜?\s*calls>|$)/g;
-const DSML_PARAM_RE = /parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)(?=<｜｜?DSML｜｜?\s*(?:parameter|invoke)|<\/｜｜?DSML|$)/g;
-
-/** 检测并解析 DSML 文本型工具调用；无 DSML 或解析不出 → null */
 export function parseDsmlToolCalls(content: string): { toolCalls: ToolCall[]; remaining: string } | null {
-  if (!content || !content.includes('DSML')) return null;
-  if (!content.includes('invoke')) return null;
+  if (!content || !content.includes('DSML') || !content.includes('invoke')) return null;
 
+  const norm = content.replace(/｜/g, '|'); // 全角 ｜ → |
+  if (!norm.includes('invoke')) return null;
+
+  const segs = norm.split(/invoke\s+name=/);
   const toolCalls: ToolCall[] = [];
-  let m: RegExpExecArray | null;
-  DSML_INVOKE_RE.lastIndex = 0;
-  let seq = 0;
-  while ((m = DSML_INVOKE_RE.exec(content)) !== null) {
-    const name = m[1];
-    const body = m[2];
+  // segs[0] = 前导正文；之后每段 = "name">params... 直到下一个 invoke
+  for (let i = 1; i < segs.length; i++) {
+    const seg = segs[i];
+    const nameM = seg.match(/^"([^"]+)"/);
+    if (!nameM) continue;
+    const name = nameM[1].trim();
     if (!name) continue;
+    const rest = seg.slice(nameM[0].length);
     const input: Record<string, any> = {};
+    // parameter name="k">VALUE</...parameter>（闭合标记形态不定 — 值取到下一个 < 为止）
+    const paramRe = /parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)(?=<\/\|*DSML|<(?:\|*DSML)?\s*invoke|<\/\|*DSML|$)/g;
     let pm: RegExpExecArray | null;
-    DSML_PARAM_RE.lastIndex = 0;
-    while ((pm = DSML_PARAM_RE.exec(body)) !== null) {
+    while ((pm = paramRe.exec(rest)) !== null) {
       const key = pm[1];
-      const rawValue = pm[2].trim();
+      const rawValue = pm[2].replace(/\|*DSML\|*/g, '').replace(/^>|</g, '').trim();
       try {
         input[key] = JSON.parse(rawValue);
       } catch {
         input[key] = rawValue;
       }
     }
-    toolCalls.push({ id: `dsml_${seq++}`, name, input });
+    toolCalls.push({ id: `dsml_${toolCalls.length}`, name, input });
   }
   if (toolCalls.length === 0) return null;
 
   // 正文 = 第一个 DSML 标记之前的自然语言部分
-  const cut = content.indexOf('<｜');
-  return { toolCalls, remaining: content.slice(0, cut > 0 ? cut : 0).trim() };
+  const cut = Math.min(
+    ...[norm.indexOf('<|'), norm.indexOf('<<')].filter(v => v >= 0).concat([norm.length])
+  );
+  const remaining = norm.slice(0, cut === norm.length ? contentCutIndex(content) : cut).trim();
+  return { toolCalls, remaining };
+}
+
+function contentCutIndex(original: string): number {
+  const i1 = original.indexOf('<｜');
+  const i2 = original.indexOf('<<');
+  const candidates = [i1, i2].filter(v => v >= 0);
+  return candidates.length > 0 ? Math.min(...candidates) : original.length;
 }
 
 /**
@@ -130,6 +139,7 @@ export class OpenAICompatProvider implements ChatProvider {
     const toolAcc = new Map<number, { id: string; name: string; args: string }>();
     // M0-4 语义保留：已向消费者交付过 chunk 则不重试（避免重复输出）
     let delivered = false;
+    let pending = '';
 
     await withRetry(
       async () => {
@@ -144,11 +154,22 @@ export class OpenAICompatProvider implements ChatProvider {
           }
           if (delta?.content) {
             full += delta.content;
-            // DSML 抑制（创新①配套）：一旦发现退化标记，停止向消费者发增量
-            // （否则退化原文会以「回答」形态流式显示；最终仍会被归一化为 tool_calls）
-            if (!full.includes('<｜') && !full.includes('DSML')) {
+            // DSML 抑制 v2（标记感知扣留）：'< ' 与 '｜' 常在不同 delta 到达，
+            // 朴素 includes 检查会漏 — 末尾疑似标记前缀的内容扣住不发，
+            // 确认非标记（后续是普通文本）后放行；确认是标记则永久抑制
+            pending += delta.content;
+            const lt = pending.lastIndexOf('<');
+            if (lt >= 0) {
+              const tail = pending.slice(lt);
+              const potential =
+                '<｜'.startsWith(tail) || '<<'.startsWith(tail) ||
+                tail.startsWith('<｜') || tail.startsWith('<<');
+              if (potential) return; // 扣住（可能是不完整标记）
+            }
+            if (pending) {
               delivered = true;
-              try { onChunk(delta.content); } catch { /* 消费者异常不中断流 */ }
+              try { onChunk(pending); } catch { /* 消费者异常不中断流 */ }
+              pending = '';
             }
           }
           for (const tc of delta?.tool_calls ?? []) {
@@ -170,6 +191,7 @@ export class OpenAICompatProvider implements ChatProvider {
           console.warn(`[LLM/openai-compat] 流式瞬时错误，${delayMs}ms 后第 ${attempt} 次重试: ${describeError(err)}`),
       }
     );
+    pending = '';
 
     return normalizeDegradedToolCalls({
       content: full,

@@ -423,6 +423,10 @@ export class RunEngine {
         const before = existsSync(r.absPath) ? readFileSync(r.absPath, 'utf-8') : '';
         return unifiedDiff(before, String(input?.content ?? ''), String(input?.path ?? ''));
       }
+      if (toolName === 'docx_write') {
+        // docx 是二进制 — 无旧文本可 diff，直接展示将写入的正文
+        return String(input?.content ?? '') || null;
+      }
       if (toolName === 'fs_edit') {
         const r = resolveWorkspacePath(workspaceDir, String(input?.path ?? ''));
         if (!r.ok) return null;
