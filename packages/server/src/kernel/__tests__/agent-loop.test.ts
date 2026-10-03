@@ -297,3 +297,65 @@ describe('AgentLoop — 主循环语义（M1-3）', () => {
     expect(llm.calls[0].system).toContain('workspace');
   });
 });
+
+describe('AgentLoop — todo 清单保障（可观测性）', () => {
+  const todoTool = (): Tool => ({
+    name: 'todo_write',
+    description: 'write todos',
+    inputSchema: { type: 'object' },
+    source: 'builtin',
+    permission: 'auto',
+    invoke: async (input: any) => ({ ok: true, data: { todos: input.todos ?? [] } }),
+  });
+
+  it('模型跳过 todo_write 连用 2+ 工具 → 下轮注入一次性提醒 + loop.todo_reminder 事件', async () => {
+    const llm = new ScriptedLLM([
+      { stopReason: 'tool_use', toolCalls: [toolCall('a', 'echo'), toolCall('b', 'echo')], content: '' },
+      { stopReason: 'tool_use', toolCalls: [toolCall('c', 'todo_write', { todos: [{ content: 'x', status: 'in_progress' }] })], content: '' },
+      { stopReason: 'end', content: 'done' },
+    ]);
+    const { loop, events } = harness({ llm, tools: [echoTool(), todoTool()] });
+    const r = await loop.run();
+
+    expect(r.status).toBe('completed');
+    // 第 2 次 LLM 调用可见一次性提醒（ScriptedLLM 持引用，数组会继续增长 → 按内容定位）
+    const reminderMsg = llm.calls[1].messages.find(m => m.content?.includes('[system] You are working'))!;
+    expect(reminderMsg?.role).toBe('user');
+    expect(reminderMsg.content).toContain('todo_write');
+    expect(events.some(e => e.type === 'loop.todo_reminder')).toBe(true);
+    // 只提醒一次：补建 todo 后的第 3 次调用不再追加提醒
+    const reminders3 = llm.calls[2].messages.filter(m => m.content?.includes('[system] You are working'));
+    expect(reminders3).toHaveLength(1);
+  });
+
+  it('模型首轮就建了 todo → 不提醒', async () => {
+    const llm = new ScriptedLLM([
+      { stopReason: 'tool_use', toolCalls: [toolCall('c', 'todo_write'), toolCall('a', 'echo')], content: '' },
+      { stopReason: 'end', content: 'done' },
+    ]);
+    const { loop, events } = harness({ llm, tools: [echoTool(), todoTool()] });
+    await loop.run();
+    expect(events.some(e => e.type === 'loop.todo_reminder')).toBe(false);
+    expect(llm.calls[1].messages.some(m => m.content?.includes('[system] You are working'))).toBe(false);
+  });
+
+  it('单工具轻任务（累计 <2 次调用）→ 不提醒，避免噪声', async () => {
+    const llm = new ScriptedLLM([
+      { stopReason: 'tool_use', toolCalls: [toolCall('a', 'echo')], content: '' },
+      { stopReason: 'end', content: 'done' },
+    ]);
+    const { loop, events } = harness({ llm, tools: [echoTool(), todoTool()] });
+    await loop.run();
+    expect(events.some(e => e.type === 'loop.todo_reminder')).toBe(false);
+  });
+
+  it('工具列表没有 todo_write（如子代理）→ 不提醒', async () => {
+    const llm = new ScriptedLLM([
+      { stopReason: 'tool_use', toolCalls: [toolCall('a', 'echo'), toolCall('b', 'echo')], content: '' },
+      { stopReason: 'end', content: 'done' },
+    ]);
+    const { loop, events } = harness({ llm, tools: [echoTool()] });
+    await loop.run();
+    expect(events.some(e => e.type === 'loop.todo_reminder')).toBe(false);
+  });
+});

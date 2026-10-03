@@ -572,7 +572,7 @@ function ProcessSection({
       {open && (
         <div className="px-3 pb-3 space-y-2 max-h-[480px] overflow-y-auto">
           {!v && <p className="text-xs text-fg-muted py-2">加载事件中…</p>}
-          {v && <ToolCardsView view={v} />}
+          {v && <ToolCardsView view={v} running={running} />}
         </div>
       )}
     </div>
@@ -580,7 +580,7 @@ function ProcessSection({
 }
 
 /** todo 清单 + 工具卡片（ProcessSection 内容体，直播/回放共用） */
-function ToolCardsView({ view }: { view: ReturnType<typeof deriveRunView> }) {
+function ToolCardsView({ view, running }: { view: ReturnType<typeof deriveRunView>; running?: boolean }) {
   const [openCards, setOpenCards] = useState<Set<string>>(new Set());
   const toggle = (id: string) => setOpenCards(prev => {
     const next = new Set(prev);
@@ -604,6 +604,9 @@ function ToolCardsView({ view }: { view: ReturnType<typeof deriveRunView> }) {
             ))}
           </ul>
         </div>
+      )}
+      {view.todos.length === 0 && running && (
+        <p className="text-[11px] text-fg-muted py-0.5">任务清单创建中 — agent 开工后会先列出计划步骤…</p>
       )}
       {view.toolCards.map(card => {
         const open = openCards.has(card.callId);

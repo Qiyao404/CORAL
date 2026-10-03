@@ -82,7 +82,7 @@ const BASE_SYSTEM = `You are CORAL, a personal local-first agent runtime. You ac
 
 Working rules:
 - Use the provided tools to gather information and take actions. Prefer tools over guessing.
-- For multi-step work, maintain a visible plan with the todo_write tool and update statuses as you go.
+- BEFORE doing any work, call todo_write to lay out your plan (2-6 items). This is mandatory for any task needing more than one tool call — the user watches this checklist live. Update item statuses (in_progress/completed) as you progress.
 - Tool results come back as JSON. Read them carefully before deciding the next step.
 - If a tool fails, read the error: retry only when it says retryable, otherwise adapt your approach. If a TOOL_NOT_FOUND error lists available tools, switch to one of those exact names.
 - To see WHAT FILES exist in the workspace, always use fs_list first. fs_search only scans text files and silently skips binary formats (.docx/.xlsx) — never conclude a workspace is "empty" from fs_search results alone.
@@ -117,6 +117,10 @@ export class AgentLoop {
     let toolCallCount = 0;
     let tokensIn = 0;
     let tokensOut = 0;
+    // 可观测性保障：模型跳过 todo_write 直接干活时，一次性提醒补建清单
+    //（"自主规划·全程可观测"是核心卖点，不能依赖模型自觉）
+    let todoWritten = false;
+    let todoNudged = false;
 
     try {
       while (true) {
@@ -192,6 +196,7 @@ export class AgentLoop {
         for (const call of response.toolCalls) {
           toolCallCount++;
           const tool = toolMap.get(call.name);
+          if (call.name === 'todo_write' || tool?.name === 'todo_write') todoWritten = true;
 
           this.emit('tool.call_started', {
             step: steps,
@@ -223,6 +228,20 @@ export class AgentLoop {
 
         this.checkpoint(steps, messages);
         this.emit('loop.step_completed', { step: steps, final: false });
+
+        // todo 提醒（一次性）：已在用工具干活却还没建清单 → 下轮 LLM 调用前注入系统口吻提醒。
+        // 放在工具轮之后，避免打断模型首个决策；只在 todo 工具存在时提醒（否则无法补救）。
+        if (!todoWritten && !todoNudged && toolCallCount >= 2 && toolMap.has('todo_write')) {
+          todoNudged = true;
+          messages.push({
+            role: 'user',
+            content:
+              '[system] You are working on a multi-step task but have not created a todo checklist yet. ' +
+              'Call todo_write NOW with your remaining plan (2-6 items, first item in_progress) before doing any other work. ' +
+              'The user watches this checklist live.',
+          });
+          this.emit('loop.todo_reminder', { step: steps });
+        }
 
         // 预算检查（工具轮结束后、下一轮 LLM 调用前）
         const stepsExhausted = steps >= budget.maxSteps;
