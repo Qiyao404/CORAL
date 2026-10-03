@@ -63,6 +63,18 @@ function makeLLM(script: Array<Partial<ChatResponse> | Error | ((req: ChatReques
   };
 }
 
+class HangingLLM {
+  async chat(_req: any): Promise<any> {
+    await new Promise((_, rej) => {
+      const sig = _req.signal;
+      const onAbort = () => { const e = new Error('aborted'); e.name = 'AbortError'; rej(e); };
+      if (sig?.aborted) onAbort(); else sig?.addEventListener('abort', onAbort, { once: true });
+    });
+    throw new Error('unreachable');
+  }
+  async complete(): Promise<{ content: string }> { return { content: 's' }; }
+}
+
 function newEngine(llm: any): RunEngine {
   const skillsDir = join(tmp, 'skills');
   const skillRegistry = new FilesystemSkillRegistry(skillsDir);
@@ -78,11 +90,19 @@ function newEngine(llm: any): RunEngine {
 }
 
 const wait = (ms: number) => new Promise(r => setTimeout(r, ms));
+async function waitStatus(runId: string, status: string, timeoutMs = 5000): Promise<void> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < timeoutMs) {
+    if (runStore.get(runId)?.status === status) return;
+    await wait(30);
+  }
+}
 async function waitTerminal(runId: string, timeoutMs = 5000): Promise<void> {
   const t0 = Date.now();
   while (Date.now() - t0 < timeoutMs) {
     const run = runStore.get(runId);
-    if (run && ['completed', 'failed', 'cancelled'].includes(run.status)) return;
+    // run 消失（已删除）同样视为收敛
+    if (!run || ['completed', 'failed', 'cancelled'].includes(run.status)) return;
     await wait(30);
   }
 }
@@ -208,6 +228,35 @@ describe('RunEngine — Free 模式全链路（M1-5）', () => {
     const after = eventStore.listByRun(runId, all[half].seq);
     expect(after[0].seq).toBe(all[half].seq + 1);
     expect(after.length).toBe(all.length - half - 1);
+  });
+
+  it('删除 run / 删除会话：事件与检查点级联清除（用户反馈 #1）', async () => {
+    engine = newEngine(makeLLM([{ stopReason: 'end', content: 'ok' }]));
+    const { runId } = engine.startRun({ goal: '待删除', sessionId: 'sess-del' });
+    await waitTerminal(runId);
+    expect(eventStore.countByRun(runId)).toBeGreaterThan(0);
+
+    expect(engine.deleteRun(runId).ok).toBe(true);
+    expect(runStore.get(runId)).toBeNull();
+    expect(eventStore.countByRun(runId)).toBe(0);       // 级联清空
+    expect(checkpointStore.listByRun(runId)).toHaveLength(0);
+
+    // 会话级删除
+    const a = engine.startRun({ goal: '会话任务1', sessionId: 'sess-del2' });
+    const b = engine.startRun({ goal: '会话任务2', sessionId: 'sess-del2' });
+    await waitTerminal(a.runId);
+    await waitTerminal(b.runId);
+    expect(engine.deleteSession('sess-del2')).toBe(2);
+    expect(runStore.get(a.runId)).toBeNull();
+    expect(runStore.get(b.runId)).toBeNull();
+
+    // 运行中的 run 删除 → 先取消再删
+    engine = newEngine(new HangingLLM());
+    const { runId: hangId } = engine.startRun({ goal: '挂起' });
+    await waitStatus(hangId, 'running');
+    expect(engine.deleteRun(hangId).ok).toBe(true);
+    await waitTerminal(hangId);
+    expect(runStore.get(hangId)).toBeNull();
   });
 
   it('getRunDetail：run + events + checkpoints 组合', async () => {

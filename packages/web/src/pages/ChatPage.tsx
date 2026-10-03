@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Bot, Send, FolderOpen, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight,
-  Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type,
+  Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type, Trash2,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState } from '../components/ui';
@@ -100,9 +100,12 @@ export default function ChatPage() {
     if (!goal.trim() || submitting) return;
     setSubmitting(true);
     try {
+      // 修复（用户反馈）：无会话时生成一个并记住 — 连续多次对话落在同一会话
+      const sid = currentSessionId ?? `sess_${Date.now().toString(36)}`;
+      setCurrentSessionId(sid);
       const res = await api.createRun({
         goal: goal.trim(),
-        sessionId: currentSessionId ?? undefined,
+        sessionId: sid,
         workspaceId: workspaceId || undefined,
       });
       setGoal('');
@@ -122,6 +125,28 @@ export default function ChatPage() {
     } catch (err: any) {
       alert(`审批失败: ${err.message}`);
     }
+  };
+
+  const handleDeleteRun = async (runId: string) => {
+    if (!confirm('删除这条对话？（事件与检查点一并删除）')) return;
+    try {
+      await api.deleteRun(runId);
+      if (activeRunId === runId) { setActiveRunId(null); setCurrentSessionId(null); }
+      await loadSessions();
+    } catch (err: any) { alert('删除失败: ' + err.message); }
+  };
+
+  const handleDeleteSession = async (sessionId: string | null) => {
+    if (!sessionId) { alert('该对话不属于任何会话，请删除单条对话'); return; }
+    if (!confirm('删除整个会话（含全部对话记录）？')) return;
+    try {
+      await api.deleteSession(sessionId);
+      if (currentSessionId === sessionId) { setCurrentSessionId(null); }
+      if (activeRunId && sessions.some(s => s.sessionId === sessionId && s.runs.some(r => r.id === activeRunId))) {
+        setActiveRunId(null);
+      }
+      await loadSessions();
+    } catch (err: any) { alert('删除失败: ' + err.message); }
   };
 
   const cancel = async () => {
@@ -149,7 +174,16 @@ export default function ChatPage() {
           {sessions.length === 0 && <p className="text-xs text-fg-muted p-2">暂无历史</p>}
           {sessions.map(s => (
             <div key={s.sessionId}>
-              <p className="text-[10px] text-fg-disabled px-2 mb-1">{s.sessionId ?? '未分组'}</p>
+              <div className="flex items-center justify-between px-2 mb-1">
+                <p className="text-[10px] text-fg-disabled truncate flex-1">{s.sessionId ?? '未分组'}</p>
+                <button
+                  onClick={() => handleDeleteSession(s.sessionId)}
+                  title="删除整个会话"
+                  className="text-fg-disabled hover:text-status-danger cursor-pointer shrink-0"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
               {s.runs.map(r => (
                 <button
                   key={r.id}
@@ -159,9 +193,18 @@ export default function ChatPage() {
                   }`}
                 >
                   <p className="truncate">{r.goal}</p>
-                  <p className="text-[10px] text-fg-muted mt-0.5">
-                    {statusLabel(r.status)} · {new Date(r.createdAt).toLocaleTimeString('zh-CN')}
-                  </p>
+                  <div className="flex items-center justify-between gap-1 mt-0.5">
+                    <p className="text-[10px] text-fg-muted truncate">
+                      {statusLabel(r.status)} · {new Date(r.createdAt).toLocaleTimeString('zh-CN')}
+                    </p>
+                    <button
+                      onClick={e => { e.stopPropagation(); handleDeleteRun(r.id); }}
+                      title="删除此对话"
+                      className="text-fg-disabled hover:text-status-danger cursor-pointer shrink-0"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
                 </button>
               ))}
             </div>

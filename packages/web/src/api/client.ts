@@ -176,6 +176,10 @@ export const api = {
     request<any>(`/runs/${runId}/events?afterSeq=${afterSeq}`),
   cancelRun: (runId: string) =>
     request<any>(`/runs/${runId}/cancel`, { method: 'POST' }),
+  deleteRun: (runId: string) =>
+    request<any>(`/runs/${runId}`, { method: 'DELETE' }),
+  deleteSession: (sessionId: string) =>
+    request<any>(`/sessions/${sessionId}`, { method: 'DELETE' }),
   resolveApproval: (runId: string, approvalId: string, approved: boolean) =>
     request<any>(`/runs/${runId}/approvals/${approvalId}`, {
       method: 'POST',

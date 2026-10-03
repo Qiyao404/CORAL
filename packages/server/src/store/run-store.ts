@@ -151,6 +151,18 @@ export class RunStore {
     return { total, items: rows.map(r => this.fromRow(r)) };
   }
 
+  /** 删除 run（events/checkpoints 由外键级联清除）；不存在返回 false */
+  delete(id: string): boolean {
+    const info = this.stmt('DELETE FROM runs WHERE id = ?').run(id);
+    return info.changes > 0;
+  }
+
+  /** 删除整个会话（D17）— 按 session_id 批量删除，返回删除数量 */
+  deleteSession(sessionId: string): number {
+    const info = this.stmt('DELETE FROM runs WHERE session_id = ?').run(sessionId);
+    return info.changes;
+  }
+
   private fromRow(r: RunRow): Run {
     const { budget_json, error_json, graph_json, ...rest } = r;
     return {

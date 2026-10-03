@@ -80,6 +80,21 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void
     return { success: true, message: result.message };
   });
 
+  // M1 复审补（用户反馈）：删除对话 — 单个 run / 整个会话
+  app.delete('/api/runs/:runId', async (request, reply) => {
+    const { runId } = request.params as any;
+    const result = engine.deleteRun(runId);
+    if (!result.ok) return reply.status(404).send({ error: result.message });
+    return { success: true, message: result.message };
+  });
+
+  app.delete('/api/sessions/:sessionId', async (request, reply) => {
+    const { sessionId } = request.params as any;
+    const deleted = engine.deleteSession(sessionId);
+    if (deleted === 0) return reply.status(404).send({ error: '会话不存在' });
+    return { success: true, deleted };
+  });
+
   // M1-10：审批流 — 解决一个待审批（diff 卡片的 通过/拒绝）
   app.post('/api/runs/:runId/approvals/:approvalId', async (request, reply) => {
     const { runId, approvalId } = request.params as any;

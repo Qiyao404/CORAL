@@ -139,6 +139,30 @@ export class RunEngine {
     return { ok: true, message: 'run 已取消' };
   }
 
+  /** 删除 run（运行中先取消；事件/检查点级联清除） */
+  deleteRun(runId: string): { ok: boolean; message: string } {
+    const run = this.deps.runStore.get(runId);
+    if (!run) return { ok: false, message: 'run 不存在' };
+    if (['running', 'waiting_human'].includes(run.status)) {
+      this.cancelRun(runId); // 先中止，避免悬挂的 loop 往已删除的 run 写事件
+    }
+    this.rejectAllApprovals(runId);
+    const deleted = this.deps.runStore.delete(runId);
+    return { ok: deleted, message: deleted ? '已删除' : '删除失败' };
+  }
+
+  /** 删除整个会话（含全部 run） */
+  deleteSession(sessionId: string): number {
+    const { items } = this.deps.runStore.list({ sessionId, limit: 200 });
+    for (const run of items) {
+      if (['running', 'waiting_human'].includes(run.status)) {
+        this.cancelRun(run.id);
+      }
+      this.rejectAllApprovals(run.id); // 挂起审批一并落定（防悬挂）
+    }
+    return this.deps.runStore.deleteSession(sessionId);
+  }
+
   getRunDetail(runId: string): { run: Run; events: any[]; checkpoints: any[] } | null {
     const run = this.deps.runStore.get(runId);
     if (!run) return null;
