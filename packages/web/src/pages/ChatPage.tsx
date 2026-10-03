@@ -38,7 +38,10 @@ export default function ChatPage() {
   // 工作区选择持久化：刷新/重开浏览器不丢（存在性在列表加载后校验）
   const [workspaceId, setWorkspaceId] = useState<string>(() => localStorage.getItem('coral.workspaceId') ?? '');
   const [wsModal, setWsModal] = useState<{ open: boolean; name: string; dir: string; permission: string; error: string }>({ open: false, name: '', dir: '', permission: 'ask', error: '' });
+  // 附件暂存（staging）语义：uploadedFiles 只代表"将随下一条消息发送"的文件 —
+  // 发送成功即消耗并转移到对应消息上（runAttachments 供线程展示），不再跨轮累积注入。
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
+  const [runAttachments, setRunAttachments] = useState<Record<string, string[]>>({});
   // 最终回答全文（run.completed 事件只带 500 字预览，终态后从详情拉全文）
   const [fullFinal, setFullFinal] = useState<string | null>(null);
   // 会话线程：当前会话全部 run（时间升序，含 final_content）— ChatGPT 式连续对话视图
@@ -59,8 +62,7 @@ export default function ChatPage() {
     return cut >= 0 ? raw.slice(0, cut) : raw;
   }, [events, view.runStatus]);
   const uploading = useRef(false);
-  // 上传文件清单保留（用户实测反馈：上传后消失导致 agent 无法关联文件）—
-  // 仅在点击「新建会话」时清空；拉取最终回答全文（事件只带 500 字预览）
+  // 拉取最终回答全文（事件只带 500 字预览，终态后从详情拉全文）
   useEffect(() => {
     setFullFinal(null);
     if (!activeRunId || !view.runStatus || !['completed', 'failed', 'cancelled'].includes(view.runStatus)) return;
@@ -195,8 +197,9 @@ export default function ChatPage() {
       const sid = currentSessionId ?? `sess_${Date.now().toString(36)}`;
       setCurrentSessionId(sid);
       // 上传上下文注入：明确告诉 agent 用户刚传了哪些文件（消除与磁盘旧文件的歧义）
-      const uploadNote = uploadedFiles.length > 0
-        ? `## 用户刚上传的文件（工作区根目录）\n${uploadedFiles.map(f => `- ${f}`).join('\n')}\n当用户提到"这份文件 / 我上传的文件 / 刚传的文件"时，优先指上述文件（而非工作区里的其他旧文件）。`
+      const attached = uploadedFiles; // 发送瞬间的快照（await 期间新上传的不属于本条消息）
+      const uploadNote = attached.length > 0
+        ? `## 用户刚上传的文件（工作区根目录）\n${attached.map(f => `- ${f}`).join('\n')}\n当用户提到"这份文件 / 我上传的文件 / 刚传的文件"时，优先指上述文件（而非工作区里的其他旧文件）。`
         : undefined;
       const res = await api.createRun({
         goal: goal.trim(),
@@ -205,6 +208,11 @@ export default function ChatPage() {
         continueSession: true, // 同会话多轮：带上此前的完整对话上下文
         extraSystem: uploadNote,
       });
+      // 附件已随本条消息消耗：转到消息上展示，暂存区移除（后续轮次靠会话历史关联文件）
+      if (attached.length > 0) {
+        setRunAttachments(prev => ({ ...prev, [res.runId]: attached }));
+        setUploadedFiles(prev => prev.filter(f => !attached.includes(f)));
+      }
       setGoal('');
       setActiveRunId(res.runId);
       loadSessions();
@@ -246,20 +254,17 @@ export default function ChatPage() {
     } catch (err: any) { alert('删除失败: ' + err.message); }
   };
 
-  // 预算超限后续接：同会话新 run，checkpoint 续接上一轮进度，预算按 run 重置
+  // 预算超限后续接：同会话新 run，checkpoint 续接上一轮进度，预算按 run 重置。
+  // 不注入 uploadNote — 续接围绕上一轮任务，附件若需要会由用户随下一条消息再发。
   const continueRun = async () => {
     if (!currentSessionId || submitting) return;
     setSubmitting(true);
     try {
-      const uploadNote = uploadedFiles.length > 0
-        ? `## 用户刚上传的文件（工作区根目录）\n${uploadedFiles.map(f => `- ${f}`).join('\n')}`
-        : undefined;
       const res = await api.createRun({
         goal: '继续完成上一个未完成的任务：请从上一次的进度接着做（已完成的部分不要重做），直到产出最终成果。',
         sessionId: currentSessionId,
         workspaceId: workspaceId || undefined,
         continueSession: true,
-        extraSystem: uploadNote,
       });
       setActiveRunId(res.runId);
       loadSessions();
@@ -284,7 +289,7 @@ export default function ChatPage() {
         <div className="p-3 border-b border-glass-border flex items-center justify-between">
           <span className="text-xs text-fg-muted flex items-center gap-1"><History className="w-3.5 h-3.5" /> 历史会话</span>
           <button
-            onClick={() => { setActiveRunId(null); setCurrentSessionId(`sess_${Date.now().toString(36)}`); }}
+            onClick={() => { setActiveRunId(null); setCurrentSessionId(`sess_${Date.now().toString(36)}`); setUploadedFiles([]); }}
             className="text-xs text-brand hover:text-brand-hover flex items-center gap-1 cursor-pointer"
             title="开始新会话"
           >
@@ -420,6 +425,7 @@ export default function ChatPage() {
                 <div className="flex justify-end">
                   <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{r.goal}</div>
                 </div>
+                <SentAttachments names={runAttachments[r.id]} />
                 <ProcessSection runId={r.id} defaultOpen={false} />
                 {(r.final_content || '').trim() && (
                   <div className="flex justify-start">
@@ -430,20 +436,21 @@ export default function ChatPage() {
                 )}
               </div>
             ))}
-          {activeRunId && <RunLiveView goal={sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? sessionRuns.find(r => r.id === activeRunId)?.goal ?? ''} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} onDecide={decide} onContinue={continueRun} />}
+          {activeRunId && <RunLiveView goal={sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? sessionRuns.find(r => r.id === activeRunId)?.goal ?? ''} attachments={runAttachments[activeRunId]} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} onDecide={decide} onContinue={continueRun} />}
           <div ref={bottomRef} />
         </div>
 
         {/* 输入区 */}
         <div className="p-4 glass border-t border-glass-border rounded-none">
           {uploadedFiles.length > 0 && (
-            <div className="max-w-4xl mx-auto mb-2 flex flex-wrap gap-1.5">
+            <div className="max-w-4xl mx-auto mb-2 flex flex-wrap gap-1.5 items-center">
               {uploadedFiles.map(name => (
                 <span key={name} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-status-success/10 text-status-success border border-status-success/30">
                   <Type className="w-3 h-3" /> {name}
                   <button className="text-status-success/60 hover:text-status-danger cursor-pointer" title="从列表移除" onClick={() => setUploadedFiles(prev => prev.filter(f => f !== name))}>×</button>
                 </span>
               ))}
+              <span className="text-[11px] text-fg-muted ml-1">将随下一条消息一并发送，发送后自动移除</span>
             </div>
           )}
           <div className="max-w-4xl mx-auto flex gap-3 items-end">
@@ -579,6 +586,22 @@ function ProcessSection({
   );
 }
 
+/** 已发送消息的附件标记（只读、弱化样式 — 告诉用户文件跟着哪条消息走了） */
+function SentAttachments({ names }: { names?: string[] }) {
+  if (!names || names.length === 0) return null;
+  return (
+    <div className="flex justify-end">
+      <div className="flex flex-wrap gap-1.5 justify-end">
+        {names.map(name => (
+          <span key={name} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] text-fg-muted bg-bg-elev/40 border border-glass-border">
+            <Upload className="w-3 h-3" /> {name}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 /** todo 清单 + 工具卡片（ProcessSection 内容体，直播/回放共用） */
 function ToolCardsView({ view, running }: { view: ReturnType<typeof deriveRunView>; running?: boolean }) {
   const [openCards, setOpenCards] = useState<Set<string>>(new Set());
@@ -653,6 +676,7 @@ function statusLabel(s: string): string {
 /** 单个 run 的直播视图（goal + todo + 工具卡 + 审批 + 最终回答） */
 function RunLiveView({
   goal,
+  attachments,
   view,
   events,
   streamingText,
@@ -661,6 +685,7 @@ function RunLiveView({
   onContinue,
 }: {
   goal: string;
+  attachments?: string[];
   view: ReturnType<typeof deriveRunView>;
   events: RunEventItem[];
   streamingText: string;
@@ -685,6 +710,7 @@ function RunLiveView({
       <div className="flex justify-end">
         <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{goal}</div>
       </div>
+      <SentAttachments names={attachments} />
 
       {/* 执行过程（深度思考式：运行中实时展开，完成后折叠可回看） */}
       <ProcessSection liveView={view} defaultOpen={!view.runStatus} />
