@@ -31,7 +31,9 @@ def do_read(path: str) -> dict:
         xml = z.read("word/document.xml").decode("utf-8", "replace")
     paras = []
     for p in re.split(r"</w:p>", xml):
-        texts = re.findall(r"<w:t[^>]*>([\s\S]*?)</w:t>", p)
+        # <w:t> / <w:t xml:space="preserve"> 命中；<w:tblPr>/<w:tc> 等
+        # 以 w:t 开头的标签（后跟字母而非空白/>）不命中 — 否则表格文档抽出 XML 碎片
+        texts = re.findall(r"<w:t(?:\s[^>]*)?>([\s\S]*?)</w:t>", p)
         text = "".join(texts)
         text = (
             text.replace("&amp;", "&")

@@ -35,7 +35,7 @@ export default function ChatPage() {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string>('');
-  const [uploadNotice, setUploadNotice] = useState('');
+  const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const { events, connected } = useRunStream(activeRunId ?? undefined);
@@ -50,6 +50,8 @@ export default function ChatPage() {
     return cut >= 0 ? raw.slice(0, cut) : raw;
   }, [events, view.runStatus]);
   const uploading = useRef(false);
+  // 新会话时清空已上传文件列表
+  useEffect(() => { if (!activeRunId) setUploadedFiles([]); }, [activeRunId === null]);
 
   const handleUpload = async (file: File) => {
     if (!workspaceId || uploading.current) { if (!workspaceId) alert('请先选择工作区再上传'); return; }
@@ -59,12 +61,18 @@ export default function ChatPage() {
       // 二进制类型走 base64 保真通道（.docx/.xlsx 等）；文本直传
       const binaryExts = /\.(docx|xlsx|pptx|pdf|zip|png|jpe?g|gif|webp|woff2?|ttf|mp3|mp4|sqlite)$/i;
       const isBinary = binaryExts.test(file.name);
-      const payload = isBinary
-        ? { path: file.name, content: btoa(String.fromCharCode(...new Uint8Array(await file.arrayBuffer()))), encoding: 'base64' }
-        : { path: file.name, content: await file.text() };
-      await api.uploadWorkspaceFile(workspaceId, payload.path, payload.content);
-      setUploadNotice(`已上传 ${file.name} — agent 可通过 fs/docx 工具读取`);
-      setTimeout(() => setUploadNotice(''), 5000);
+      if (isBinary) {
+        // 分块 base64（展开运算符对大文件会栈溢出）
+        const buf = new Uint8Array(await file.arrayBuffer());
+        let b64 = '';
+        for (let i = 0; i < buf.length; i += 0x8000) {
+          b64 += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+        }
+        await api.uploadWorkspaceFile(workspaceId, file.name, btoa(b64), 'base64');
+      } else {
+        await api.uploadWorkspaceFile(workspaceId, file.name, await file.text());
+      }
+      setUploadedFiles(prev => prev.some(f => f === file.name) ? prev : [...prev, file.name]);
     } catch (err: any) {
       alert('上传失败: ' + err.message);
     } finally {
@@ -278,7 +286,16 @@ export default function ChatPage() {
 
         {/* 输入区 */}
         <div className="p-4 glass border-t border-glass-border rounded-none">
-          {uploadNotice && <p className="max-w-4xl mx-auto mb-2 text-xs text-status-success flex items-center gap-1"><Type className="w-3 h-3" /> {uploadNotice}</p>}
+          {uploadedFiles.length > 0 && (
+            <div className="max-w-4xl mx-auto mb-2 flex flex-wrap gap-1.5">
+              {uploadedFiles.map(name => (
+                <span key={name} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-status-success/10 text-status-success border border-status-success/30">
+                  <Type className="w-3 h-3" /> {name}
+                  <button className="text-status-success/60 hover:text-status-danger cursor-pointer" title="从列表移除" onClick={() => setUploadedFiles(prev => prev.filter(f => f !== name))}>×</button>
+                </span>
+              ))}
+            </div>
+          )}
           <div className="max-w-4xl mx-auto flex gap-3 items-end">
             <Textarea
               value={goal}
