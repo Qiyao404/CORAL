@@ -31,6 +31,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
       graph?: string;
       /** mode=graph：运行时输入（覆盖 graph.input 默认值） */
       input?: Record<string, any>;
+      // workspaceId 两模式共用：free = 文件工具域；graph = 技能产物落点（CORAL_OUTPUT_DIR）
     };
 
     if (typeof body.goal !== 'string' || body.goal.trim().length === 0) {
@@ -53,6 +54,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
           graph: parsed.graph!,
           input: body.input,
           sessionId: body.sessionId,
+          workspaceId: body.workspaceId,
         });
         return reply.status(201).send({ runId, sessionId, status: 'running', mode: 'graph' });
       } catch (err: any) {

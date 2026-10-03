@@ -174,7 +174,9 @@ def create_official_document(inputs):
 def main():
     try:
         raw = sys.stdin.read()
-        inputs = json.loads(raw) if raw else {}
+        payload = json.loads(raw) if raw else {}
+        # 协议契约：执行器喂 {input, context} 包装；兼容手动裸输入
+        inputs = payload.get('input', payload) if isinstance(payload, dict) else {}
         
         if not inputs.get('key_points'):
             print(json.dumps({"ok": False, "error": "缺少必填参数 key_points"}, ensure_ascii=False))

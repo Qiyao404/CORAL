@@ -250,10 +250,14 @@ export class SkillExecutor {
         detached: !isWin,
         windowsHide: true,
         // M0-6（A13）：环境变量白名单 — 不再把宿主全量 env（含 LLM_API_KEY 等机密）泄给脚本
-        env: buildSandboxEnv(manifest, {
-          taskId: request.context.taskId,
-          agentId: request.context.agentId,
-        }),
+        env: {
+          ...buildSandboxEnv(manifest, {
+            taskId: request.context.taskId,
+            agentId: request.context.agentId,
+          }),
+          // M2 实测：graph run 绑定工作区时的产物落点（文件型技能优先写这里）
+          ...(request.context.outputDir ? { CORAL_OUTPUT_DIR: request.context.outputDir } : {}),
+        },
       });
 
       // M0-2：取消信号 → 按进程树强杀（Windows taskkill /T /F；POSIX 组 SIGTERM→SIGKILL）

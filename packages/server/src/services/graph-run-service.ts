@@ -7,6 +7,7 @@ import { eventBus } from '../event/event-bus.js';
 import { createAbortController, abortTask, releaseAbortController } from './task-abort-registry.js';
 import type { SkillExecutor } from '../skill-runtime/skill-executor.js';
 import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-registry.js';
+import { WorkspaceService, type Workspace } from './workspace-service.js';
 import { nanoid } from 'nanoid';
 
 /**
@@ -22,6 +23,8 @@ export interface StartGraphRunInput {
   graph: GraphDefinition;
   input?: Record<string, any>;
   sessionId?: string;
+  /** M2 实测：绑定工作区 — 技能产物落工作区目录（CORAL_OUTPUT_DIR），resume 重新解析 */
+  workspaceId?: string;
 }
 
 export interface GraphRunServiceDeps {
@@ -99,20 +102,27 @@ export class GraphRunService {
 
     const runId = newRunId();
     const sessionId = input.sessionId ? String(input.sessionId).slice(0, 64) : undefined;
+    let workspace: Workspace | null = null;
+    if (input.workspaceId) {
+      workspace = new WorkspaceService().get(input.workspaceId);
+      if (!workspace) throw new Error(`工作区不存在: ${input.workspaceId}`);
+    }
     this.deps.runStore.insert({
       id: runId,
       goal,
       mode: 'graph',
       sessionId,
       graph: input.graph,
+      ...(workspace ? { workspaceId: workspace.id } : {}),
     });
     this.emitRunEvent(runId, 'run.created', {
       goal,
       sessionId,
       mode: 'graph',
       graph: { name: input.graph.name, nodes: input.graph.nodes.length },
+      ...(workspace ? { workspace: { id: workspace.id, name: workspace.name } } : {}),
     });
-    void this.executeGraphRun(runId, input).catch(err => {
+    void this.executeGraphRun(runId, input, workspace).catch(err => {
       console.error(`[GraphRunService] run ${runId} 执行异常:`, err);
     });
     return { runId, sessionId };
@@ -145,6 +155,8 @@ export class GraphRunService {
       }
     }
 
+    // M2：resume 时重新解析工作区（产物目录随绑定走）
+    const resumeWs = run.workspace_id ? new WorkspaceService().get(run.workspace_id) : null;
     this.deps.runStore.update(runId, { status: 'running', endReason: null });
     this.emitRunEvent(runId, 'run.resumed', {
       fromCheckpoint: Boolean(resumeFrom),
@@ -152,7 +164,7 @@ export class GraphRunService {
         ? Object.values(resumeFrom.nodes).filter(n => n.status === 'completed').length
         : 0,
     });
-    void this.executeGraphRun(runId, { goal: run.goal, graph, resumeFrom }).catch(err => {
+    void this.executeGraphRun(runId, { goal: run.goal, graph, resumeFrom }, resumeWs).catch(err => {
       console.error(`[GraphRunService] run ${runId} 恢复执行异常:`, err);
     });
     return { ok: true, message: resumeFrom ? '已从最近 checkpoint 恢复' : '已重新开始执行' };
@@ -233,7 +245,8 @@ export class GraphRunService {
 
   private async executeGraphRun(
     runId: string,
-    input: StartGraphRunInput & { resumeFrom?: GraphRunState }
+    input: StartGraphRunInput & { resumeFrom?: GraphRunState },
+    workspace: Workspace | null = null
   ): Promise<void> {
     const controller = createAbortController(runId);
     try {
@@ -259,7 +272,13 @@ export class GraphRunService {
             const r = await this.deps.skillExecutor.execute({
               skillName: def.skill,
               input: nodeInput,
-              context: { taskId: runId, agentId: `graph:${def.id}`, abortSignal: ctx.signal },
+              context: {
+                taskId: runId,
+                agentId: `graph:${def.id}`,
+                abortSignal: ctx.signal,
+                // 绑定工作区 → 文件型技能产物落这里（CORAL_OUTPUT_DIR）
+                ...(workspace ? { outputDir: workspace.dir } : {}),
+              },
             });
             return {
               ok: r.success,

@@ -123,6 +123,8 @@ export interface SkillExecutionContext {
   agentId: string;
   userId?: string;
   sessionId?: string;
+  /** 产物目录（M2：graph run 绑定工作区时注入 — 脚本经 CORAL_OUTPUT_DIR 读取） */
+  outputDir?: string;
   abortSignal?: AbortSignal;
   /** 任务级公司画像覆盖（深合并优先级高于全局） */
   companyProfileOverride?: Partial<CompanyProfile>;

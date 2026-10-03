@@ -144,6 +144,8 @@ export default function WorkflowPage() {
   const [error, setError] = useState<string | null>(null);
   const [compiling, setCompiling] = useState(false);
   const [runInput, setRunInput] = useState(''); // graph.input 运行时覆盖（JSON）
+  const [workspaces, setWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
+  const [workspaceId, setWorkspaceId] = useState<string>(() => localStorage.getItem('coral.graph.workspaceId') ?? '');
   const [inputDraft, setInputDraft] = useState(''); // 审批改参数的 JSON 草稿
   const [openOutputs, setOpenOutputs] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -154,7 +156,12 @@ export default function WorkflowPage() {
   useEffect(() => { localStorage.setItem('coral.graph.draft', yaml); }, [yaml]);
   useEffect(() => {
     api.listResumable().then((d: any) => setResumable(d.items ?? [])).catch(() => {});
+    api.listWorkspaces().then((d: any) => setWorkspaces(d.items ?? [])).catch(() => {});
   }, []);
+  useEffect(() => {
+    if (workspaceId) localStorage.setItem('coral.graph.workspaceId', workspaceId);
+    else localStorage.removeItem('coral.graph.workspaceId');
+  }, [workspaceId]);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [events.length]);
 
   const validate = async () => {
@@ -193,7 +200,7 @@ export default function WorkflowPage() {
       try { input = JSON.parse(runInput); } catch { setError('运行输入不是合法 JSON'); return; }
     }
     try {
-      const res = await api.createGraphRun({ goal: goal.trim() || yaml.match(/^name:\s*(\S+)/m)?.[1] || 'graph run', graph: yaml, input });
+      const res = await api.createGraphRun({ goal: goal.trim() || yaml.match(/^name:\s*(\S+)/m)?.[1] || 'graph run', graph: yaml, input, workspaceId: workspaceId || undefined });
       setActiveRunId(res.runId);
       setRunGoal(goal.trim() || 'graph run');
       setRunGraphNodes(nodesFromYaml(yaml));
@@ -317,6 +324,20 @@ export default function WorkflowPage() {
             spellCheck={false}
             className="w-full h-14 glass border border-glass-border rounded-lg p-2 font-mono text-xs text-fg-primary outline-none focus:border-brand/40 resize-none"
           />
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-fg-muted shrink-0">产物目录</span>
+            <select
+              value={workspaceId}
+              onChange={e => setWorkspaceId(e.target.value)}
+              className="flex-1 glass border border-glass-border rounded-lg px-2 py-1.5 text-xs text-fg-primary outline-none focus:border-brand/40"
+            >
+              <option value="">系统临时目录（不保存）</option>
+              {workspaces.map(w => <option key={w.id} value={w.id}>工作区 · {w.name}</option>)}
+            </select>
+          </div>
+          {workspaceId && (
+            <p className="text-[11px] text-fg-muted">文档等产物将保存到所选工作区文件夹（可在资源管理器中直接打开）</p>
+          )}
           <div className="flex gap-2 flex-wrap">
             <button onClick={compile} disabled={compiling}
               className="px-3 py-1.5 rounded-lg glass border border-glass-border text-xs text-fg-secondary flex items-center gap-1.5 cursor-pointer hover:border-brand/40">

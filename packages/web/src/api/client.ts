@@ -187,7 +187,7 @@ export const api = {
     }),
 
   // ─── M2：Graph 模式 ───────────────────────────────────────
-  createGraphRun: (payload: { goal: string; graph: string; input?: Record<string, any> }) =>
+  createGraphRun: (payload: { goal: string; graph: string; input?: Record<string, any>; workspaceId?: string }) =>
     request<any>('/runs', {
       method: 'POST',
       body: JSON.stringify({ ...payload, mode: 'graph' }),

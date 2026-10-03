@@ -173,7 +173,10 @@ def generate_document(inputs):
     # 生成文件名
     safe_title = re.sub(r'[\\\\/:*?\"<>|]', '_', title)[:30]
     filename = f"{safe_title}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.docx"
-    output_path = os.path.join(tempfile.gettempdir(), filename)
+    # 输出目录：CORAL_OUTPUT_DIR（graph run 绑定工作区时平台注入）> 系统临时目录
+    out_dir = os.environ.get('CORAL_OUTPUT_DIR') or tempfile.gettempdir()
+    os.makedirs(out_dir, exist_ok=True)
+    output_path = os.path.join(out_dir, filename)
     
     # 保存文档
     doc.save(output_path)
@@ -200,7 +203,9 @@ def generate_document(inputs):
 def main():
     try:
         raw = sys.stdin.read()
-        inputs = json.loads(raw) if raw else {}
+        payload = json.loads(raw) if raw else {}
+        # 协议契约：执行器喂 {input, context} 包装；兼容手动裸输入
+        inputs = payload.get('input', payload) if isinstance(payload, dict) else {}
         
         emit_log('info', f'开始生成公文: {inputs.get("title", "未命名")}')
         

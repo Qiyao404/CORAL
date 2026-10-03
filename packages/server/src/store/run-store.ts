@@ -16,6 +16,7 @@ export interface RunRow {
   mode: RunMode;
   status: RunStatus;
   session_id: string | null;
+  workspace_id: string | null;
   parent_run_id: string | null;
   fork_from_seq: number | null;
   graph_json: string | null;
@@ -78,11 +79,13 @@ export class RunStore {
     modelProfileId?: string;
     /** M2：graph 模式的 DSL 定义（graph_json 列） */
     graph?: Record<string, any>;
+    /** M2 实测：graph run 绑定的工作区（产物落点，resume 时重新解析） */
+    workspaceId?: string;
   }): void {
     const ts = nowIso();
     this.stmt(
-      `INSERT INTO runs (id, goal, mode, status, session_id, budget_json, model_profile_id, graph_json, cost_usd, tokens_in, tokens_out, created_at, updated_at)
-       VALUES (?, ?, ?, 'created', ?, ?, ?, ?, 0, 0, 0, ?, ?)`
+      `INSERT INTO runs (id, goal, mode, status, session_id, budget_json, model_profile_id, graph_json, workspace_id, cost_usd, tokens_in, tokens_out, created_at, updated_at)
+       VALUES (?, ?, ?, 'created', ?, ?, ?, ?, ?, 0, 0, 0, ?, ?)`
     ).run(
       input.id,
       input.goal,
@@ -91,6 +94,7 @@ export class RunStore {
       input.budget ? JSON.stringify(input.budget) : null,
       input.modelProfileId ?? null,
       input.graph ? JSON.stringify(input.graph) : null,
+      input.workspaceId ?? null,
       ts,
       ts
     );
