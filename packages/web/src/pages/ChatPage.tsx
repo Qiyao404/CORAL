@@ -96,7 +96,7 @@ export default function ChatPage() {
     }
   };
 
-  const loadSessions = useCallback(async () => {
+  const loadSessions = useCallback(async (): Promise<SessionItem[]> => {
     try {
       const res = await api.listRuns({ limit: 100 });
       const bySession = new Map<string, SessionItem>();
@@ -105,8 +105,10 @@ export default function ChatPage() {
         if (!bySession.has(key)) bySession.set(key, { sessionId: run.session_id, runs: [] });
         bySession.get(key)!.runs.push({ id: run.id, goal: run.goal, status: run.status, createdAt: run.created_at });
       }
-      setSessions([...bySession.values()].slice(0, 20));
-    } catch { /* 后端不可用静默 */ }
+      const list = [...bySession.values()].slice(0, 20);
+      setSessions(list);
+      return list;
+    } catch { return []; }
   }, []);
 
   const loadWorkspaces = useCallback(async () => {
@@ -117,9 +119,19 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
-    loadSessions();
+    loadSessions().then(() => {
+      // 导航/刷新恢复：未手动新建时，自动续接最近一个会话（多轮对话不因离开页面断开）
+      setCurrentSessionId(prev => prev ?? null);
+    });
     loadWorkspaces();
   }, [loadSessions, loadWorkspaces]);
+
+  // 会话列表加载后，若无当前会话则选中最近的（保持续接）
+  useEffect(() => {
+    if (!currentSessionId && sessions.length > 0 && !activeRunId) {
+      setCurrentSessionId(sessions[0].sessionId);
+    }
+  }, [sessions, currentSessionId, activeRunId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -136,6 +148,7 @@ export default function ChatPage() {
         goal: goal.trim(),
         sessionId: sid,
         workspaceId: workspaceId || undefined,
+        continueSession: true, // 同会话多轮：带上此前的完整对话上下文
       });
       setGoal('');
       setActiveRunId(res.runId);

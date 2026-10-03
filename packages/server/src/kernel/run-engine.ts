@@ -45,6 +45,8 @@ export interface StartRunInput {
   budget?: RunBudgetInput;
   /** M1-10：绑定工作区（目录 + 权限档）— 不传则无 fs/shell 工具 */
   workspaceId?: string;
+  /** 多轮对话：从本会话最近 run 的末次 checkpoint 续接历史（含上一轮工具结果与最终回答） */
+  continueSession?: boolean;
   extraSystem?: string;
 }
 
@@ -175,10 +177,38 @@ export class RunEngine {
 
   // ─── 内部 ────────────────────────────────────────────────
 
+  /** 多轮续接：取会话内最近一个有 checkpoint 的 run，返回其末次快照的消息历史 */
+  private loadSessionHistory(sessionId: string): { history: import('../providers/types.js').ChatMessage[]; fromRunId: string } | null {
+    const { items } = this.deps.runStore.list({ sessionId, limit: 20 });
+    // list 按创建时间倒序 — 找第一个有 checkpoint 的
+    for (const run of items) {
+      if (run.id === undefined) continue;
+      const cps = this.deps.checkpointStore.listByRun(run.id);
+      if (cps.length === 0) continue;
+      const last = cps[cps.length - 1];
+      const state = this.deps.checkpointStore.get(run.id, last.seq);
+      if (state?.messages && state.messages.length > 0) {
+        return { history: state.messages, fromRunId: run.id };
+      }
+    }
+    return null;
+  }
+
   private async executeRun(runId: string, input: StartRunInput, workspace: Workspace | null, signal: AbortSignal): Promise<void> {
     try {
+      // 多轮续接：同会话上一轮的完整对话（checkpoint 事件溯源回放）
+      let initialHistory: import('../providers/types.js').ChatMessage[] | undefined;
+      let continuedFrom: string | undefined;
+      if (input.continueSession && input.sessionId) {
+        const prev = this.loadSessionHistory(input.sessionId);
+        if (prev) {
+          initialHistory = prev.history;
+          continuedFrom = prev.fromRunId;
+        }
+      }
+
       this.deps.runStore.update(runId, { status: 'running' });
-      this.emitRunEvent(runId, 'run.started', {});
+      this.emitRunEvent(runId, 'run.started', continuedFrom ? { continuedFrom } : {});
 
       const run = this.deps.runStore.get(runId)!;
       const budget = (run.budget ?? {}) as { maxSteps?: number; maxTokens?: number };
@@ -195,6 +225,7 @@ export class RunEngine {
         },
         signal,
         workspaceDir: workspace?.dir,
+        initialHistory,
         // D18：记忆使用指引常驻系统提示；调用方的 extraSystem 追加在后
         extraSystem: input.extraSystem ? `${MEMORY_GUIDE}\n\n${input.extraSystem}` : MEMORY_GUIDE,
         onEvent: e => this.onLoopEvent(runId, e),

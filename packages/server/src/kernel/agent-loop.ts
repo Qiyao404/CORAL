@@ -36,6 +36,8 @@ export interface AgentLoopOptions {
   goal: string;
   /** 追加到基础系统提示的额外指令（如公司画像/记忆指引，由 run-engine 注入） */
   extraSystem?: string;
+  /** 多轮续接：本会话此前的对话历史（含上一轮的 goal/工具结果/最终回答），种子在新 goal 之前 */
+  initialHistory?: ChatMessage[];
   tools: Tool[];
   budget: LoopBudget;
   signal: AbortSignal;
@@ -103,7 +105,11 @@ export class AgentLoop {
     }));
 
     const system = this.buildSystemPrompt();
-    let messages: ChatMessage[] = [{ role: 'user', content: goal }];
+    // 多轮续接：先种入历史（合法性过滤），再追加本轮 goal
+    const seed = (this.options.initialHistory ?? []).filter(
+      m => m && typeof m.content === 'string' && ['user', 'assistant', 'tool'].includes(m.role)
+    );
+    let messages: ChatMessage[] = [...seed, { role: 'user' as const, content: goal }];
 
     let steps = 0;
     let toolCallCount = 0;

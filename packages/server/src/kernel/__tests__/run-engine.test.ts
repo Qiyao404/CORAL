@@ -230,6 +230,67 @@ describe('RunEngine — Free 模式全链路（M1-5）', () => {
     expect(after.length).toBe(all.length - half - 1);
   });
 
+  it('同会话多轮对话：第二轮回合携带第一轮完整历史（checkpoint 续接）', async () => {
+    // 第一轮：工具调用 + 最终回答，落 checkpoint
+    engine = newEngine(makeLLM([
+      { stopReason: 'tool_use', toolCalls: [{ id: 'c1', name: 'todo_write', input: { todos: [{ content: '第一步', status: 'completed' }] } }], content: '' },
+      { stopReason: 'end', content: '第一轮结论：答案是 42' },
+    ]));
+    const first = engine.startRun({ goal: '第一个问题', sessionId: 'sess-multi' });
+    await waitTerminal(first.runId);
+
+    // 第二轮：continueSession — LLM 应收到第一轮的完整消息历史
+    const seen: any[] = [];
+    const llm2 = makeLLM([{ stopReason: 'end', content: '第二轮回答' }]);
+    llm2.chat = async function (req: any) {
+      this.calls.push(req);
+      seen.push(req.messages.map((m: any) => `${m.role}:${(m.content || '').slice(0, 20)}`).join('|'));
+      const item = script2[this.calls.length - 1] ?? { content: '默认', stopReason: 'end' };
+      return {
+        content: item.content ?? '',
+        toolCalls: item.toolCalls ?? [],
+        usage: item.usage ?? { inputTokens: 10, outputTokens: 5 },
+        stopReason: item.stopReason ?? 'end',
+      };
+    };
+    const script2: any[] = [{ stopReason: 'end', content: '第二轮：结合你说的 42，补充如下' }];
+    // makeLLM 的闭包 script 引用旧数组 — 直接重建一个干净 engine
+    const engine2 = newEngine({
+      calls: 0,
+      async chat(req: any) {
+        (this as any).calls++;
+        seen.push(req.messages.map((m: any) => `${m.role}:${(m.content || m.toolCalls ? m.content || '[toolCalls]' : '').toString().slice(0, 24)}`).join(' | '));
+        return { content: '第二轮：结合你说的 42，补充如下', toolCalls: [], usage: { inputTokens: 10, outputTokens: 5 }, stopReason: 'end' as const };
+      },
+      async complete() { return { content: '摘要' }; },
+    } as any);
+    const second = engine2.startRun({ goal: '第二个问题', sessionId: 'sess-multi', continueSession: true });
+    await waitTerminal(second.runId);
+
+    // 断言：第二轮 LLM 请求里包含第一轮的 goal 与最终回答（多轮上下文真实续上）
+    const flat = seen.join('\n');
+    expect(flat).toContain('user:第一个问题');
+    expect(flat).toContain('assistant:第一轮结论：答案是 42');
+    expect(flat).toContain('user:第二个问题');
+
+    // run.started 事件带 continuedFrom
+    const started = eventStore.listByRun(second.runId).find(e => e.type === 'run.started');
+    expect(started?.payload.continuedFrom).toBe(first.runId);
+
+    // 不带 continueSession 的第三轮：不携带历史（独立 run）
+    const seen3: string[] = [];
+    const engine3 = newEngine({
+      async chat(req: any) {
+        seen3.push(req.messages.map((m: any) => m.role + ':' + (m.content || '').slice(0, 10)).join('|'));
+        return { content: '独立回答', toolCalls: [], usage: { inputTokens: 1, outputTokens: 1 }, stopReason: 'end' as const };
+      },
+      async complete() { return { content: 's' }; },
+    } as any);
+    const third = engine3.startRun({ goal: '独立问题', sessionId: 'sess-multi' });
+    await waitTerminal(third.runId);
+    expect(seen3.join('\n')).not.toContain('第一个问题');
+  });
+
   it('删除 run / 删除会话：事件与检查点级联清除（用户反馈 #1）', async () => {
     engine = newEngine(makeLLM([{ stopReason: 'end', content: 'ok' }]));
     const { runId } = engine.startRun({ goal: '待删除', sessionId: 'sess-del' });

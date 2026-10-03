@@ -18,6 +18,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void
       budget?: { maxSteps?: number; maxTokens?: number; maxCostUsd?: number };
       workspaceId?: string;
       extraSystem?: string;
+      continueSession?: boolean;
     };
 
     if (typeof body.goal !== 'string' || body.goal.trim().length === 0) {
@@ -31,6 +32,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine): void
         budget: body.budget,
         workspaceId: body.workspaceId,
         extraSystem: body.extraSystem,
+        continueSession: body.continueSession,
       });
       return reply.status(201).send({ runId, sessionId, status: 'running' });
     } catch (err: any) {
