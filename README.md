@@ -140,7 +140,7 @@ npm run dev:server -- --demo
 | 持久化 | SQLite（better-sqlite3，WAL 模式，schema 版本化迁移） |
 | Skill | YAML frontmatter（gray-matter）+ chokidar 热重载 |
 | 进度协议 | 自研 `[CORAL_PROGRESS]` stderr 单行 JSON 协议（Python + Node 双 SDK，见 [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)） |
-| 质量 | Vitest（299 用例）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
+| 质量 | Vitest（315 用例）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
 
 ---
 
@@ -288,10 +288,10 @@ CORAL/
 | M0 | 地基：SQLite / 真取消 / 真超时 / 重试语义 / 安全默认 / 测试 + CI | ✅ |
 | M1 | Harness 内核：Agent Loop · sub-agents · Agentic Workspace · 长期记忆 · 双 provider · 技能导入 · Chat 会话 · 创新五件套 | ✅ |
 | M2 | Graph 模式：DSL + 事件驱动引擎 + goal→graph AI 编译 + 节点审批（改参数续跑）+ 断点恢复 + Workflow 页 | ✅ |
-| M3 | MCP 双向桥 · 定时与 Webhook 触发器 · 进度协议 SDK 发布（npm/PyPI） | ⏳ |
+| M3 | MCP 双向桥（coral mcp serve + 外部 server 接入）· 定时/cron/Webhook 触发器 · 进度协议 SDK 双语言包 | ✅ |
 | M4 | Time-Travel 调试器（回滚/分叉重放）· `npx coral` 单命令分发 | ⏳ |
 
-质量基线：Vitest 299 用例全绿 · GitHub Actions 三平台（ubuntu/windows/macos × Node 20/22）· TypeScript strict
+质量基线：Vitest 315 用例全绿 · GitHub Actions 三平台（ubuntu/windows/macos × Node 20/22）· TypeScript strict
 
 ---
 

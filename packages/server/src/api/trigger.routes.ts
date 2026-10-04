@@ -56,7 +56,7 @@ export function registerTriggerRoutes(app: FastifyInstance, triggers: TriggerSer
   app.post('/api/hooks/:id', async (request, reply) => {
     const { id } = request.params as any;
     const body = (request.body || {}) as Record<string, any>;
-    const r = await triggers.fireWebhook(id, { body });
+    const r = await triggers.fireWebhook(id, body); // 第二参就是 body 本体（服务内部再包 {body} 注入变量）
     if (!r.ok) return reply.status(id.startsWith('hook_') ? 409 : 404).send({ error: r.message });
     return { success: true, runId: r.runId };
   });
