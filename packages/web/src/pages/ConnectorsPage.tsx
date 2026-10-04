@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   Plug, Plus, RefreshCw, Trash2, ToggleLeft, ToggleRight, Clock, Webhook,
-  Loader2, CheckCircle2, XCircle, AlertTriangle, Copy,
+  Loader2, CheckCircle2, XCircle, AlertTriangle, Copy, HelpCircle,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Tag } from '../components/ui';
@@ -22,6 +22,43 @@ interface TriggerItem {
   id: string; name: string; enabled: number; kind: 'interval' | 'cron' | 'webhook'; spec: string;
   action_json: string; last_fired_at: string | null; next_fire_at: string | null;
   fire_count: number; last_error: string | null;
+}
+
+/** 使用指引（用户实测反馈"看不懂怎么操作"） */
+function GuidePanel({ tab }: { tab: 'mcp' | 'triggers' }) {
+  const [open, setOpen] = useState(() => localStorage.getItem('coral.conn.guide') !== '1');
+  if (!open) {
+    return (
+      <button onClick={() => setOpen(true)} className="text-xs text-fg-muted flex items-center gap-1 cursor-pointer hover:text-brand">
+        <HelpCircle className="w-3.5 h-3.5" /> {tab === 'mcp' ? 'MCP 工具是什么？怎么用？' : '触发器是什么？怎么用？'}（附例子）
+      </button>
+    );
+  }
+  return (
+    <div className="glass rounded-xl border border-glass-border p-4 text-xs text-fg-secondary leading-6">
+      <div className="flex items-center gap-2 mb-2">
+        <HelpCircle className="w-4 h-4 text-brand" />
+        <span className="font-medium text-fg-primary">{tab === 'mcp' ? 'MCP 工具接入指引' : '触发器使用指引'}</span>
+        <span className="flex-1" />
+        <button onClick={() => { setOpen(false); localStorage.setItem('coral.conn.guide', '1'); }}
+          className="text-fg-muted hover:text-fg-primary cursor-pointer">收起</button>
+      </div>
+      {tab === 'mcp' ? (
+        <>
+          <p><b>MCP 是什么</b>：一个公开标准，让 Agent 能"借用到人的工具"。别人做好了现成的工具服务（读文件、搜网页、操作数据库…），你在这里填一行配置接进来，Agent 在对话里就能直接调用它们 —— 就像给手机装 App。</p>
+          <p className="mt-2"><b>试着接入第一个</b>（全程可逆，随时删）：点「添加 MCP Server」→ 名称填 <code className="text-brand">filesystem</code> → 选 stdio → command 填 <code className="text-brand">npx</code> → 参数填 <code className="text-brand">-y @modelcontextprotocol/server-filesystem D:/某个文件夹</code> → 连接。之后去「对话」页说"列一下那个文件夹里的文件"，Agent 就会调用它的工具完成。</p>
+          <p className="mt-2 text-fg-muted">哪里找更多：搜 "awesome MCP servers"，文件系统/fetch/git/浏览器操作等都有现成的。配置进 .env 的 key 类服务（如 Tavily 搜索）同理接入。</p>
+        </>
+      ) : (
+        <>
+          <p><b>触发器是什么</b>：让 Agent <b>不用你开口也自动干活</b>的开关。三种形式：定时（每隔一段时间）、cron（每天几点）、webhook（外部系统来个通知就触发）。</p>
+          <p className="mt-2"><b>例 1（定时）</b>：点「新建触发器」→ 名称"每日晨报"→ 类型"定时间隔"→ 间隔 <code className="text-brand">86400</code>（= 每天一次）→ 目标写"用 web-reader 读取 https://news.ycombinator.com 的内容，整理成 5 条要点" → 创建。之后 Agent 每天自动跑一次。</p>
+          <p className="mt-2"><b>例 2（webhook）</b>：类型选 webhook → 目标写『收到告警：{'{{title}}'}，请分析可能原因』 → 创建后复制页面显示的 URL，粘到监控系统（如 Uptime Kuma / GitHub webhook）的通知地址里。监控系统一报警，Agent 自动开始分析。</p>
+          <p className="mt-2 text-fg-muted">列表里能看到每个触发器"已触发几次 / 最近触发时间 / 下次触发时间"，出问题会显示错误。</p>
+        </>
+      )}
+    </div>
+  );
 }
 
 export default function ConnectorsPage() {
@@ -77,6 +114,7 @@ export default function ConnectorsPage() {
         ))}
       </div>
       {msg && <div className="text-xs text-fg-secondary glass border border-glass-border rounded-lg px-3 py-2">{msg}</div>}
+      <GuidePanel tab={tab} />
 
       {tab === 'mcp' && (
         <div className="space-y-3">
