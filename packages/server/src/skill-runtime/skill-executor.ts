@@ -283,7 +283,13 @@ export class SkillExecutor {
       const ctx = request.context;
       const skillName = manifest.name;
 
-      child.stdout.on('data', (data) => { stdout += data.toString('utf-8'); });
+      child.stdin.on('error', () => {
+        // 审查 P1：脚本在读取 stdin 前退出（如依赖缺失 import 即崩）→ EPIPE 异步落 error 事件，
+        // 无监听器会变成 uncaughtException 崩掉整个服务进程
+      });
+      // 审查 P2：按 Buffer 累积最后统一解码（按 chunk toString 会切断多字节 UTF-8 字符）
+      const stdoutChunks: Buffer[] = [];
+      child.stdout.on('data', (data: Buffer) => { stdoutChunks.push(data); });
       child.stderr.on('data', (data: Buffer) => {
         const { progressEvents, logLines } = parser.feed(data);
         for (const ev of progressEvents) {
@@ -340,6 +346,7 @@ export class SkillExecutor {
       }
 
       child.on('close', (code) => {
+        stdout = Buffer.concat(stdoutChunks).toString('utf-8');
         clearAll();
 
         // 把残留 buffer 也下发为日志

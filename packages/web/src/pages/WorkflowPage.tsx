@@ -240,6 +240,9 @@ export default function WorkflowPage() {
     }
   };
 
+  // 审查 P2：审批对象切换时清空参数草稿（防把上一个审批的参数发给下一个）
+  useEffect(() => { setInputDraft(''); }, [(view as any).approval?.approvalId]);
+
   const toggleOutput = (id: string) => setOpenOutputs(prev => {
     const next = new Set(prev);
     if (next.has(id)) next.delete(id); else next.add(id);

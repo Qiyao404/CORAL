@@ -86,7 +86,7 @@ export default function TaskDetailPage() {
 
   const handleCancel = async () => {
     if (!taskId) return;
-    await api.cancelTask(taskId);
+    try { await api.cancelTask(taskId); } catch (err: any) { alert('取消失败: ' + (err.message || err)); }
     refresh();
   };
 

@@ -77,8 +77,14 @@ export async function compressIfNeeded(
   }
 
   const first = messages[0];
-  const recent = messages.slice(-opts.keepRecent);
-  const middle = messages.slice(1, messages.length - opts.keepRecent);
+  // 审查 P1：切片边界不得落在工具调用组内部（assistant(toolCalls) 与其 tool 结果
+  // 必须同侧）— 否则 recent 以孤儿 tool 消息开头，下次请求两家 API 都会 400
+  let keep = opts.keepRecent;
+  while (keep < messages.length - 1 && messages[messages.length - keep].role === 'tool') {
+    keep++; // recent 起点是 tool → 把前面的 assistant(toolCalls) 一并纳入
+  }
+  const recent = messages.slice(-keep);
+  const middle = messages.slice(1, messages.length - keep);
 
   const transcript = middle
     .map(m => `[${m.role}${m.toolName ? `:${m.toolName}` : ''}] ${clipForTranscript(m.content)}`)

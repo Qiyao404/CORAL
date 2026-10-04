@@ -18,7 +18,7 @@ try:
     from docx.enum.text import WD_ALIGN_PARAGRAPH
     from docx.oxml.ns import qn
 except ImportError:
-    emit_log('error', '缺少 python-docx 依赖，请安装: pip install python-docx')
+    emit_log('缺少 python-docx 依赖，请安装: pip install python-docx', level='error')
     raise
 
 
@@ -60,7 +60,7 @@ def add_formatted_paragraph(doc, text, font_name='仿宋_GB2312', size=16,
 
 def generate_document(inputs):
     """生成公文文档"""
-    emit_progress(10, 100, '初始化文档')
+    emit_progress('init', '初始化文档', percent=10)
     
     # 提取参数
     title = inputs.get('title', '')
@@ -80,7 +80,7 @@ def generate_document(inputs):
     except:
         date_display = date_str
     
-    emit_progress(20, 100, '创建文档结构')
+    emit_progress('structure', '创建文档结构', percent=20)
     
     # 创建文档
     doc = Document()
@@ -94,7 +94,7 @@ def generate_document(inputs):
     section.left_margin = Cm(2.8)
     section.right_margin = Cm(2.6)
     
-    emit_progress(30, 100, '添加公文版头')
+    emit_progress('header', '添加公文版头', percent=30)
     
     # 紧急程度（如有）
     if urgency_level:
@@ -104,20 +104,20 @@ def generate_document(inputs):
     # 发文机关标志（红头效果用文字模拟，实际需图片）
     # 留空位置
     
-    emit_progress(40, 100, '添加标题')
+    emit_progress('title', '添加标题', percent=40)
     
     # 标题：二号小标宋，居中
     add_formatted_paragraph(doc, title, '方正小标宋简体', 22, 
                            align='center', line_spacing=36, space_after=12)
     
-    emit_progress(50, 100, '添加主送机关')
+    emit_progress('addressee', '添加主送机关', percent=50)
     
     # 主送机关：顶格，三号仿宋
     if addressee:
         add_formatted_paragraph(doc, addressee + '：', '仿宋_GB2312', 16,
                                line_spacing=28, space_after=6)
     
-    emit_progress(60, 100, '添加正文')
+    emit_progress('body', '添加正文', percent=60)
     
     # 正文处理：按段落分割
     paragraphs = main_body.strip().split('\n')
@@ -138,7 +138,7 @@ def generate_document(inputs):
             add_formatted_paragraph(doc, para, '仿宋_GB2312', 16,
                                    first_line_indent=2, line_spacing=28)
     
-    emit_progress(75, 100, '添加附件说明')
+    emit_progress('attachment', '添加附件说明', percent=75)
     
     # 附件说明
     if attachment_list:
@@ -147,7 +147,7 @@ def generate_document(inputs):
         add_formatted_paragraph(doc, attach_text, '仿宋_GB2312', 16,
                                first_line_indent=2, line_spacing=28)
     
-    emit_progress(85, 100, '添加发文机关署名和成文日期')
+    emit_progress('signature', '添加署名和日期', percent=85)
     
     # 发文机关署名和成文日期：右对齐，右空四字
     doc.add_paragraph()  # 空行
@@ -156,7 +156,7 @@ def generate_document(inputs):
     add_formatted_paragraph(doc, date_display, '仿宋_GB2312', 16,
                            align='right', line_spacing=28)
     
-    emit_progress(90, 100, '添加抄送机关')
+    emit_progress('cc', '添加抄送机关', percent=90)
     
     # 抄送机关
     if copy_to:
@@ -168,7 +168,7 @@ def generate_document(inputs):
         p.paragraph_format.left_indent = Cm(0.74)
         p.paragraph_format.right_indent = Cm(0.74)
     
-    emit_progress(95, 100, '保存文档')
+    emit_progress('save', '保存文档', percent=95)
     
     # 生成文件名
     safe_title = re.sub(r'[\\\\/:*?\"<>|]', '_', title)[:30]
@@ -187,7 +187,7 @@ def generate_document(inputs):
     # 上报产物（coral_progress 契约：name + path + type + preview）
     emit_artifact(filename, output_path, 'file', preview=preview[:200])
     
-    emit_progress(100, 100, '完成')
+    emit_progress('done', '完成', percent=100)
     
     return {
         "document_path": output_path,
@@ -217,7 +217,7 @@ def main():
         }, ensure_ascii=False))
         
     except Exception as e:
-        emit_log('error', f'生成失败: {str(e)}')
+        emit_log(f'生成失败: {str(e)}', level='error')
         print(json.dumps({
             "ok": False,
             "error": str(e)

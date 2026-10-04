@@ -129,6 +129,16 @@ export class OpenAICompatProvider implements ChatProvider {
       temperature: req.temperature ?? 0.7,
       max_tokens: req.maxTokens ?? 4096,
       stream: true,
+      // REG-01（审查 P0）：stream 此前丢失 tools — agent loop 主路径（chatStream）下
+      // 模型收不到 function 定义，全靠 DSML 退化归一化兜底才"看起来正常"
+      ...(req.tools && req.tools.length > 0
+        ? {
+            tools: req.tools.map(t => ({
+              type: 'function',
+              function: { name: t.name, description: t.description, parameters: t.inputSchema },
+            })),
+          }
+        : {}),
       ...(req.jsonMode ? { response_format: { type: 'json_object' as const } } : {}),
     };
 
@@ -155,7 +165,9 @@ export class OpenAICompatProvider implements ChatProvider {
 
     await withRetry(
       async () => {
-        pending = ''; emitted = 0; // 每次尝试重置显示缓冲（full 独立累积不受影响）
+        // 重试边界重置（审查 P1）：full/toolAcc 不重置会把第一次的半截内容与
+        // 工具分片拼进第二次结果（'<' 开头被扣留或工具分片已到达时 delivered=false）
+        pending = ''; emitted = 0; full = ''; toolAcc.clear(); finishReason = undefined;
         const stream = await this.client.chat.completions.create(params, { signal: req.signal });
         for await (const chunk of stream as any) {
           const delta = chunk?.choices?.[0]?.delta;

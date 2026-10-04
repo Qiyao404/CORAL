@@ -100,7 +100,8 @@ export default function ConnectorsPage() {
             </div>
           )}
           {servers.map(s => {
-            const tools = s.tools_preview ? JSON.parse(s.tools_preview) : [];
+            let tools: any[] = [];
+            try { tools = s.tools_preview ? JSON.parse(s.tools_preview) : []; } catch { /* 脏数据不炸渲染 */ }
             return (
               <div key={s.id} className="glass rounded-xl border border-glass-border p-3 space-y-2">
                 <div className="flex items-center gap-2 text-xs">
@@ -176,7 +177,7 @@ export default function ConnectorsPage() {
                 <div className="text-[11px] text-fg-muted truncate">动作：{action.goal}</div>
                 {t.kind === 'webhook' && (
                   <div className="text-[11px] font-mono text-fg-secondary break-all">
-                    POST /api/hooks/{t.id} <button className="ml-1 text-brand cursor-pointer" onClick={() => { navigator.clipboard?.writeText(`http://localhost:3001/api/hooks/${t.id}`); setMsg('webhook 地址已复制'); }}>复制</button>
+                    POST /api/hooks/{t.id} <button className="ml-1 text-brand cursor-pointer" onClick={() => { navigator.clipboard?.writeText(`${window.location.origin}/api/hooks/${t.id}`); setMsg('webhook 地址已复制'); }}>复制</button>
                   </div>
                 )}
                 <div className="text-[11px] text-fg-muted flex gap-3 flex-wrap">

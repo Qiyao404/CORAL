@@ -56,6 +56,8 @@ export class AnthropicProvider implements ChatProvider {
 
     await withRetry(
       async () => {
+        // 重试边界重置（审查 P1，对齐 openai-compat）：toolBlocks 不重置会拼接两次尝试的分片
+        text = ''; toolBlocks.clear(); stopReason = 'end'; delivered = false;
         const events = await this.client.messages.create(params, { signal: req.signal });
 
         for await (const ev of events as any) {

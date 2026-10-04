@@ -79,4 +79,28 @@ describe('compressIfNeeded（M1-3 二级防护）', () => {
     expect(received).toContain('middle-tool-content');
     expect(received).not.toContain('recent'); // 最近段不进摘要
   });
+
+  it('REG-03 回归：切片边界落在工具调用组内时向前扩展（recent 不以孤儿 tool 开头）', async () => {
+    const opts = { maxTotalChars: 1, keepRecent: 2 };
+    const messages = [
+      { role: 'user' as const, content: 'goal' },
+      { role: 'assistant' as const, content: '', toolCalls: [{ id: 'c1', name: 'fs_read', input: {} }] },
+      { role: 'tool' as const, toolCallId: 'c1', toolName: 'fs_read', content: 'A'.repeat(3000) },
+      { role: 'assistant' as const, content: '', toolCalls: [{ id: 'c2', name: 'fs_read', input: {} }] },
+      { role: 'tool' as const, toolCallId: 'c2', toolName: 'fs_read', content: 'B'.repeat(3000) },
+      { role: 'assistant' as const, content: '中间回答' },
+    ];
+    const r = await compressIfNeeded(messages, { ...opts, summarize: async () => '摘要' });
+    expect(r.compressed).toBe(true);
+    // recent 首条不得是孤儿 tool（其 assistant(toolCalls) 必须同在）
+    const recentStart = r.messages[1];
+    expect(recentStart.role === 'tool' ? false : true).toBe(true);
+    // 若含 tool 消息，其前面的 assistant 必须带对应 toolCalls
+    for (let i = 1; i < r.messages.length; i++) {
+      if (r.messages[i].role === 'tool') {
+        const prev = r.messages[i - 1];
+        expect(prev.role === 'assistant' && (prev.toolCalls ?? []).some(c => c.id === (r.messages[i] as any).toolCallId)).toBe(true);
+      }
+    }
+  });
 });

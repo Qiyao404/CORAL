@@ -327,6 +327,18 @@ export class GraphEngine {
     if (this.settled) return; // 已收口（如取消后审批桥才返回）
     const prev = this.state.nodes[id].status;
     Object.assign(this.state.nodes[id], patch);
+    // 审查 P1：事件/checkpoint 落库抛错（磁盘满/DB 锁）不能外溢 —
+    // 否则 executeNode 的 void promise 变 unhandled rejection，引擎永久悬挂
+    try {
+      this.emitAndCheckpoint(id, patch, prev);
+    } catch (err: any) {
+      try {
+        this.opts.onEvent({ type: 'graph.checkpoint_error', payload: { runId: this.opts.runId, node: id, error: String(err?.message ?? err) } });
+      } catch { /* 双保险 */ }
+    }
+  }
+
+  private emitAndCheckpoint(id: string, patch: Partial<GraphNodeState> & { status: GraphNodeStatus }, prev: GraphNodeStatus): void {
     this.emit(`graph.node_${patch.status}`, {
       node: id,
       skill: this.nodeDefs.get(id)!.skill,

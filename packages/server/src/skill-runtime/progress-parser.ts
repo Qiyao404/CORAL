@@ -114,7 +114,8 @@ function clampPercent(p: number): number {
   return Math.round(p * 100) / 100;
 }
 
-function heuristicLevel(line: string): 'info' | 'warn' | 'error' {
+function heuristicLevel(line: string): 'debug' | 'info' | 'warn' | 'error' {
+  if (line.startsWith('[DEBUG] ')) return 'debug'; // 协议 §2.3：SDK debug 前缀（审查 P2 补）
   if (ERROR_HEUR.test(line)) return 'error';
   if (WARN_HEUR.test(line)) return 'warn';
   return 'info';

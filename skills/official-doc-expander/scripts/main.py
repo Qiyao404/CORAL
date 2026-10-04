@@ -69,7 +69,7 @@ def create_official_document(inputs):
     org_name = inputs.get('org_name', '××单位')
     date_str = inputs.get('date', datetime.now().strftime('%Y-%m-%d'))
     
-    emit_progress(10, 100, '初始化文档格式')
+    emit_progress('init', '初始化文档格式', percent=10)
     
     # 创建文档
     doc = Document()
@@ -83,7 +83,7 @@ def create_official_document(inputs):
     section.left_margin = Mm(28)
     section.right_margin = Mm(26)
     
-    emit_progress(25, 100, '编排版头')
+    emit_progress('header', '编排版头', percent=25)
     
     # 版头：发文机关标志（红色）
     add_red_header(doc, org_name)
@@ -95,7 +95,7 @@ def create_official_document(inputs):
     set_run_font(run, '仿宋', 14)
     para.paragraph_format.space_after = Pt(18)
     
-    emit_progress(40, 100, '编排主体')
+    emit_progress('body', '编排主体', percent=40)
     
     # 标题（2号小标宋体，居中）
     para = doc.add_paragraph()
@@ -131,7 +131,7 @@ def create_official_document(inputs):
         para.paragraph_format.line_spacing = Pt(28.8)  # 28磅行距
         para.paragraph_format.space_after = Pt(0)
     
-    emit_progress(70, 100, '编排版记')
+    emit_progress('closing', '编排版记', percent=70)
     
     # 附件说明（如有）
     # 发文机关署名和成文日期
@@ -151,7 +151,7 @@ def create_official_document(inputs):
     
     # 附注（如有）
     
-    emit_progress(85, 100, '保存文档')
+    emit_progress('save', '保存文档', percent=85)
     
     # 保存到临时文件
     filename = f"{org_name}_{doc_type}_{date_str}.docx"
@@ -160,9 +160,9 @@ def create_official_document(inputs):
         doc.save(doc_path)
     
     # 上报为 artifact
-    emit_artifact(doc_path, filename, 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
+    emit_artifact(filename, doc_path, 'file')
     
-    emit_progress(100, 100, '完成')
+    emit_progress('done', '完成', percent=100)
     
     return {
         "ok": True,
@@ -186,7 +186,7 @@ def main():
         print(json.dumps(result, ensure_ascii=False))
         
     except Exception as e:
-        emit_log('ERROR', str(e))
+        emit_log(str(e), level='error')
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
 
 if __name__ == '__main__':

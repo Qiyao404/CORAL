@@ -332,3 +332,43 @@ describe('RunEngine — Free 模式全链路（M1-5）', () => {
     expect(engine.getRunDetail(newRunId())).toBeNull();
   });
 });
+
+describe('REG-04 回归：checkpoint 不含悬空 toolCalls（毒化续接）', () => {
+  it('取消发生在工具执行中 → checkpoint 末尾不存在未答复的 assistant(toolCalls)', async () => {
+    const ac = new AbortController();
+    const llm = makeLLM([
+      { stopReason: 'tool_use', toolCalls: [{ id: 'c1', name: 'slow', input: {} }], content: '' },
+    ]);
+    const slowTool = {
+      name: 'slow', description: '', inputSchema: { type: 'object' }, source: 'builtin' as const, permission: 'auto' as const,
+      invoke: async () => { await new Promise(r => setTimeout(r, 3000)); return { ok: true, data: {} }; },
+    };
+    setTimeout(() => ac.abort(), 50);
+
+    const { AgentLoop } = await import('../../kernel/agent-loop.js');
+    const checkpoints: any[] = [];
+    const loop = new AgentLoop(llm, {
+      runId: 'r_reg04', agentId: 'main', goal: '取消测试',
+      tools: [slowTool], budget: { maxSteps: 5, maxTokens: 100000 },
+      signal: ac.signal,
+      onEvent: () => {},
+      saveCheckpoint: cp => checkpoints.push(cp),
+    });
+    const r = await loop.run();
+    expect(r.status).toBe('cancelled');
+
+    // 任意 checkpoint 里：assistant(toolCalls) 必须有其后的对应 tool 结果（组完整）
+    for (const cp of checkpoints) {
+      const msgs = cp.state.messages;
+      for (let i = 0; i < msgs.length; i++) {
+        const m = msgs[i];
+        if (m.role === 'assistant' && m.toolCalls?.length) {
+          const followed = m.toolCalls.every((c: any) =>
+            msgs.slice(i + 1).some(x => x.role === 'tool' && x.toolCallId === c.id)
+          );
+          expect(followed).toBe(true);
+        }
+      }
+    }
+  });
+});

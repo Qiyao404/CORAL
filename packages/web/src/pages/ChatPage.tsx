@@ -152,10 +152,8 @@ export default function ChatPage() {
   }, [workspaceId]);
 
   useEffect(() => {
-    loadSessions().then(() => {
-      // 导航/刷新恢复：未手动新建时，自动续接最近一个会话（多轮对话不因离开页面断开）
-      setCurrentSessionId(prev => prev ?? null);
-    });
+    // 导航/刷新恢复：自动续接最近会话的逻辑在下方 effect（sessions 变化时）
+    loadSessions();
     loadWorkspaces();
   }, [loadSessions, loadWorkspaces]);
 

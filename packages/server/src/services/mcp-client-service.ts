@@ -180,8 +180,13 @@ export class McpClientService {
           })
         : new StreamableHTTPClientTransport(new URL(server.url!));
 
+      // 审查 P1：重连/启停先断旧连接（否则 stdio 子进程泄漏）
+      await this.disconnectOne(server.id);
       await client.connect(transport);
-      const listed = await client.listTools();
+      const listed = await client.listTools().catch(async err => {
+        await client.close().catch(() => {}); // 连接成功但列工具失败 → 也要释放子进程
+        throw err;
+      });
       const tools: Tool[] = listed.tools.map(t => this.wrapTool(server, client, t));
       this.connected.set(server.id, { row: server, client, tools });
       stmt(`UPDATE mcp_servers SET tool_count = ?, tools_preview = ?, last_error = NULL, updated_at = ? WHERE id = ?`)

@@ -190,10 +190,30 @@ export class RunEngine {
       const last = cps[cps.length - 1];
       const state = this.deps.checkpointStore.get(run.id, last.seq);
       if (state?.messages && state.messages.length > 0) {
-        return { history: state.messages, fromRunId: run.id };
+        return { history: this.sanitizeSessionHistory(state.messages), fromRunId: run.id };
       }
     }
     return null;
+  }
+
+  /** 审查 P1：剔除末尾悬空的 assistant(toolCalls)（取消时工具结果缺失会毒化续接请求） */
+  private sanitizeSessionHistory(messages: import('../providers/types.js').ChatMessage[]): import('../providers/types.js').ChatMessage[] {
+    const out = [...messages];
+    const last = out[out.length - 1];
+    if (last?.role === 'tool') {
+      // 孤儿 tool 结果（前一条不是带其 toolCallId 的 assistant）→ 连同前面的组一起修剪
+      const prev = out[out.length - 2];
+      if (!(prev?.role === 'assistant' && (prev.toolCalls ?? []).some(c => c.id === (last as any).toolCallId))) {
+        out.pop();
+        return this.sanitizeSessionHistory(out);
+      }
+      return out;
+    }
+    if (last?.role === 'assistant' && last.toolCalls?.length) {
+      // 悬空 assistant(toolCalls)（无任何对应 tool 结果）→ 移除
+      return this.sanitizeSessionHistory(out.slice(0, -1));
+    }
+    return out;
   }
 
   private async executeRun(runId: string, input: StartRunInput, workspace: Workspace | null, signal: AbortSignal): Promise<void> {

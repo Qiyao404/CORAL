@@ -400,9 +400,37 @@ export class AgentLoop {
       seq: step,
       kind: 'loop_step',
       label: `step-${step}`,
-      state: { messages },
+      state: { messages: this.sanitizeForCheckpoint(messages) },
     });
     this.emit('checkpoint.created', { seq: step, label: `step-${step}` });
+  }
+
+  /**
+   * REG-04：落库的中间状态必须对"下次加载"合法 — 取消/失败时 messages 末尾可能是
+   * assistant(toolCalls) 无 tool 结果（或孤儿 tool），原样入库会毒化 continueSession。
+   * 写入侧统一修剪（读取侧 run-engine.sanitizeSessionHistory 双保险）。
+   */
+  private sanitizeForCheckpoint(messages: ChatMessage[]): ChatMessage[] {
+    const out = [...messages];
+    const last = out[out.length - 1];
+    // 只修剪"不完整组"：assistant 带 toolCalls 但其后没有对应的 tool 结果。
+    // 完整组（assistant+tools 全部在）保持原样 — 那是正常中间态。
+    if (last?.role === 'assistant' && last.toolCalls?.length) {
+      const answered = new Set(
+        out.filter(m => m.role === 'tool').map(m => (m as any).toolCallId)
+      );
+      const allAnswered = last.toolCalls.every(c => answered.has(c.id));
+      if (!allAnswered) {
+        // 悬空：把这条 assistant(toolCalls) 移除，并把引用它的孤儿 tool 一并移除
+        const ids = new Set(last.toolCalls.map(c => c.id));
+        for (let i = out.length - 1; i >= 0; i--) {
+          const m = out[i];
+          if (m === last) { out.splice(i, 1); break; }
+          if (m.role === 'tool' && ids.has((m as any).toolCallId)) out.splice(i, 1);
+        }
+      }
+    }
+    return out;
   }
 
   private buildSystemPrompt(): string {

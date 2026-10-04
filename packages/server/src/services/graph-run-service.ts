@@ -107,12 +107,14 @@ export class GraphRunService {
       workspace = new WorkspaceService().get(input.workspaceId);
       if (!workspace) throw new Error(`工作区不存在: ${input.workspaceId}`);
     }
+    // 审查 P1：运行时 input 覆盖持久化（graph_json 旁路），resume 不再静默丢失
+    const graphWithInput = { ...input.graph, ...(input.input && Object.keys(input.input).length > 0 ? { _runtimeInput: input.input } : {}) };
     this.deps.runStore.insert({
       id: runId,
       goal,
       mode: 'graph',
       sessionId,
-      graph: input.graph,
+      graph: graphWithInput,
       ...(workspace ? { workspaceId: workspace.id } : {}),
     });
     this.emitRunEvent(runId, 'run.created', {
@@ -164,7 +166,10 @@ export class GraphRunService {
         ? Object.values(resumeFrom.nodes).filter(n => n.status === 'completed').length
         : 0,
     });
-    void this.executeGraphRun(runId, { goal: run.goal, graph, resumeFrom }, resumeWs).catch(err => {
+    // 审查 P1：恢复启动时的运行时 input（_runtimeInput 随 graph 持久化）
+    const runtimeInput = (graph as any)?._runtimeInput as Record<string, any> | undefined;
+    const graphClean = runtimeInput ? { ...graph, _runtimeInput: undefined } : graph;
+    void this.executeGraphRun(runId, { goal: run.goal, graph: graphClean, resumeFrom, input: runtimeInput }, resumeWs).catch(err => {
       console.error(`[GraphRunService] run ${runId} 恢复执行异常:`, err);
     });
     return { ok: true, message: resumeFrom ? '已从最近 checkpoint 恢复' : '已重新开始执行' };

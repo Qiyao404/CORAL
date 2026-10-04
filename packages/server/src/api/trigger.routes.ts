@@ -40,7 +40,7 @@ export function registerTriggerRoutes(app: FastifyInstance, triggers: TriggerSer
     const { id } = request.params as any;
     const body = (request.body || {}) as { enabled?: boolean };
     if (typeof body.enabled !== 'boolean') return reply.status(400).send({ error: '需要 enabled' });
-    const r = triggers.setEnabled(id, body.enabled);
+    const r = await triggers.setEnabled(id, body.enabled); // 审查 P1：漏 await 恒 404
     if (!r.ok) return reply.status(404).send({ error: r.message });
     return r;
   });

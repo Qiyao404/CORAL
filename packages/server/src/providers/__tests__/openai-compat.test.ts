@@ -162,6 +162,53 @@ describe('OpenAICompatProvider.stream — 文本与工具调用分片组装', ()
     expect(r.usage).toEqual({ inputTokens: 7, outputTokens: 3 });
   });
 
+  it('REG-01 回归：stream 透传 tools（agent loop 主路径的能力前提）', async () => {
+    async function* gen() {
+      yield { choices: [{ delta: {}, finish_reason: 'stop' }] };
+    }
+    const stub = makeStub(() => gen());
+    await makeProvider(stub).stream(
+      {
+        messages: [{ role: 'user', content: 'hi' }],
+        tools: [{ name: 'http_fetch', description: '抓取', inputSchema: { type: 'object', properties: { url: { type: 'string' } } } }],
+      },
+      () => {}
+    );
+    const tools = stub.calls[0].tools;
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toEqual({
+      type: 'function',
+      function: { name: 'http_fetch', description: '抓取', parameters: { type: 'object', properties: { url: { type: 'string' } } } },
+    });
+  });
+
+  it('REG-02 回归：重试后 full/toolAcc 重置（半截内容与工具分片不得拼接）', async () => {
+    let n = 0;
+    const stub = {
+      chat: { completions: { create: async () => {
+        n++;
+        if (n === 1) {
+          // 第一次：内容以 '<' 开头被扣留（delivered=false）+ 半个工具分片，然后流断掉
+          return (async function* () {
+            yield { choices: [{ delta: { content: '<｜invoke' } }] };
+            yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'x', function: { name: 'a', arguments: '{}' } }] } }] };
+            throw httpError(500, 'mid-stream fail');
+          })();
+        }
+        return (async function* () {
+          yield { choices: [{ delta: { tool_calls: [{ index: 0, id: 'c2', function: { name: 'b', arguments: '{"ok":1}' } }] } }] };
+          yield { choices: [{ delta: {}, finish_reason: 'tool_calls' }] };
+        })();
+      } } },
+    };
+    const r = await makeProvider(stub).stream({ messages: [{ role: 'user', content: 'x' }] }, () => {});
+    // 若缓冲未重置：full 会含 '<｜invoke'、toolAcc 会有 name:'a' 的残片
+    expect(r.content).toBe('');
+    expect(r.toolCalls).toHaveLength(1);
+    expect(r.toolCalls[0].name).toBe('b');
+    expect(r.toolCalls[0].input).toEqual({ ok: 1 });
+  });
+
   it('未交付 chunk 前的失败可重试；交付后不再重试（防重复输出）', async () => {
     let n = 0;
     async function* fail() { throw httpError(500, 'pre-stream fail'); void n; }
