@@ -40,9 +40,11 @@ let svc: McpClientService;
 beforeAll(() => {
   svc = new McpClientService();
 });
-afterAll(() => {
+afterAll(async () => {
+  // 先断开 MCP 子进程（否则 Windows 下 db 文件被锁，临时目录删不掉）
+  await svc.closeAll();
   closeDb();
-  rmSync(tmp, { recursive: true, force: true });
+  try { rmSync(tmp, { recursive: true, force: true }); } catch { /* Windows 文件锁 — 留给系统清理 */ }
 });
 
 describe('McpClientService — 外部 server 接入（M3-2，DoD：挂一个 server 后工具可用）', () => {

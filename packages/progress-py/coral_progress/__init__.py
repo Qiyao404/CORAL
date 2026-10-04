@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-CORAL_PROGRESS 协议 helper（单文件零依赖版；与 PyPI 包 coral-progress 同源 — 改这里请同步 packages/progress-py）
+CORAL_PROGRESS 协议 helper（T-105）
 
 通过 stderr 输出单行 JSON，前缀为 [CORAL_PROGRESS]，用于让平台前端获得细粒度进度反馈。
 

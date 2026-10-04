@@ -1,16 +1,39 @@
 {
   "name": "@coral/progress",
-  "version": "0.1.0",
-  "description": "CORAL_PROGRESS protocol SDK for Node — emit progress, logs and artifacts from CORAL skill scripts (or any child process) via single-line JSON on stderr.",
+  "version": "1.0.0",
+  "description": "CORAL_PROGRESS protocol SDK for Node — emit progress, logs and artifacts from skill scripts (or any child process) via single-line JSON on stderr. Protocol spec: docs/PROGRESS_PROTOCOL.md (v1.0).",
   "type": "module",
-  "main": "./src/index.ts",
+  "main": "./dist/index.js",
   "exports": {
-    ".": "./src/index.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm test && npm run build"
   },
-  "keywords": ["coral", "agent", "progress", "stderr", "protocol"],
+  "keywords": [
+    "coral",
+    "agent",
+    "progress",
+    "stderr",
+    "protocol"
+  ],
   "license": "MIT",
-  "private": true
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Qiyao404/CORAL.git",
+    "directory": "packages/progress"
+  },
+  "homepage": "https://github.com/Qiyao404/CORAL#readme",
+  "bugs": {
+    "url": "https://github.com/Qiyao404/CORAL/issues"
+  }
 }
