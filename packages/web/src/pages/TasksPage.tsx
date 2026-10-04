@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Filter } from 'lucide-react';
 import { api } from '../api/client';
@@ -34,10 +34,13 @@ export default function TasksPage() {
   const [filter, setFilter] = useState('');
   const [loading, setLoading] = useState(true);
 
+  const loadSeq = useRef(0);
   const loadTasks = () => {
+    const mySeq = ++loadSeq.current; // 审查 P3：慢响应后到不覆盖新筛选结果
     setLoading(true);
     api.listTasks({ status: filter || undefined, limit: 100 })
       .then(res => {
+        if (mySeq !== loadSeq.current) return;
         setTasks(res.items || []);
         setTotal(res.total || 0);
       })

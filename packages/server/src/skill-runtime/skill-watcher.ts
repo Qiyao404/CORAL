@@ -23,7 +23,7 @@ export class SkillWatcher {
     this.watcher = chokidar.watch(dir, {
       ignoreInitial: true,
       depth: 3,
-      ignored: /(^|[\/\\])\../, // 忽略隐藏文件
+      ignored: [/(^|[\\/\\])\../, /[\\/\\]output[\\/\\]/, /[\\/\\]_lib[\\/\\]/, /[\\/\\]__pycache__[\\/\\]/], // 隐藏文件 + 产物目录 + _lib + pycache（审查 P3：产物写入不再触发 reload 噪音）
     });
 
     this.watcher.on('add', (path: string) => this.handleChange(path));

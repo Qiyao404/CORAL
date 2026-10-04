@@ -154,13 +154,23 @@ export class OpenAICompatProvider implements ChatProvider {
     let emitted = 0;
 
     // 可安全下发的长度：最后一个 '<' 若开启疑似标记（<｜ / << 的前缀或延续）→ 扣住其后全部
+    // 审查 P3：有限窗口 — 扣留超过 WITHHOLD_LIMIT 字符仍无法确认标记（如正文里的 "a << b"）
+    // 判为普通文本放行；确认是标记前缀（<｜ 或 << 开头）则继续扣到流尾（由 full 收口）
+    const WITHHOLD_LIMIT = 24;
     const safeLen = (buf: string): number => {
       const lt = buf.lastIndexOf('<');
       if (lt < 0) return buf.length;
       const tail = buf.slice(lt);
       const potential = '<｜'.startsWith(tail) || '<<'.startsWith(tail);
       const confirmed = tail.startsWith('<｜') || tail.startsWith('<<');
-      return potential || confirmed ? lt : buf.length;
+      if (confirmed) {
+        // 确认标记形态：再看后续是否出现 invoke（DSML 调用）— 没有则只扣标记本身
+        if (tail.length > WITHHOLD_LIMIT && !/\s*(invoke|DSML)/.test(tail.slice(0, WITHHOLD_LIMIT))) {
+          return buf.length; // 像 "a << b" 这类普通文本：放行
+        }
+        return lt;
+      }
+      return potential ? lt : buf.length;
     };
 
     await withRetry(

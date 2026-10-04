@@ -23,6 +23,7 @@ async function request<T>(url: string, options?: RequestOptions): Promise<T> {
   const res = await fetch(`${BASE_URL}${url}`, {
     ...options,
     headers,
+    signal: AbortSignal.timeout(30_000), // 审查 P3：默认 30s 超时（防后端挂起全页 pending）
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: '请求失败' }));

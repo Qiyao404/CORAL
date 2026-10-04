@@ -1,9 +1,12 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
 /**
- * M1-8：v2 run 实时事件流 hook。
+ * M1-8：v2 run 实时事件流 hook（M4 审查批次升级）。
  * · GET /api/runs/:id 事件先回放（断线/晚加入不丢），再挂 SSE /api/runs/:id/stream
- * · eventId 去重；SSE 断开后用 afterSeq 游标补拉（双保险）
+ * · eventId 去重 + **按 seq 定序插入**（REG-12：REST 回放与 SSE 到达序交错时旧事件
+ *   不得回退 UI 状态——todo 清单/工具卡以 seq 为准）
+ * · SSE 重连（onopen）时按 afterSeq 游标补拉断线期间的事件（REG-12：断线空洞）
+ * · 事件窗口裁剪只裁高频 delta 类事件，结构性事件（todo/run 终态/审批）永久保留
  */
 export interface RunEventItem {
   eventId: string;
@@ -16,6 +19,12 @@ export interface RunEventItem {
   timestamp: string;
 }
 
+/** 高频可裁剪事件（长 run 窗口淘汰只动这些 — 结构性事件保留） */
+const EVICTABLE = new Set(['loop.delta', 'skill.log', 'skill.progress']);
+
+/** 窗口上限（含保留事件的总软上限，防极端 run 撑爆内存） */
+const HARD_CAP = 4000;
+
 export function useRunStream(runId?: string) {
   const [events, setEvents] = useState<RunEventItem[]>([]);
   const [connected, setConnected] = useState(false);
@@ -27,7 +36,21 @@ export function useRunStream(runId?: string) {
     if (!ev?.eventId || seen.current.has(ev.eventId)) return;
     seen.current.add(ev.eventId);
     cursorRef.current = Math.max(cursorRef.current, ev.seq ?? 0);
-    setEvents(prev => [...prev.slice(-800), ev]);
+    setEvents(prev => {
+      // REG-12：按 seq 插入（找第一个更大的事件插到它前面 — 事件基本有序，尾部扫描 O(1) 均摊）
+      const next = [...prev, ev];
+      let i = next.length - 1;
+      while (i > 0 && (next[i - 1].seq ?? 0) > (ev.seq ?? 0)) {
+        [next[i - 1], next[i]] = [next[i], next[i - 1]];
+        i--;
+      }
+      // 窗口裁剪：超 800 才裁，只裁高频事件（delta/log/progress），结构性事件全保留
+      if (next.length > 800) {
+        const kept = next.filter(e => !EVICTABLE.has(e.type));
+        return kept.length > HARD_CAP ? kept.slice(-HARD_CAP) : kept;
+      }
+      return next;
+    });
   }, []);
 
   // 初次挂载：回放持久化事件
@@ -52,11 +75,25 @@ export function useRunStream(runId?: string) {
     };
   }, [runId, push]);
 
-  // SSE 实时
+  // SSE 实时 + 断线补拉（REG-12）
   useEffect(() => {
     if (!runId) return;
     const es = new EventSource(`/api/runs/${runId}/stream`);
-    es.onopen = () => setConnected(true);
+    let disposed = false;
+
+    const backfill = async () => {
+      // 重连成功：补拉游标之后的事件（断线期间服务端产生的）
+      try {
+        const { api } = await import('../api/client');
+        const d = await api.getRunEvents(runId, cursorRef.current);
+        if (!disposed) for (const ev of d.items ?? []) push(ev);
+      } catch { /* 补拉失败不致命 — SSE 会继续推新事件 */ }
+    };
+
+    es.onopen = () => {
+      setConnected(true);
+      if (cursorRef.current > 0) void backfill(); // 首连不需要（挂载回放已做）
+    };
     es.onerror = () => setConnected(false);
     const onMsg = (e: MessageEvent) => {
       try {
@@ -65,6 +102,7 @@ export function useRunStream(runId?: string) {
     };
     es.onmessage = onMsg;
     return () => {
+      disposed = true;
       es.close();
       setConnected(false);
     };
@@ -129,8 +167,7 @@ export function deriveRunView(events: RunEventItem[]) {
       }
       case 'run.completed':
         runStatus = 'completed';
-        endReason = 'run.budget_exceeded' === events.find(e => e.type === 'run.budget_exceeded')?.type
-          ? 'budget_exceeded' : 'final_answer';
+        endReason = events.some(e => e.type === 'run.budget_exceeded') ? 'budget_exceeded' : 'final_answer';
         if (typeof p.finalContentPreview === 'string') finalContent = p.finalContentPreview;
         break;
       case 'run.failed':

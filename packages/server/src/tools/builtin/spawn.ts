@@ -31,6 +31,8 @@ export interface SpawnDeps {
   maxSpawnsPerRun?: number;
   /** 子预算默认值与硬上限 */
   subBudget: { defaultSteps: number; defaultTokens: number; maxSteps: number; maxTokens: number };
+  /** 审查 P2：审批通道透传 — 子代理调用 approval 级工具不再恒被拒（安全默认拒绝改为跟随父级） */
+  approveTool?: import('../../kernel/agent-loop.js').AgentLoopOptions['approveTool'];
 }
 
 const GOAL_LIMIT = 10_000;
@@ -125,6 +127,7 @@ export function makeSpawnTool(deps: SpawnDeps): Tool {
         extraSystem,
         onEvent: ev => ctx.emit(ev),
         summarize: deps.summarize,
+        ...(deps.approveTool ? { approveTool: deps.approveTool } : {}),
       });
 
       const result = await loop.run();

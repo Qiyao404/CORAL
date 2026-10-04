@@ -46,10 +46,12 @@ export function createProgress(sink: ProgressSink = process.stderr) {
     },
 
     emitLog(message: string, level: LogLevel = 'info'): void {
+      // 审查 P3：与 _lib/PyPI 版同语义 — warning/err 别名归一
+      const norm = level === 'warning' ? 'warn' : level === 'err' ? 'error' : level;
       const prefix =
-        level === 'warn' ? '[WARN] ' :
-        level === 'error' ? '[ERROR] ' :
-        level === 'debug' ? '[DEBUG] ' : '';
+        norm === 'warn' ? '[WARN] ' :
+        norm === 'error' ? '[ERROR] ' :
+        norm === 'debug' ? '[DEBUG] ' : '';
       write(`${prefix}${message}`);
     },
 

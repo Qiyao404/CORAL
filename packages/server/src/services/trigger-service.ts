@@ -53,16 +53,22 @@ export function nextCronTime(expr: string, from = new Date()): Date | null {
   if (fields.some(f => f === null)) return null;
 
   // 从下一分钟开始逐分钟前进（上限 366 天 — 个人调度足够）
+  // 日(DOM)与周(DOW)字段：标准 cron 语义 — 两者都受限(*)时取 OR；其一受限时取 AND
+  const domRestricted = !fields[2]!.has(0) || !fields[2]!.has(31) || fields[2]!.size < 31;
+  const dowRestricted = fields[4]!.size < 7;
+  const useOr = domRestricted && dowRestricted;
   const t = new Date(from);
   t.setSeconds(0, 0);
   t.setMinutes(t.getMinutes() + 1);
   for (let i = 0; i < 366 * 24 * 60; i++) {
+    const dom = fields[2]!.has(t.getDate());
+    const dow = fields[4]!.has(t.getDay());
+    const dayMatch = useOr ? (dom || dow) : (dom && dow);
     if (
       fields[0]!.has(t.getMinutes()) &&
       fields[1]!.has(t.getHours()) &&
-      fields[2]!.has(t.getDate()) &&
       fields[3]!.has(t.getMonth() + 1) &&
-      fields[4]!.has(t.getDay())
+      dayMatch
     ) return t;
     t.setMinutes(t.getMinutes() + 1);
   }

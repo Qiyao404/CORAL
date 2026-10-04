@@ -78,7 +78,7 @@ output_schema:
           type: boolean
         structure_complete:
           type: boolean
-execution_mode: hybrid
+execution_mode: script  # 审查 P2 诚实化：脚本直接生成文档；要点扩写由上游 LLM 节点完成
 human_gate: false
 estimated_duration_ms: 20000
 cost_level: low

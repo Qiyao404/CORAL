@@ -659,6 +659,11 @@ def export_md(data, output_path, year, month, summary=None):
 
 
 def _default_output_dir():
+    # 审查 P2：graph run 绑定工作区时产物落工作区（CORAL_OUTPUT_DIR 由平台注入）
+    env_dir = os.environ.get("CORAL_OUTPUT_DIR")
+    if env_dir:
+        os.makedirs(env_dir, exist_ok=True)
+        return env_dir
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
 
 

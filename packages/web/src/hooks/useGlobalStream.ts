@@ -9,6 +9,7 @@ export function useGlobalStream() {
   const [runningTasks, setRunningTasks] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const disposedRef = useRef(false); // 审查 P1：cleanup 后拦截 onclose 重连
   const taskStateRef = useRef<Map<string, string>>(new Map());
 
   const recountRunning = useCallback(() => {
@@ -24,7 +25,17 @@ export function useGlobalStream() {
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const ws = new WebSocket(`${protocol}//${window.location.host}/ws/events`);
 
-      ws.onopen = () => setWsConnected(true);
+      ws.onopen = () => {
+        setWsConnected(true);
+        // 审查 P3：重连对账 — 断线期间结束的任务不能永远停在 planning/executing（侧栏虚高）
+        taskStateRef.current.clear();
+        import('../api/client').then(({ api }) => {
+          api.listTasks({ status: 'executing' }).then((d: any) => {
+            for (const t of d.items ?? []) taskStateRef.current.set(t.id, 'executing');
+            recountRunning();
+          }).catch(() => {});
+        }).catch(() => {});
+      };
       ws.onmessage = (msg) => {
         try {
           const ev: CoralEvent = JSON.parse(msg.data);
@@ -46,8 +57,9 @@ export function useGlobalStream() {
       };
       ws.onclose = () => {
         setWsConnected(false);
+        if (disposedRef.current) return; // 审查 P1：cleanup 后不复活
         if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-        reconnectTimer.current = setTimeout(connect, 3000);
+        reconnectTimer.current = setTimeout(() => { if (!disposedRef.current) connect(); }, 3000);
       };
       ws.onerror = () => ws.close();
       wsRef.current = ws;
@@ -55,8 +67,10 @@ export function useGlobalStream() {
   }, [recountRunning]);
 
   useEffect(() => {
+    disposedRef.current = false;
     connect();
     return () => {
+      disposedRef.current = true;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
     };

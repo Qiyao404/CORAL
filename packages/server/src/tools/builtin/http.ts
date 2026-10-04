@@ -64,26 +64,54 @@ export const httpFetchTool: Tool = {
       const contentType = response.headers.get('content-type') ?? '';
       let bodyText = '';
       let truncated = false;
-      if (method !== 'HEAD') {
-        const raw = await response.text();
-        if (raw.length > MAX_BODY_BYTES) {
-          bodyText = raw.slice(0, MAX_BODY_BYTES);
-          truncated = true;
-        } else {
-          bodyText = raw;
+      let byteLength = 0;
+      if (method !== 'HEAD' && response.body) {
+        // 审查 P2：流式读取 + 超限即断（原 response.text() 先全量进内存，大响应 OOM）
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        const onParentAbort = () => { void reader.cancel().catch(() => {}); };
+        ctx.signal.addEventListener('abort', onParentAbort, { once: true });
+        try {
+          for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            byteLength += value.byteLength;
+            if (total + value.byteLength <= MAX_BODY_BYTES) {
+              chunks.push(value);
+              total += value.byteLength;
+            } else {
+              truncated = true;
+              const room = MAX_BODY_BYTES - total;
+              if (room > 0) { chunks.push(value.slice(0, room)); total += room; }
+              await reader.cancel().catch(() => {});
+              break;
+            }
+            // 二进制嗅探：首块前 8KB 出现 NUL 即判二进制
+            if (chunks.length === 1) {
+              const head = Buffer.from(chunks[0].slice(0, 8192)).toString('utf-8');
+              if (head.includes('\0')) {
+                await reader.cancel().catch(() => {});
+                return toolOk({
+                  status: response.status,
+                  ok: response.ok,
+                  url: response.url,
+                  contentType,
+                  binary: true,
+                  byteLength,
+                  note: '二进制响应体未回传（可用 shell_run + curl 落盘处理）',
+                });
+              }
+            }
+          }
+        } finally {
+          ctx.signal.removeEventListener('abort', onParentAbort);
         }
-        // 二进制嗅探：前 8KB 出现 NUL 视为二进制，不回传内容
-        if (bodyText.slice(0, 8192).includes('\0')) {
-          return toolOk({
-            status: response.status,
-            ok: response.ok,
-            url: response.url,
-            contentType,
-            binary: true,
-            byteLength: raw.length,
-            note: '二进制响应体未回传（可用 shell_run + curl 落盘处理）',
-          });
-        }
+        bodyText = chunks.length ? Buffer.concat(chunks).toString('utf-8') : '';
+      } else if (method !== 'HEAD') {
+        bodyText = await response.text();
+        byteLength = bodyText.length;
+        if (byteLength > MAX_BODY_BYTES) { bodyText = bodyText.slice(0, MAX_BODY_BYTES); truncated = true; }
       }
 
       return toolOk({
@@ -93,7 +121,7 @@ export const httpFetchTool: Tool = {
         contentType,
         body: bodyText,
         truncated,
-        byteLength: bodyText.length,
+        byteLength,
       });
     } catch (err: any) {
       if (ctx.signal.aborted) {

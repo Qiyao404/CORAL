@@ -200,7 +200,8 @@ export class AgentLoop {
         for (const call of response.toolCalls) {
           toolCallCount++;
           const tool = toolMap.get(call.name);
-          if (call.name === 'todo_write' || tool?.name === 'todo_write') todoWritten = true;
+          // 审查 P3：别名（todo/todos/update_todo）经 alias 纠正后也算已建清单
+          if (tool?.name === 'todo_write' || call.name === 'todo_write') todoWritten = true;
 
           this.emit('tool.call_started', {
             step: steps,
@@ -335,6 +336,8 @@ export class AgentLoop {
         if (!approved) {
           return { ok: false, error: { code: 'APPROVAL_DENIED', message: `工具 ${resolvedTool.name} 需要人工审批，当前未获批准`, retryable: false } };
         }
+        // 审查 P2：审批等待期间 run 可能已被取消 — 复查后再执行（防取消后落盘）
+        this.options.signal.throwIfAborted?.();
       }
       const result = await resolvedTool.invoke(call.input, makeToolContext({
         runId: this.options.runId,
@@ -452,8 +455,9 @@ export class AgentLoop {
   private emit(type: string, payload?: Record<string, any>): void {
     // agentId 注入：主循环 'main'，sub-agent 各自 id（M1-4 — 事件流区分来源）
     const enriched: Record<string, any> = { agentId: this.options.agentId, ...payload };
-    // 清单跟踪：todo_write 的每次全量替换都记下最新版本（终态收口用）
-    if (type === 'todo.updated' && Array.isArray(enriched.todos)) {
+    // 清单跟踪：todo_write 的每次全量替换都记下最新版本（终态收口用）。
+    // 审查 P3：子代理（agentId 不同）的清单不覆盖主循环的 — 否则终态收口收的是子代理清单
+    if (type === 'todo.updated' && Array.isArray(enriched.todos) && enriched.agentId === this.options.agentId) {
       this.lastTodos = enriched.todos;
     }
     try {

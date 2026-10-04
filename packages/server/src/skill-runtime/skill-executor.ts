@@ -240,7 +240,9 @@ export class SkillExecutor {
       const scriptTimeoutMs = manifest.scriptTimeoutMs || platformConfig.sandboxTimeoutMs || 30000;
 
       const isWin = platform() === 'win32';
-      const child = spawn(runtime, [scriptPath], {
+      // 审查 P2：Windows shell:true 下含空格路径需引号（否则 cmd 拆错参数）
+      const isWinShell = platform() === 'win32';
+      const child = spawn(isWinShell ? `"${runtime}"` : runtime, isWinShell ? [`"${scriptPath}"`] : [scriptPath], {
         cwd: manifest.skillDirPath,
         stdio: ['pipe', 'pipe', 'pipe'],
         // M0-3：不再使用 spawn 的 timeout 选项 — Windows shell:true 下它只杀 shell，
@@ -289,7 +291,17 @@ export class SkillExecutor {
       });
       // 审查 P2：按 Buffer 累积最后统一解码（按 chunk toString 会切断多字节 UTF-8 字符）
       const stdoutChunks: Buffer[] = [];
-      child.stdout.on('data', (data: Buffer) => { stdoutChunks.push(data); });
+      let stdoutBytes = 0;
+      const MAX_STDOUT_BYTES = 8 * 1024 * 1024; // 审查 P3：stdout 上限（与 stderr 保护同级）
+      child.stdout.on('data', (data: Buffer) => {
+        if (stdoutBytes + data.byteLength <= MAX_STDOUT_BYTES) {
+          stdoutChunks.push(data);
+          stdoutBytes += data.byteLength;
+        } else if (stdoutBytes <= MAX_STDOUT_BYTES) {
+          stdoutChunks.push(Buffer.from(`\n[stdout 超过 ${MAX_STDOUT_BYTES / 1024 / 1024}MB，已截断]`));
+          stdoutBytes = MAX_STDOUT_BYTES + 1;
+        }
+      });
       child.stderr.on('data', (data: Buffer) => {
         const { progressEvents, logLines } = parser.feed(data);
         for (const ev of progressEvents) {
@@ -379,8 +391,17 @@ export class SkillExecutor {
         }
 
         if (code !== 0) {
-          // 退出码非 0：脚本进程异常（可能瞬时 — 网页抓取类脚本的站点抖动），保持可重试
-          resolve(this.errorResult(`脚本执行失败 (退出码: ${code})`, startTime, manifest, 'SCRIPT_EXIT_NONZERO', true));
+          // 审查 P2：确定性错误不重试 — stderr 含 [ERROR]（脚本显式报错，如参数缺失）
+          // 且 stdout 是 error JSON 时降级为不可重试（站点抖动类仍保持可重试）
+          let deterministic = false;
+          try {
+            const out = JSON.parse(stdout.trim());
+            deterministic = Boolean(out && typeof out === 'object' && 'error' in out);
+          } catch { /* stdout 非 JSON — 视为进程级失败 */ }
+          resolve(this.errorResult(
+            `脚本执行失败 (退出码: ${code})${deterministic ? `: ${String((JSON.parse(stdout.trim()) as any).error ?? '').slice(0, 200)}` : ''}`,
+            startTime, manifest, 'SCRIPT_EXIT_NONZERO', !deterministic
+          ));
           return;
         }
 

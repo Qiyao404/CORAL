@@ -402,8 +402,9 @@ export class RunEngine {
       tools.push(...docxTools);
     }
     tools = tools.filter(t => {
-      if (!t.name.startsWith('fs_') && t.name !== 'shell_run') return true; // 非工作区工具不受影响
-      if (perm === 'readonly') return t.name === 'fs_list' || t.name === 'fs_read' || t.name === 'fs_search';
+      if (!t.name.startsWith('fs_') && t.name !== 'shell_run' && t.name !== 'docx_write') return true; // 非工作区工具不受影响
+      // 审查 P2：readonly 档是"读"档 — docx_write 是写工具，不得只靠审批位放行
+      if (perm === 'readonly') return t.name === 'fs_list' || t.name === 'fs_read' || t.name === 'fs_search' || t.name === 'docx_read';
       return true;
     });
     if (perm === 'auto') {
@@ -422,6 +423,8 @@ export class RunEngine {
       llm: this.deps.llm,
       summarize: async transcript => this.summarizeTranscript(transcript),
       baseTools: tools,
+      // 审查 P2：审批通道透传（与主循环同一 requestApproval — waiting_human 语义一致）
+      ...(workspace ? { approveTool: (tool, inp, callId) => this.requestApproval(runId, tool, inp, callId, workspace) } : {}),
       depth: 0,
       spawnCounter: { count: 0 },
       subBudget: {

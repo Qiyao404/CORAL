@@ -17,13 +17,17 @@ import { join } from 'path';
 
 const MAX_DOCX_BYTES = 10 * 1024 * 1024;
 
+/** 审查 P2：结果缓存 — spawnSync 阻塞事件循环，探测只允许发生一次 */
+const PYTHON_CMD_CACHE: { cmd?: string } = {};
 function detectPython(): string {
+  if (PYTHON_CMD_CACHE.cmd) return PYTHON_CMD_CACHE.cmd;
   const isWin = process.platform === 'win32';
   for (const cmd of isWin ? ['python', 'py', 'python3'] : ['python3', 'python']) {
     const r = spawnSync(cmd, ['--version'], { stdio: 'ignore', shell: isWin });
-    if (r.status === 0) return cmd;
+    if (r.status === 0) { PYTHON_CMD_CACHE.cmd = cmd; return cmd; }
   }
-  return isWin ? 'python' : 'python3';
+  PYTHON_CMD_CACHE.cmd = isWin ? 'python' : 'python3';
+  return PYTHON_CMD_CACHE.cmd;
 }
 
 /** 调 docx_text.py（JSON stdin → JSON stdout） */

@@ -213,9 +213,18 @@ export class McpClientService {
         : { type: 'object' },
       source: 'mcp' as any,
       permission: 'auto',
-      async invoke(input: any): Promise<ToolResult> {
+      async invoke(input: any, ctx?: any): Promise<ToolResult> {
         try {
-          const r = await client.callTool({ name: t.name, arguments: input ?? {} });
+          // 审查 P2：MCP 调用接超时与取消（防对端挂起导致 run 永久卡在此工具）
+          const TIMEOUT = 60_000;
+          const timed = (ctx?.signal ? ctx.signal : undefined);
+          const r = await Promise.race([
+            client.callTool({ name: t.name, arguments: input ?? {} }),
+            new Promise<never>((_, rej) => {
+              const timer = setTimeout(() => rej(new Error(`MCP 工具 ${t.name} 超时（${TIMEOUT / 1000}s）`)), TIMEOUT);
+              timed?.addEventListener('abort', () => { clearTimeout(timer); rej(new Error('已取消')); }, { once: true });
+            }),
+          ]);
           const text = Array.isArray(r.content)
             ? r.content.map((c: any) => (c.type === 'text' ? c.text : JSON.stringify(c))).join('\n')
             : JSON.stringify(r);

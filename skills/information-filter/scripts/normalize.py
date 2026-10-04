@@ -357,6 +357,11 @@ def write_csv(items_with_decision: list[dict], output_path: str) -> None:
 
 
 def _default_output_dir():
+    # 审查 P2：graph run 绑定工作区时产物落工作区（CORAL_OUTPUT_DIR 由平台注入）
+    env_dir = os.environ.get("CORAL_OUTPUT_DIR")
+    if env_dir:
+        os.makedirs(env_dir, exist_ok=True)
+        return env_dir
     return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
 
 
@@ -373,7 +378,7 @@ def coral_main():
         items = normalize_input(inp)
         if inp.get("dry_run"):
             items = items[:5]
-            emit_log("dry_run 模式：仅评估前 5 条", level="info")
+            emit_log("dry_run 模式：仅评估前 5 条（不写文件）", level="info")
 
         # 给每条加 index
         for i, it in enumerate(items):
@@ -432,6 +437,10 @@ def coral_main():
         emit_progress("writing", "写出 MD/CSV 文件", percent=92)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         out_dir = _default_output_dir()
+
+        if inp.get('dry_run'):
+            real_stdout.write(json.dumps({'ok': True, 'dry_run': True, 'evaluated': len(items), 'note': '试运行不落盘'}, ensure_ascii=False))
+            return
         md_out = inp.get("output_path") or os.path.join(out_dir, f"信息筛选_{ts}.md")
         csv_out = os.path.splitext(md_out)[0] + ".csv"
 

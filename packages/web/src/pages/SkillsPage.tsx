@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Pencil, Trash2, Play, Plus, ShieldAlert, AlertTriangle } from 'lucide-react';
 import { api } from '../api/client';
@@ -42,10 +42,15 @@ export default function SkillsPage() {
   const [deleteConfirmName, setDeleteConfirmName] = useState('');
   const [deleteError, setDeleteError] = useState('');
 
+  const loadSeq = useRef(0);
   const loadSkills = () => {
+    const mySeq = ++loadSeq.current; // 审查 P3：筛选竞态守卫
     setLoading(true);
     api.listSkills(filter ? { source: filter } : undefined)
-      .then(res => setSkills(res.items || []))
+      .then(res => {
+        if (mySeq !== loadSeq.current) return;
+        setSkills(res.items || []);
+      })
       .catch(() => setSkills([]))
       .finally(() => setLoading(false));
   };

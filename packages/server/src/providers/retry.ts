@@ -53,6 +53,8 @@ export interface WithRetryOptions {
   /** 默认全部可重试；传入分类器实现「abort/permanent 立即抛出」 */
   isRetryable?: (err: unknown) => boolean;
   onRetry?: (attempt: number, delayMs: number, err: unknown) => void;
+  /** 审查 P3：退避可被取消打断（取消后不再干等最长 8s） */
+  signal?: AbortSignal;
 }
 
 /**
@@ -78,9 +80,21 @@ export async function withRetry<T>(
       }
       const delay = jitterDelayMs(attempt, policy);
       opts.onRetry?.(attempt + 1, delay, err);
-      await new Promise(r => setTimeout(r, delay));
+      if (opts.signal?.aborted) throw asAbortIfPossible(lastErr);
+      await new Promise(r => {
+        const t = setTimeout(r, delay);
+        opts.signal?.addEventListener('abort', () => { clearTimeout(t); r(void 0); }, { once: true });
+      });
+      if (opts.signal?.aborted) throw asAbortIfPossible(lastErr);
     }
   }
+}
+
+/** 取消打断重试时抛 AbortError（保持与 fn 内抛出同语义） */
+function asAbortIfPossible(err: unknown): never {
+  const e = new Error('aborted') as Error & { name: string };
+  e.name = 'AbortError';
+  throw e;
 }
 
 export function describeError(err: unknown): string {

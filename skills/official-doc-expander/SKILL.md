@@ -55,7 +55,7 @@ output_schema:
       description: 扩写后的完整公文正文（预览用）
   required:
     - ok
-execution_mode: hybrid
+execution_mode: script  # 审查 P2 诚实化：脚本直接生成文档；要点扩写由上游 LLM 节点完成
 human_gate: false
 estimated_duration_ms: 45000
 cost_level: low

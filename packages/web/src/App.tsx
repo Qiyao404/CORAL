@@ -153,6 +153,14 @@ export default function App() {
               <Route path="/approvals" element={<ApprovalsPage />} />
               <Route path="/connectors" element={<ConnectorsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="*" element={
+                <div className="flex items-center justify-center h-full">
+                  <div className="text-center">
+                    <h2 className="text-lg font-heading text-fg-primary mb-1">页面不存在</h2>
+                    <p className="text-xs text-fg-muted">地址可能已变更 — 请从左侧导航进入</p>
+                  </div>
+                </div>
+              } />
             </Routes>
           </ErrorBoundary>
         </main>

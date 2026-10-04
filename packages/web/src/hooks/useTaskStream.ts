@@ -51,6 +51,7 @@ export function useTaskStream(taskId?: string) {
   const [sseConnected, setSseConnected] = useState(false);
 
   const seenIds = useRef<Set<string>>(new Set());
+  const disposedRef = useRef(false); // 审查 P1：cleanup 后拦截 onclose 重连
   const wsRef = useRef<WebSocket | null>(null);
   const sseRef = useRef<EventSource | null>(null);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -145,8 +146,10 @@ export function useTaskStream(taskId?: string) {
 
       ws.onclose = () => {
         setWsConnected(false);
+        // 审查 P1：cleanup 触发的 close 不再重连（否则 3 秒后以旧 taskId 闭包复活僵尸 WS）
+        if (disposedRef.current) return;
         if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-        reconnectTimer.current = setTimeout(connectWs, 3000);
+        reconnectTimer.current = setTimeout(() => { if (!disposedRef.current) connectWs(); }, 3000);
       };
 
       ws.onerror = () => { ws.close(); };
@@ -161,9 +164,8 @@ export function useTaskStream(taskId?: string) {
       const sse = new EventSource(`/api/tasks/${taskId}/stream`);
       sse.onopen = () => setSseConnected(true);
       sse.onerror = () => {
+        // 审查 P2：不手动 close — close 后浏览器不再自动重连，SSE 通道永久死亡
         setSseConnected(false);
-        sse.close();
-        // EventSource 会自动重连，无需手动重启
       };
       // 在所有事件类型上挂载 listener（事件名 = 事件 type）
       const types = [
@@ -183,9 +185,17 @@ export function useTaskStream(taskId?: string) {
   }, [taskId, pushEvent]);
 
   useEffect(() => {
+    disposedRef.current = false;
+    // 审查 P1：taskId 变化（路由复用组件）先清全部状态 — 旧任务的产物/事件不混入新任务
+    setEvents([]);
+    setArtifacts([]);
+    setLogs([]);
+    setProgressByAgent({});
+    seenIds.current = new Set();
     connectWs();
     connectSse();
     return () => {
+      disposedRef.current = true;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       wsRef.current?.close();
       sseRef.current?.close();

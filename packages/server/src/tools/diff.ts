@@ -41,7 +41,21 @@ function diffOps(a: string[], b: string[]): Op[] {
  * 生成 unified diff 文本（--- / +++ / @@ 头 + 变更行与上下文行）。
  * 内容一致时返回空字符串；空文件到有内容也正确（行号从 1 起）。
  */
+const LCS_LINE_LIMIT = 4000; // 审查 P2：DP 矩阵 O(n·m)，超限降级防审批卡冻结/内存爆
+
 export function unifiedDiff(before: string, after: string, path: string, contextLines = 3): string {
+  // 审查 P2：LCS DP 是 O(行数×行数) — 超限降级为首尾截断对比（防审批卡同步计算打爆内存）
+  const LIMIT = 4000;
+  if (before.split('\n').length > LIMIT || after.split('\n').length > LIMIT) {
+    const head = (t: string) => t.split('\n').slice(0, 60);
+    const tail = (t: string) => t.split('\n').slice(-60);
+    return [
+      '[文件过大，已降级为首尾各 60 行对比]',
+      `--- a/${path} (head)`, ...head(before).map(l => `-${l}`),
+      `+++ b/${path} (tail)`, ...tail(after).map(l => `+${l}`),
+    ].join('\n');
+  }
+
   if (before === after) return '';
 
   // 空字符串 split('\n') 得 ['']（一个空行）— 空文件语义下应为 0 行
