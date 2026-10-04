@@ -15,6 +15,7 @@
     "@anthropic-ai/sdk": "^0.131.0",
     "@fastify/cors": "^10.0.0",
     "@fastify/websocket": "^11.0.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@types/js-yaml": "^4.0.9",
     "better-sqlite3": "^12.11.1",
     "chokidar": "^4.0.0",
@@ -23,7 +24,8 @@
     "gray-matter": "^4.0.3",
     "js-yaml": "^5.4.2",
     "nanoid": "^5.0.0",
-    "openai": "^4.80.0"
+    "openai": "^4.80.0",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^9.6.0",
