@@ -200,6 +200,25 @@ export const api = {
   resumeRun: (runId: string) => request<any>(`/runs/${runId}/resume`, { method: 'POST' }),
   listPendingApprovals: () => request<any>('/approvals/pending'),
 
+  // ─── M3：连接器（MCP + 触发器）────────────────────────────
+  listMcpServers: () => request<any>('/mcp/servers'),
+  addMcpServer: (payload: { name: string; transport: 'stdio' | 'http'; command?: string; args?: string[]; url?: string; env?: Record<string, string> }) =>
+    request<any>('/mcp/servers', { method: 'POST', body: JSON.stringify(payload) }),
+  toggleMcpServer: (id: string, enabled: boolean) =>
+    request<any>(`/mcp/servers/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+  reconnectMcpServer: (id: string) =>
+    request<any>(`/mcp/servers/${id}/reconnect`, { method: 'POST' }),
+  deleteMcpServer: (id: string) =>
+    request<any>(`/mcp/servers/${id}`, { method: 'DELETE' }),
+  getClaudeConfig: () => request<any>('/mcp/claude-desktop-config'),
+  listTriggers: () => request<any>('/triggers'),
+  createTrigger: (payload: { name: string; kind: string; spec: string; action: { mode: string; goal: string } }) =>
+    request<any>('/triggers', { method: 'POST', body: JSON.stringify(payload) }),
+  toggleTrigger: (id: string, enabled: boolean) =>
+    request<any>(`/triggers/${id}`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+  deleteTrigger: (id: string) =>
+    request<any>(`/triggers/${id}`, { method: 'DELETE' }),
+
   // ─── M1-10：工作区 ────────────────────────────────────────
   listWorkspaces: () => request<any>('/workspaces'),
   createWorkspace: (payload: { name: string; dir: string; permission?: string }) =>

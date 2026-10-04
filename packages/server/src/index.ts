@@ -16,6 +16,8 @@ import { RunEngine } from './kernel/run-engine.js';
 import { GraphRunService } from './services/graph-run-service.js';
 import { McpClientService } from './services/mcp-client-service.js';
 import { registerMcpRoutes } from './api/mcp.routes.js';
+import { TriggerService } from './services/trigger-service.js';
+import { registerTriggerRoutes } from './api/trigger.routes.js';
 import { RunStore } from './store/run-store.js';
 import { RunEventStore } from './store/run-event-store.js';
 import { CheckpointStore } from './store/checkpoint-store.js';
@@ -154,6 +156,26 @@ async function main() {
   registerCompanyProfileRoutes(app);
   registerRunRoutes(app, runEngine, graphRunService);
   registerMcpRoutes(app, mcpClient);
+
+  // M3-5：触发器 — fire 即创建 run（free/graph 均可），60s 调度循环
+  const triggerService = new TriggerService();
+  triggerService.bind({
+    startRun: async (action, _vars) => {
+      if (action.mode === 'graph') {
+        const { parseAndValidateGraphYaml } = await import('./kernel/graph/dsl.js');
+        const parsed = parseAndValidateGraphYaml(action.graph ?? '');
+        if (!parsed.ok) throw new Error(`graph 校验失败: ${parsed.issues.map(i => i.message).join('; ')}`);
+        return graphRunService.startGraphRun({
+          goal: action.goal,
+          graph: parsed.graph!,
+          workspaceId: action.workspaceId,
+        });
+      }
+      return runEngine.startRun({ goal: action.goal, workspaceId: action.workspaceId });
+    },
+  });
+  triggerService.startLoop();
+  registerTriggerRoutes(app, triggerService);
   registerWorkspaceRoutes(app);
   registerWorkspaceFileRoutes(app);
   registerMemoryRoutes(app);
