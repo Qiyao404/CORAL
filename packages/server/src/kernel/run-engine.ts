@@ -120,6 +120,7 @@ export class RunEngine {
     this.deps.runStore.insert({
       id: runId, goal, mode: 'free', sessionId, budget,
       ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
+      ...(workspace ? { workspaceId: workspace.id } : {}), // 终审 P2：fork 继承去单点（事件反查不再是唯一来源）
     });
     this.emitRunEvent(runId, 'run.created', {
       goal,
@@ -181,7 +182,7 @@ export class RunEngine {
     if (!run) return null;
     return {
       run,
-      events: this.deps.eventStore.listByRun(runId, 0, 2000),
+      events: this.deps.eventStore.listByRun(runId, 0, 100000).slice(-2000), // 终审 P2：取尾部
       checkpoints: this.deps.checkpointStore.listByRun(runId),
     };
   }
@@ -207,20 +208,22 @@ export class RunEngine {
 
   /** 审查 P1：剔除末尾悬空的 assistant(toolCalls)（取消时工具结果缺失会毒化续接请求） */
   private sanitizeSessionHistory(messages: import('../providers/types.js').ChatMessage[]): import('../providers/types.js').ChatMessage[] {
+    // 终审 P1：与 agent-loop.sanitizeForCheckpoint 同规则 — 按"组"校验完整性，
+    // 部分应答组（多工具块中途取消）也移除（REG-04 补全）
     const out = [...messages];
-    const last = out[out.length - 1];
-    if (last?.role === 'tool') {
-      // 孤儿 tool 结果（前一条不是带其 toolCallId 的 assistant）→ 连同前面的组一起修剪
-      const prev = out[out.length - 2];
-      if (!(prev?.role === 'assistant' && (prev.toolCalls ?? []).some(c => c.id === (last as any).toolCallId))) {
-        out.pop();
-        return this.sanitizeSessionHistory(out);
+    for (let i = out.length - 1; i >= 0; i--) {
+      const m = out[i];
+      if (m.role !== 'assistant' || !m.toolCalls?.length) continue;
+      const ids = new Set(m.toolCalls.map(c => c.id));
+      const answeredIds = new Set(
+        out.slice(i + 1).filter(x => x.role === 'tool' && ids.has((x as any).toolCallId)).map(x => (x as any).toolCallId)
+      );
+      if (!m.toolCalls.every(c => answeredIds.has(c.id))) {
+        out.splice(i, 1);
+        for (let j = out.length - 1; j >= i; j--) {
+          if (out[j].role === 'tool' && ids.has((out[j] as any).toolCallId)) out.splice(j, 1);
+        }
       }
-      return out;
-    }
-    if (last?.role === 'assistant' && last.toolCalls?.length) {
-      // 悬空 assistant(toolCalls)（无任何对应 tool 结果）→ 移除
-      return this.sanitizeSessionHistory(out.slice(0, -1));
     }
     return out;
   }
@@ -357,7 +360,11 @@ export class RunEngine {
   private seqCounters = new Map<string, number>();
 
   private nextSeq(runId: string): number {
-    const next = (this.seqCounters.get(runId) ?? 0) + 1;
+    // 终审 P2：REG-09 对齐 graph 侧 — 惰性从持久层播种（重启后 cancel 等事件不再撞号）
+    if (!this.seqCounters.has(runId)) {
+      this.seqCounters.set(runId, this.deps.eventStore.maxSeq(runId));
+    }
+    const next = this.seqCounters.get(runId)! + 1;
     this.seqCounters.set(runId, next);
     return next;
   }
@@ -476,9 +483,10 @@ export class RunEngine {
         const oldText = String(input?.old_text ?? '');
         const newText = String(input?.new_text ?? '');
         if (!oldText || !before.includes(oldText)) return null;
+        // 终审 P2：函数式替换 — new_text 含 $&/$`/$' 时字符串模式会静默改写内容
         const after = input?.replace_all
           ? before.split(oldText).join(newText)
-          : before.replace(oldText, newText);
+          : before.replace(oldText, () => newText);
         return unifiedDiff(before, after, String(input?.path ?? ''));
       }
     } catch {

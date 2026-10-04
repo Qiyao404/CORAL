@@ -113,7 +113,8 @@ async function main() {
   }
 
   // 创建 Fastify 应用
-  const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024 });
+  // 终审 P1：forceCloseConnections — 裸 SSE 连接会让 app.close() 永久挂起
+  const app = Fastify({ logger: false, bodyLimit: 8 * 1024 * 1024, forceCloseConnections: true });
 
   // 容忍空 JSON body（Fastify 默认对 Content-Type: application/json + 空 body 返回 415）
   // 影响所有"动作型 POST"如 commit/activate/cancel — 让它们在无 body 时也能正常通过

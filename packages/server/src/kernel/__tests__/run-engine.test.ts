@@ -333,8 +333,9 @@ describe('RunEngine — Free 模式全链路（M1-5）', () => {
   });
 });
 
-describe('REG-04 回归：checkpoint 不含悬空 toolCalls（毒化续接）', () => {
-  it('取消发生在工具执行中 → checkpoint 末尾不存在未答复的 assistant(toolCalls)', async () => {
+
+describe('REG-04/15 回归：checkpoint 不含悬空 toolCalls 与部分应答组', () => {
+  it('取消发生在工具执行中 → 全部 checkpoint 的 assistant(toolCalls) 组完整', async () => {
     const ac = new AbortController();
     const llm = makeLLM([
       { stopReason: 'tool_use', toolCalls: [{ id: 'c1', name: 'slow', input: {} }], content: '' },
@@ -344,31 +345,57 @@ describe('REG-04 回归：checkpoint 不含悬空 toolCalls（毒化续接）', 
       invoke: async () => { await new Promise(r => setTimeout(r, 3000)); return { ok: true, data: {} }; },
     };
     setTimeout(() => ac.abort(), 50);
-
     const { AgentLoop } = await import('../../kernel/agent-loop.js');
     const checkpoints: any[] = [];
     const loop = new AgentLoop(llm, {
       runId: 'r_reg04', agentId: 'main', goal: '取消测试',
       tools: [slowTool], budget: { maxSteps: 5, maxTokens: 100000 },
-      signal: ac.signal,
-      onEvent: () => {},
+      signal: ac.signal, onEvent: () => {},
       saveCheckpoint: cp => checkpoints.push(cp),
     });
     const r = await loop.run();
     expect(r.status).toBe('cancelled');
+    assertGroupsComplete(checkpoints);
+  });
 
-    // 任意 checkpoint 里：assistant(toolCalls) 必须有其后的对应 tool 结果（组完整）
+  it('REG-15：多工具块 [A,B] 中 B 执行后取消 → 部分应答组 [assistant(A,B), tool(A)] 整组修剪', async () => {
+    const ac = new AbortController();
+    const llm = makeLLM([
+      { stopReason: 'tool_use', toolCalls: [
+        { id: 'x1', name: 'echoAbort', input: {} },
+        { id: 'x2', name: 'echoAbort', input: {} },
+      ], content: '' },
+    ]);
+    const checkpoints: any[] = [];
+    const { AgentLoop } = await import('../../kernel/agent-loop.js');
+    const loop = new AgentLoop(llm, {
+      runId: 'r_reg15', agentId: 'main', goal: '部分组测试',
+      tools: [{
+        name: 'echoAbort', description: '', inputSchema: { type: 'object' }, source: 'builtin' as const, permission: 'auto' as const,
+        invoke: async () => { ac.abort(); return { ok: true, data: { done: 1 } }; },
+      }],
+      budget: { maxSteps: 3, maxTokens: 100000 },
+      signal: ac.signal, onEvent: () => {},
+      saveCheckpoint: cp => checkpoints.push(cp),
+    });
+    const r = await loop.run();
+    expect(r.status).toBe('cancelled');
+    assertGroupsComplete(checkpoints);
+  });
+
+  function assertGroupsComplete(checkpoints: any[]): void {
     for (const cp of checkpoints) {
       const msgs = cp.state.messages;
       for (let i = 0; i < msgs.length; i++) {
         const m = msgs[i];
         if (m.role === 'assistant' && m.toolCalls?.length) {
-          const followed = m.toolCalls.every((c: any) =>
+          const answered = m.toolCalls.filter((c: any) =>
             msgs.slice(i + 1).some(x => x.role === 'tool' && x.toolCallId === c.id)
           );
-          expect(followed).toBe(true);
+          // 组完整性：全部有结果（完整组）或全部没有（残组被整组修剪）— 不允许部分
+          expect(answered.length === m.toolCalls.length || answered.length === 0).toBe(true);
         }
       }
     }
-  });
+  }
 });

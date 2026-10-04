@@ -29,6 +29,9 @@
 | [REG-11](#reg-11) | 绑工作区后模型声称无法联网 | prompt | 上下文偏置压过能力清单 |
 | [REG-12](#reg-12) | 断线重连事件空洞 / REST 与 SSE 乱序 | web | 双通道合并无序 |
 | [REG-13](#reg-13) | patch 脚本断言失败未写盘，tsc 通过误判已修复 | 工作流 | 验证的是过程不是行为 |
+| [REG-14](#reg-14) | cron OR 语义误判（!has(0) 恒真），每周一变每天 | service | 值域假设未验证 |
+| [REG-15](#reg-15) | 多工具块中途取消的部分应答组漏网（REG-04 只堵了单工具情形） | kernel | 修复只覆盖最简场景 |
+| [REG-16](#reg-16) | 上轮补丁"成功"实际未生效（fire 推进/别名判定），终审才暴露 | 工作流 | 补丁验证不闭环 |
 
 ---
 
@@ -162,6 +165,29 @@
 
 
 | 构建产物（server/public）两次混入提交 — .gitignore 模式 `server/public` 在 add -A 后才生效且首次 amend 移除后又被重新构建 + add -A 带回 | M4-3 实录：**构建产物入库要用精确路径模式（`packages/server/public/`），且添加 ignore 必须发生在 git add 之前**；amend 后要 `git ls-files \| grep` 验证真的不在索引里 |
+
+
+<a name="reg-14"></a>
+## REG-14 · cron OR 语义误判（终审发现）
+
+**根因**：`domRestricted = !has(0) || !has(31) || size<31` —— DOM 取值域是 1-31，`0` 永不在集合里，`!has(0)` 恒真 → domRestricted 恒真 → `0 9 * * 1`（每周一）走 OR 分支 → 每天触发。反向用例（`0 9 1 * *` 每月1号）恰好走 AND 分支是对的，掩盖了 bug。
+**教训**：**边界假设要用取值域验证** —— 写"恒真/恒假"判断前把字段的合法取值域列出来。测试要覆盖最常见的正向用例（每周一），不只反向。
+**防回归检查**：[ ] cron 表达式改动必须带"每周一"正向用例。回归测试：trigger-service「REG-14 回归」。
+
+<a name="reg-15"></a>
+## REG-15 · 部分应答组漏网（终审发现，REG-04 修复不完整）
+
+**根因**：REG-04 只处理了"取消在第 1 个工具调用前"的情形（末条是 assistant）。多工具块 [A,B,C] 中 B 执行时取消 → messages 末尾是 tool(A)，两侧 sanitize 都放行 → 落下 `assistant([A,B,C]) + tool(A)` 的部分应答组 → 续接 400。
+**教训**：**修复配对结构类 bug 时，枚举所有"中断点"** —— 配对组的中断点不止一个（组前/组中/组后），每个都要有测试。回归测试 REG-15 用真实取消路径驱动 B 后取消。
+**防回归检查**：[ ] 改 sanitize 逻辑时，REG-15b 的 echoAbort 测试（第一个工具里 abort）必须仍绿。回归测试：run-engine「REG-15：多工具块」。
+
+<a name="reg-16"></a>
+## REG-16 · 补丁验证不闭环（终审发现两例）
+
+**现象**：上一轮修的"trigger fire 失败推进 next_fire_at"和"todoWritten 别名判定"，本轮终审发现实际未生效（前者补丁被后续脚本覆盖回旧文本，后者的修复逻辑本身不完整——toolMap 只含实名，别名调用时 tool 为 undefined）。
+**教训**：**补丁的验证要在"最终文件状态"上做，不是在"patch 脚本输出"上做** —— 每轮修复合入后，用 grep 重新确认关键修复点仍在；修复别名类问题必须沿着"调用→查找表→纠正"完整链路推演。
+**防回归检查**：[ ] 每轮修复 PR 合入后跑一遍 `grep` 清单（REG-01 stream tools / REG-05 stdin 解包 / fire 推进 / todoWritten 判定）
+- 工具化：可写一个 `scripts/check-regressions.mjs` 做 grep 式哨兵（CI 可跑）
 
 ## 模块 → 高频雷区地图
 

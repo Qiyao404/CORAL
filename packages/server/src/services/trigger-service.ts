@@ -54,7 +54,8 @@ export function nextCronTime(expr: string, from = new Date()): Date | null {
 
   // 从下一分钟开始逐分钟前进（上限 366 天 — 个人调度足够）
   // 日(DOM)与周(DOW)字段：标准 cron 语义 — 两者都受限(*)时取 OR；其一受限时取 AND
-  const domRestricted = !fields[2]!.has(0) || !fields[2]!.has(31) || fields[2]!.size < 31;
+  // 终审 P1 修复：取值域是 1-31，原 !has(0) 恒真导致"每周一"变"每天"
+  const domRestricted = fields[2]!.size < 31;
   const dowRestricted = fields[4]!.size < 7;
   const useOr = domRestricted && dowRestricted;
   const t = new Date(from);
@@ -214,8 +215,10 @@ export class TriggerService {
         .run(nowIso(), next ? next.toISOString() : null, nowIso(), row.id);
       return runId;
     } catch (err: any) {
-      stmt(`UPDATE schedules SET last_error = ?, updated_at = ? WHERE id = ?`)
-        .run(String(err?.message ?? err).slice(0, 500), nowIso(), row.id);
+      // 终审 P2：失败也推进 next_fire_at（永久性错误不再每 60s 热循环重试）
+      const nextAfterFail = this.computeNext(row.kind, row.spec);
+      stmt(`UPDATE schedules SET last_error = ?, next_fire_at = ?, updated_at = ? WHERE id = ?`)
+        .run(String(err?.message ?? err).slice(0, 500), nextAfterFail ? nextAfterFail.toISOString() : null, nowIso(), row.id);
       return null;
     }
   }

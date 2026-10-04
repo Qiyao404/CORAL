@@ -74,6 +74,7 @@ export function loadConfig(): PlatformConfig {
     llmMaxOutputTokens: envInt('LLM_MAX_OUTPUT_TOKENS', 8192),
     demoMode: process.argv.includes('--demo') || envBool('CORAL_DEMO_MODE', false),
     shellToolEnabled: envBool('SHELL_TOOL_ENABLED', false),
+    mcpStdioEnabled: envBool('MCP_STDIO_ENABLED', true), // 终审 P2：stdio=本机执行权限，默认开（个人工具）但可关
     runMaxSteps: envInt('RUN_MAX_STEPS', 40),
     runMaxTokens: envInt('RUN_MAX_TOKENS', 500_000),
     memoryDir: resolveDir(env('MEMORY_DIR', './data/memory')),

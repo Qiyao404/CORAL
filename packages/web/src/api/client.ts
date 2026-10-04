@@ -5,6 +5,8 @@ interface RequestOptions extends RequestInit {
   confirmBuiltin?: string;
   /** raw response（不解析 JSON） */
   raw?: boolean;
+  /** 终审 P1：超时毫秒（默认 30s；长操作如 AI 编排/技能测试/上传传 120000-300000） */
+  timeoutMs?: number;
 }
 
 async function request<T>(url: string, options?: RequestOptions): Promise<T> {
@@ -23,7 +25,8 @@ async function request<T>(url: string, options?: RequestOptions): Promise<T> {
   const res = await fetch(`${BASE_URL}${url}`, {
     ...options,
     headers,
-    signal: AbortSignal.timeout(30_000), // 审查 P3：默认 30s 超时（防后端挂起全页 pending）
+    // 终审 P1：调用方 signal 优先；默认 30s 但长操作（AI 编排/技能测试/上传）可覆盖
+    signal: options?.signal ?? AbortSignal.timeout(options?.timeoutMs ?? 30_000),
   });
   if (!res.ok) {
     const error = await res.json().catch(() => ({ error: '请求失败' }));
@@ -196,7 +199,7 @@ export const api = {
   validateGraph: (graph: string) =>
     request<any>('/graphs/validate', { method: 'POST', body: JSON.stringify({ graph }) }),
   compileGraph: (goal: string) =>
-    request<any>('/graphs/compile', { method: 'POST', body: JSON.stringify({ goal }) }),
+    request<any>('/graphs/compile', { method: 'POST', body: JSON.stringify({ goal }), timeoutMs: 180_000 }), // AI 编排含自愈重试
   listResumable: () => request<any>('/runs/graph/resumable'),
   resumeRun: (runId: string) => request<any>(`/runs/${runId}/resume`, { method: 'POST' }),
   listPendingApprovals: () => request<any>('/approvals/pending'),

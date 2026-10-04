@@ -33,11 +33,19 @@ try {
 }
 
 emitProgress('parse', '解析条目', { percent: 60 });
+// 终审 P3：Atom 实体解码（&amp;/&quot;/数字实体 — 先数字后命名，&amp; 最后防双解）
+function decodeEntities(t) {
+  return t
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCodePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+    .replace(/&amp;/g, '&');
+}
 const entries = [...xml.matchAll(/<entry>([\s\S]*?)<\/entry>/g)].map(m => m[1]).map(e => {
   const pick = (re) => { const mm = e.match(re); return mm ? mm[1].trim() : ''; };
   return {
-    title: pick(/<title>([\s\S]*?)<\/title>/).replace(/\s+/g, ' '),
-    summary: pick(/<summary>([\s\S]*?)<\/summary>/).replace(/\s+/g, ' ').slice(0, 300),
+    title: decodeEntities(pick(/<title>([\s\S]*?)<\/title>/).replace(/\s+/g, ' ')),
+    summary: decodeEntities(pick(/<summary>([\s\S]*?)<\/summary>/).replace(/\s+/g, ' ')).slice(0, 300),
     link: pick(/<id>([\s\S]*?)<\/id>/),
     published: pick(/<published>([\s\S]*?)<\/published>/).slice(0, 10),
     authors: [...e.matchAll(/<name>([\s\S]*?)<\/name>/g)].map(a => a[1].trim()).slice(0, 4),

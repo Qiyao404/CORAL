@@ -66,7 +66,11 @@ const child = spawn(process.execPath, [distIndex, ...args], {
   env: { ...process.env },
   cwd: serverRoot,
 });
-child.on('exit', code => process.exit(code ?? 0));
-for (const sig of ['SIGINT', 'SIGTERM']) {
-  process.on(sig, () => child.kill(sig));
+child.on('exit', (code, signal) => process.exit(code ?? (signal ? 1 : 0))); // 终审 P3：信号终止不以 0 退出
+// 终审 P2（本机实证）：Windows 的 SIGINT 是 TerminateProcess 硬杀，handler 不会跑 —
+// 控制台 Ctrl+C 事件本就直达子进程，父进程转发反而抢在优雅关闭前打死它
+if (process.platform !== 'win32') {
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.on(sig, () => child.kill(sig));
+  }
 }

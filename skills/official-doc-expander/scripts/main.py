@@ -188,6 +188,7 @@ def main():
     except Exception as e:
         emit_log(str(e), level='error')
         print(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()

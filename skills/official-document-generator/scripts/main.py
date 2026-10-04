@@ -207,7 +207,7 @@ def main():
         # 协议契约：执行器喂 {input, context} 包装；兼容手动裸输入
         inputs = payload.get('input', payload) if isinstance(payload, dict) else {}
         
-        emit_log('info', f'开始生成公文: {inputs.get("title", "未命名")}')
+        emit_log(f'开始生成公文: {inputs.get("title", "未命名")}')
         
         result = generate_document(inputs)
         

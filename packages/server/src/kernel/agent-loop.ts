@@ -200,8 +200,13 @@ export class AgentLoop {
         for (const call of response.toolCalls) {
           toolCallCount++;
           const tool = toolMap.get(call.name);
-          // 审查 P3：别名（todo/todos/update_todo）经 alias 纠正后也算已建清单
-          if (tool?.name === 'todo_write' || call.name === 'todo_write') todoWritten = true;
+          // 终审 P3：别名判定要用纠正结果 — toolMap 只含实名，别名调用时 tool 为 undefined
+          if (tool?.name === 'todo_write') {
+            todoWritten = true;
+          } else if (call.name !== 'todo_write') {
+            const resolved = resolveToolName(call.name, this.options.tools);
+            if (resolved?.tool.name === 'todo_write') todoWritten = true;
+          }
 
           this.emit('tool.call_started', {
             step: steps,
@@ -414,22 +419,21 @@ export class AgentLoop {
    * 写入侧统一修剪（读取侧 run-engine.sanitizeSessionHistory 双保险）。
    */
   private sanitizeForCheckpoint(messages: ChatMessage[]): ChatMessage[] {
+    // 终审 P1：REG-04 补全 — 多工具块中途取消会产生 [assistant(A,B,C), tool(A)] 的
+    // "部分应答组"，按组校验（assistant 的全部 toolCalls 都有结果才算完整），不完整整组移除
     const out = [...messages];
-    const last = out[out.length - 1];
-    // 只修剪"不完整组"：assistant 带 toolCalls 但其后没有对应的 tool 结果。
-    // 完整组（assistant+tools 全部在）保持原样 — 那是正常中间态。
-    if (last?.role === 'assistant' && last.toolCalls?.length) {
-      const answered = new Set(
-        out.filter(m => m.role === 'tool').map(m => (m as any).toolCallId)
+    for (let i = out.length - 1; i >= 0; i--) {
+      const m = out[i];
+      if (m.role !== 'assistant' || !m.toolCalls?.length) continue;
+      const ids = new Set(m.toolCalls.map(c => c.id));
+      const answeredIds = new Set(
+        out.slice(i + 1).filter(x => x.role === 'tool' && ids.has((x as any).toolCallId)).map(x => (x as any).toolCallId)
       );
-      const allAnswered = last.toolCalls.every(c => answered.has(c.id));
-      if (!allAnswered) {
-        // 悬空：把这条 assistant(toolCalls) 移除，并把引用它的孤儿 tool 一并移除
-        const ids = new Set(last.toolCalls.map(c => c.id));
-        for (let i = out.length - 1; i >= 0; i--) {
-          const m = out[i];
-          if (m === last) { out.splice(i, 1); break; }
-          if (m.role === 'tool' && ids.has((m as any).toolCallId)) out.splice(i, 1);
+      const complete = m.toolCalls.every(c => answeredIds.has(c.id));
+      if (!complete) {
+        out.splice(i, 1);
+        for (let j = out.length - 1; j >= i; j--) {
+          if (out[j].role === 'tool' && ids.has((out[j] as any).toolCallId)) out.splice(j, 1);
         }
       }
     }

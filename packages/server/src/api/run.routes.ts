@@ -172,19 +172,23 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
       history.push({ role: 'user', content: instruction });
     }
 
-    // 工作区沿用原 run（从 run.created 事件的 workspace 取）
+    // 工作区双源：run.workspace_id（终审 P2 入库）优先，事件 payload 兜底
     const created = engine.events.listByRun(runId, 0, 50).find(e => e.type === 'run.created');
-    const workspaceId = (created?.payload as any)?.workspace?.id as string | undefined;
+    const workspaceId = (run as any).workspace_id ?? (created?.payload as any)?.workspace?.id as string | undefined;
 
-    const result = engine.startRun({
-      goal: instruction || `[fork of ${runId}@${fromSeq}] ${run.goal.slice(0, 200)}`,
-      sessionId: run.session_id ?? undefined,
-      workspaceId,
-      parentRunId: runId,
-      forkFromSeq: fromSeq,
-      initialHistory: history,
-    });
-    return reply.status(201).send({ ...result, forkFrom: runId, fromSeq });
+    try {
+      const result = engine.startRun({
+        goal: instruction || `[fork of ${runId}@${fromSeq}] ${run.goal.slice(0, 200)}`,
+        sessionId: run.session_id ?? undefined,
+        workspaceId,
+        parentRunId: runId,
+        forkFromSeq: fromSeq,
+        initialHistory: history,
+      });
+      return reply.status(201).send({ ...result, forkFrom: runId, fromSeq });
+    } catch (err: any) {
+      return reply.status(400).send({ error: err?.message ?? 'fork 失败' }); // 终审 P2：工作区被删/超限 → 400
+    }
   });
 
   // ── M2：Graph 模式端点 ──────────────────────────────────
@@ -319,7 +323,8 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
         reply.raw.write(`data: ${JSON.stringify(e)}\n\n`);
       } catch { /* 客户端已断开 */ }
     };
-    for (const e of engine.events.listByRun(runId, 0, 2000)) writeSse(e);
+    // 终审 P2：回放取尾部（长 run 的 run.completed 不能被头部 2000 条挤掉）
+    for (const e of engine.events.listByRun(runId, 0, 100000).slice(-2000)) writeSse(e);
 
     const handler = (event: any) => {
       if (event.taskId !== runId) return;

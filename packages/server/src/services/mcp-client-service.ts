@@ -3,6 +3,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { getDb } from '../store/db.js';
 import { nanoid } from 'nanoid';
+import { platformConfig } from './config.js';
 import type { Tool, ToolResult } from '../tools/types.js';
 
 /**
@@ -76,6 +77,10 @@ export class McpClientService {
     const exists = stmt(`SELECT id FROM mcp_servers WHERE name = ?`).get(input.name);
     if (exists) return { ok: false, message: `同名 server 已存在: ${input.name}` };
     if (input.transport === 'stdio' && !input.command) return { ok: false, message: 'stdio 需要 command' };
+    // 终审 P2：闸门 — command 等价本机任意进程执行权限（与 shell_run 开关同级）
+    if (input.transport === 'stdio' && !platformConfig.mcpStdioEnabled) {
+      return { ok: false, message: 'stdio transport 已被禁用（MCP_STDIO_ENABLED=false）— command 会在本机执行任意进程' };
+    }
     if (input.transport === 'http' && !input.url) return { ok: false, message: 'http 需要 url' };
 
     const id = `mcp_${nanoid(8)}`;
@@ -214,17 +219,21 @@ export class McpClientService {
       source: 'mcp' as any,
       permission: 'auto',
       async invoke(input: any, ctx?: any): Promise<ToolResult> {
+        // 终审 P3：计时器/监听器 race 结算后清理（此前每次成功调用泄漏一组）
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const timed = ctx?.signal;
+        const onAbort = () => { if (timer) clearTimeout(timer); };
         try {
-          // 审查 P2：MCP 调用接超时与取消（防对端挂起导致 run 永久卡在此工具）
           const TIMEOUT = 60_000;
-          const timed = (ctx?.signal ? ctx.signal : undefined);
           const r = await Promise.race([
             client.callTool({ name: t.name, arguments: input ?? {} }),
             new Promise<never>((_, rej) => {
-              const timer = setTimeout(() => rej(new Error(`MCP 工具 ${t.name} 超时（${TIMEOUT / 1000}s）`)), TIMEOUT);
-              timed?.addEventListener('abort', () => { clearTimeout(timer); rej(new Error('已取消')); }, { once: true });
+              timer = setTimeout(() => rej(new Error(`MCP 工具 ${t.name} 超时（${TIMEOUT / 1000}s）`)), TIMEOUT);
+              timed?.addEventListener('abort', onAbort, { once: true });
             }),
           ]);
+          if (timer) clearTimeout(timer);
+          timed?.removeEventListener('abort', onAbort);
           const text = Array.isArray(r.content)
             ? r.content.map((c: any) => (c.type === 'text' ? c.text : JSON.stringify(c))).join('\n')
             : JSON.stringify(r);

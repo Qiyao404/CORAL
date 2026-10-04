@@ -32,6 +32,10 @@ export function useGlobalStream() {
         import('../api/client').then(({ api }) => {
           api.listTasks({ status: 'executing' }).then((d: any) => {
             for (const t of d.items ?? []) taskStateRef.current.set(t.id, 'executing');
+            // 终审 P3：planning 也算"进行中"（漏了会侧栏虚低）
+            return api.listTasks({ status: 'planning' });
+          }).then((d: any) => {
+            for (const t of d.items ?? []) taskStateRef.current.set(t.id, 'planning');
             recountRunning();
           }).catch(() => {});
         }).catch(() => {});

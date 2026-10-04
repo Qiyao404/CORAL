@@ -82,11 +82,17 @@ export function useRunStream(runId?: string) {
     let disposed = false;
 
     const backfill = async () => {
-      // 重连成功：补拉游标之后的事件（断线期间服务端产生的）
+      // 终审 P2：按 nextAfterSeq 循环拉到不再前进（单次 500 会漏长 run 尾部）
       try {
         const { api } = await import('../api/client');
-        const d = await api.getRunEvents(runId, cursorRef.current);
-        if (!disposed) for (const ev of d.items ?? []) push(ev);
+        let cursor = cursorRef.current;
+        for (let round = 0; round < 20; round++) {
+          const d = await api.getRunEvents(runId, cursor);
+          const items = d.items ?? [];
+          if (!disposed) for (const ev of items) push(ev);
+          if (items.length === 0 || (d.nextAfterSeq ?? cursor) <= cursor) break;
+          cursor = d.nextAfterSeq;
+        }
       } catch { /* 补拉失败不致命 — SSE 会继续推新事件 */ }
     };
 

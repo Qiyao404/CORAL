@@ -26,6 +26,7 @@ const abs = /^[a-zA-Z]:[\/]/.test(csvPath) || csvPath.startsWith('/') ? csvPath 
 let raw;
 try {
   raw = readFileSync(abs, 'utf-8');
+  if (raw.charCodeAt(0) === 0xFEFF) raw = raw.slice(1); // 终审 P2：剥 BOM（Excel 导出常见）
 } catch (err) {
   emitLog(`读取失败: ${err?.message ?? err}`, 'error');
   console.log(JSON.stringify({ ok: false, error: `读取失败: ${abs}` }));
@@ -71,10 +72,13 @@ const columns = header.map((name, col) => {
   const numerics = nonEmpty.map(Number).filter(Number.isFinite);
   const isNumeric = numerics.length >= nonEmpty.length * 0.8 && nonEmpty.length > 0;
   const uniq = new Set(nonEmpty);
-  const stats = isNumeric ? {
-    min: Math.min(...numerics), max: Math.max(...numerics),
-    avg: Number((numerics.reduce((a, b) => a + b, 0) / numerics.length).toFixed(2)),
-  } : null;
+  // 终审 P3：for 归约 — Math.min(...大数组) 超 6.5 万实参直接 RangeError
+  let stats = null;
+  if (isNumeric) {
+    let min = Infinity, max = -Infinity, sum = 0;
+    for (const v of numerics) { if (v < min) min = v; if (v > max) max = v; sum += v; }
+    stats = { min, max, avg: Number((sum / numerics.length).toFixed(2)) };
+  }
   return { name, missing, unique: uniq.size, type: isNumeric ? 'number' : 'string', stats,
     topValues: [...uniq].slice(0, 3) };
 });

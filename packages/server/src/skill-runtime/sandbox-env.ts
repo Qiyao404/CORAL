@@ -19,6 +19,8 @@ const SANDBOX_ENV_WHITELIST: ReadonlySet<string> = new Set([
   'POLICY_NO_PROXY_DOMAINS', 'POLICY_FORCE_DIRECT',
   // 审查 P2：企业 MITM 代理环境的 CA 证书（缺了 = 沙箱内 TLS 握手静默失败、采集 0 条）
   'REQUESTS_CA_BUNDLE', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'CURL_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS',
+  // 终审 P1：M4-2 技能依赖的 CORAL_* 集成变量（白名单漏掉 = web-search 永远"未配置"）
+  'CORAL_TAVILY_API_KEY', 'CORAL_SEARXNG_URL', 'CORAL_GITHUB_TOKEN',
 ]);
 
 export function buildSandboxEnv(

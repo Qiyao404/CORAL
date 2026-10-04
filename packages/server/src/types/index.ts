@@ -230,6 +230,8 @@ export interface PlatformConfig {
   demoMode: boolean;
   /** M1-2（D13）：shell_run 工具开关 — 默认关闭，SHELL_TOOL_ENABLED=true 显式开启 */
   shellToolEnabled: boolean;
+  /** M3-2 终审：stdio transport 闸门（command=本机执行权限） */
+  mcpStdioEnabled: boolean;
   /** M1-5：Free 模式 run 预算默认值（请求级可覆盖，硬上限见 run-engine） */
   runMaxSteps: number;
   runMaxTokens: number;

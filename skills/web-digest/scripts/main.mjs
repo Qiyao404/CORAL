@@ -39,6 +39,8 @@ for (let i = 0; i < urls.length; i++) {
   try {
     const res = await fetch(url, { headers: { 'User-Agent': 'CORAL-Agent/2.0 web-digest' }, signal: AbortSignal.timeout(30000) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const ct = res.headers.get('content-type') ?? '';
+    if (!ct.includes('html')) throw new Error(`非 HTML 内容（${ct.split(';')[0]}）— 跳过`);
     const html = await res.text();
     const article = extractReadable(html);
     sections.push(`## ${(article.title || url)}\n\n来源: ${url}\n\n${(article.content || '').slice(0, 20000)}`);

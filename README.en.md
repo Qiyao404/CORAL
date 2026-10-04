@@ -172,8 +172,8 @@ Tested against DeepSeek and DashScope (Kimi); OpenRouter / Ollama and any OpenAI
 |-------|:--:|------|
 | `summarize-document` | llm_only | Intelligent document summarization |
 | `data-transform` | llm_only | Data format conversion & structuring |
-| `policy-scraper` | script | Policy scraping (streaming + MD/CSV dual artifacts) |
-| `policy-to-post` | script | Policy → social post (mutually-exclusive inputs) |
+| `policy-scraper` | script | Policy scraping — *scenario-pack skill, see examples/policy-analysis* |
+| `policy-to-post` | script | Policy → post — *scenario-pack skill, see examples/policy-analysis* |
 | `information-filter` | script | Multi-source filtering (company-profile driven) |
 | `web-reader` | script | Web article extraction (zero-dep readability) |
 | `official-doc-writer` | llm_only | Official document text generation |

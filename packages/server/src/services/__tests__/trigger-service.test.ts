@@ -35,6 +35,18 @@ describe('nextCronTime — cron 子集解析', () => {
     expect(nextCronTime('30 8 1-10 * *', base)?.getUTCDate()).toBeLessThanOrEqual(10);
     expect(nextCronTime('0 9,18 * * *', base)).toBeTruthy();
   });
+  it('REG-14 回归：0 9 * * 1（每周一）在周二/周三不得命中（OR 语义误判曾致每天触发）', () => {
+    const base = new Date('2026-10-06T10:00:00Z'); // 周二
+    for (let i = 0; i < 7 * 24 * 60; i++) {
+      const t = new Date(base.getTime() + i * 60000);
+      const next = nextCronTime('0 9 * * 1', t);
+      // 从周二开始的 7 天内的"下一次"必须是下周一，绝不能是周二~周日
+      const day = next ? next.getUTCDay() : -1;
+      expect([0, 1]).toContain(day); // 只有周一(1)或已在周一后算下周一(0 不可能——周日不在集合)
+      if (day === 1) break;
+    }
+  });
+
   it('非法表达式返回 null', () => {
     expect(nextCronTime('* * * *')).toBeNull();
     expect(nextCronTime('61 * * * *')).toBeNull();

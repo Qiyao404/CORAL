@@ -220,6 +220,7 @@ export class OpenAICompatProvider implements ChatProvider {
         isRetryable: err => !delivered && classifyProviderError(err, req.signal) === 'transient',
         onRetry: (attempt, delayMs, err) =>
           console.warn(`[LLM/openai-compat] 流式瞬时错误，${delayMs}ms 后第 ${attempt} 次重试: ${describeError(err)}`),
+        signal: req.signal, // 终审 P3：退避可被打断（此前 signal 机制是死代码）
       }
     );
     // 流结束：放行尾部普通文本残留；疑似标记残留丢弃（完整内容在 full，归一化已处理）
@@ -248,25 +249,7 @@ export class OpenAICompatProvider implements ChatProvider {
   }
 
   /** 请求参数构造（stream/complete 共用） */
-  private buildParams(req: ChatRequest, stream: boolean): Record<string, any> {
-    const params: Record<string, any> = {
-      model: this.model,
-      messages: this.toOpenAIMessages(req),
-      temperature: req.temperature ?? 0.7,
-      max_tokens: req.maxTokens ?? 4096,
-      ...(req.tools && req.tools.length > 0
-        ? {
-            tools: req.tools.map(t => ({
-              type: 'function',
-              function: { name: t.name, description: t.description, parameters: t.inputSchema },
-            })),
-          }
-        : {}),
-      ...(req.jsonMode ? { response_format: { type: 'json_object' as const } } : {}),
-      ...(stream ? { stream: true } : {}),
-    };
-    return params;
-  }
+  // buildParams 已删除（终审 P3）：REG-01 温床 — 参数构造统一在 complete/stream 内联，改参数时两处对照（REGRESSIONS.md REG-01 防回归清单）
 
   /** 消息映射：system 合并前置；assistant 携带 tool_calls；tool → role:'tool' + tool_call_id */
   private toOpenAIMessages(req: ChatRequest): any[] {

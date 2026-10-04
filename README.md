@@ -171,8 +171,8 @@ npm run dev:server -- --demo
 |-------|:--:|------|
 | `summarize-document` | llm_only | 文档智能摘要 |
 | `data-transform` | llm_only | 数据格式转换与结构化 |
-| `policy-scraper` | script | 政策采集（流式 + MD/CSV 双产物 + 站点参数） |
-| `policy-to-post` | script | 政策转推文（三输入互斥校验） |
+| `policy-scraper` | script | 政策采集（流式 + MD/CSV 双产物）— *场景包技能，见 examples/policy-analysis* |
+| `policy-to-post` | script | 政策转推文 — *场景包技能，见 examples/policy-analysis* |
 | `information-filter` | script | 多源信息筛选（公司画像驱动） |
 | `web-reader` | script | 网页正文抽取（零依赖 readability，article 策略 + 全文回退） |
 | `official-doc-writer` | llm_only | 公文文本生成（通知/纪要等规范文种） |
