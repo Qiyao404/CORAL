@@ -42,7 +42,7 @@ import { llmClient } from './services/llm-client.js';
 async function main() {
   console.log('╔═══════════════════════════════════════════╗');
   console.log('║        CORAL — 通用智能体运行时平台        ║');
-  console.log('║        版本: 1.1.0                         ║');
+  console.log('║        版本: 2.0.0                         ║');
   console.log('╚═══════════════════════════════════════════╝');
 
   // 确保必要目录存在
@@ -145,6 +145,24 @@ async function main() {
   });
 
   await app.register(websocket);
+
+  // M4-3：web 构建产物静态托管（npx coral 单命令 — web 构建进 packages/server/public）
+  const { existsSync: publicExists } = await import('fs');
+  const { join: pathJoin } = await import('path');
+  const publicDir = pathJoin(process.cwd(), 'public');
+  if (publicExists(publicDir)) {
+    const fastifyStatic = (await import('@fastify/static')).default;
+    await app.register(fastifyStatic, { root: publicDir, prefix: '/' });
+    // SPA 回退：非 /api、非 /ws 的未命中路径回 index.html（前端路由）
+    app.setNotFoundHandler((req, reply) => {
+      if (req.url.startsWith('/api') || req.url.startsWith('/ws')) {
+        reply.status(404).send({ error: 'Not Found' });
+        return;
+      }
+      reply.sendFile('index.html');
+    });
+    console.log(`[静态] 已托管 Web 构建产物: ${publicDir}`);
+  }
 
   // 注册 API 路由
   registerTaskRoutes(app, planningEngine, dagScheduler, runEngine);

@@ -1,8 +1,7 @@
 {
-  "name": "coral",
-  "version": "2.0.0-m0",
-  "private": true,
-  "description": "CORAL — 通用智能体运行时平台",
+  "name": "coral-agent",
+  "version": "2.0.0",
+  "description": "CORAL — a local-first personal agent runtime (Free ReAct loop + deterministic Graph mode + MCP bridge + triggers)",
   "workspaces": [
     "packages/server",
     "packages/web",
@@ -13,12 +12,16 @@
     "dev:web": "npm run dev -w packages/web",
     "build:server": "npm run build -w packages/server",
     "build:web": "npm run build -w packages/web",
-    "build": "npm run build:server && npm run build:web",
     "test": "npm run test -w packages/server && npm run test -w packages/progress",
-    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\""
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
+    "build": "npm run build:server && npm run build:web",
+    "start": "node packages/server/bin/coral.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",
     "typescript": "^5.7.0"
+  },
+  "bin": {
+    "coral": "packages/server/bin/coral.mjs"
   }
 }
