@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Bot, Send, FolderOpen, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight,
   Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type, Trash2, MessageSquare,
-  FolderPlus, Activity, ChevronDown as ChevronDownIcon,
+  FolderPlus, Activity, ChevronDown as ChevronDownIcon, GitBranch,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState, Modal, Input } from '../components/ui';
@@ -120,16 +120,43 @@ export default function ChatPage() {
     }
   };
 
+  // 会话集：fork 出的新会话经 parent_run_id 血缘归入源会话的集合（主题相同 = 一个合集）
+  const [collections, setCollections] = useState<Array<{ root: string; sessions: SessionItem[] }>>([]);
   const loadSessions = useCallback(async (): Promise<SessionItem[]> => {
     try {
       const res = await api.listRuns({ limit: 100 });
+      const allRuns = (res.items ?? []).filter((r: any) => r.mode !== 'graph');
       const bySession = new Map<string, SessionItem>();
-      for (const run of (res.items ?? []).filter((r: any) => r.mode !== 'graph')) {
-        // graph 模式 run 不属于对话 — 它们在 Workflow 页管理（防止空会话/混淆）
+      const runSession = new Map<string, string | null>(allRuns.map((r: any) => [r.id, r.session_id]));
+      for (const run of allRuns) {
         const key = run.session_id ?? '(未分组)';
         if (!bySession.has(key)) bySession.set(key, { sessionId: run.session_id, runs: [] });
         bySession.get(key)!.runs.push({ id: run.id, goal: run.goal, status: run.status, createdAt: run.created_at, parentId: run.parent_run_id });
       }
+      // 血缘求根：会话内任一 run 的 parent 指向别的会话 → 根 = 那个会话的根
+      const rootOf = (sid: string | null, seen = new Set<string>()): string => {
+        const key = sid ?? '(未分组)';
+        if (!sid || seen.has(key)) return key;
+        seen.add(key);
+        const s = bySession.get(key);
+        const forkRun = s?.runs.find(r => r.parentId);
+        if (forkRun) {
+          const ps = runSession.get(forkRun.parentId!);
+          if (ps && ps !== sid) return rootOf(ps, seen);
+        }
+        return key;
+      };
+      const byRoot = new Map<string, SessionItem[]>();
+      for (const [sid, s] of bySession) {
+        const root = rootOf(sid);
+        if (!byRoot.has(root)) byRoot.set(root, []);
+        byRoot.get(root)!.push(s);
+      }
+      const cols = [...byRoot.values()]
+        .map(group => ({ root: group[0].sessionId ?? '(未分组)', sessions: group }))
+        .sort((a, b) => (b.sessions[0].runs[0]?.createdAt ?? '').localeCompare(a.sessions[0].runs[0]?.createdAt ?? ''))
+        .slice(0, 20);
+      setCollections(cols);
       const list = [...bySession.values()].slice(0, 20);
       setSessions(list);
       return list;
@@ -282,6 +309,49 @@ export default function ChatPage() {
     } catch { /* ignore */ }
   };
 
+  /** 侧栏单条会话条目（集合内嵌入时缩进） */
+  const renderSessionItem = (s: SessionItem, nested = false) => {
+    const isSession = Boolean(s.sessionId);
+    const active = isSession ? currentSessionId === s.sessionId : activeRunId === s.runs[0]?.id;
+    const title = s.runs[0]?.goal?.slice(0, 24) || '对话';
+    return (
+      <div
+        key={s.sessionId ?? `ungrouped-${s.runs[0]?.id}`}
+        className={`group flex items-center gap-2 w-full text-left p-2.5 text-xs transition-colors cursor-pointer ${nested ? 'pl-4' : ''} ${
+          active ? 'bg-brand-soft text-brand border border-brand/20' : 'text-fg-secondary hover:bg-bg-elev/40 border border-transparent'
+        }`}
+        onClick={() => {
+          if (isSession) {
+            setCurrentSessionId(s.sessionId);
+            setActiveRunId(s.runs.at(-1)?.id ?? null);
+          } else {
+            setActiveRunId(s.runs[0]?.id ?? null);
+            setCurrentSessionId(null);
+          }
+        }}
+      >
+        <MessageSquare className="w-3.5 h-3.5 shrink-0" />
+        <div className="flex-1 min-w-0">
+          <p className="truncate">{title}</p>
+          <p className="text-[10px] text-fg-muted mt-0.5">
+            {s.runs.length > 1 ? `${s.runs.length} 轮 · ` : ''}{statusLabel(s.runs.at(-1)?.status ?? '')} · {new Date(s.runs.at(-1)?.createdAt ?? 0).toLocaleDateString('zh-CN')}
+          </p>
+        </div>
+        <button
+          onClick={e => {
+            e.stopPropagation();
+            if (isSession) handleDeleteSession(s.sessionId);
+            else handleDeleteRun(s.runs[0]?.id ?? '');
+          }}
+          title={isSession ? '删除此条对话线' : '删除此对话'}
+          className="opacity-0 group-hover:opacity-100 text-fg-disabled hover:text-status-danger cursor-pointer shrink-0 transition-opacity"
+        >
+          <Trash2 className="w-3.5 h-3.5" />
+        </button>
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-screen">
       {/* 左侧：历史会话 */}
@@ -298,53 +368,22 @@ export default function ChatPage() {
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {sessions.length === 0 && <p className="text-xs text-fg-muted p-2">暂无历史</p>}
-          {sessions.map(s => {
-            // 一个会话 = 一个条目（未分组的旧 run 仍按单条展示）
-            const isSession = Boolean(s.sessionId);
-            const active = isSession
-              ? currentSessionId === s.sessionId
-              : activeRunId === s.runs[0]?.id;
-            const title = isSession
-              ? (s.runs[0]?.goal?.slice(0, 24) || '对话')
-              : (s.runs[0]?.goal?.slice(0, 24) || '对话');
+          {collections.map(col => {
+            // 单会话集合 = 原来的单条目；多会话 = 对话集（含 fork 出的分支对话）
+            if (col.sessions.length <= 1) {
+              const s = col.sessions[0];
+              return renderSessionItem(s);
+            }
             return (
-              <div
-                key={s.sessionId ?? `ungrouped-${s.runs[0]?.id}`}
-                className={`group flex items-center gap-2 w-full text-left p-2.5 rounded-lg text-xs transition-colors cursor-pointer ${
-                  active ? 'bg-brand-soft text-brand border border-brand/20' : 'text-fg-secondary hover:bg-bg-elev/40 border border-transparent'
-                }`}
-                onClick={() => {
-                  if (isSession) {
-                    // 打开整条会话线程，聚焦最近一轮
-                    setCurrentSessionId(s.sessionId);
-                    setActiveRunId(s.runs[0]?.id ?? null);
-                  } else {
-                    setActiveRunId(s.runs[0]?.id ?? null);
-                    setCurrentSessionId(null);
-                  }
-                }}
-              >
-                <MessageSquare className="w-3.5 h-3.5 shrink-0" />
-                <div className="flex-1 min-w-0">
-                  <p className="truncate">{title}</p>
-                  <p className="text-[10px] text-fg-muted mt-0.5">
-                    {s.runs.length > 1 ? `${s.runs.length} 轮对话 · ` : ''}{s.runs.filter(r => r.parentId).length > 0 ? `🌿${s.runs.filter(r => r.parentId).length} 分支 · ` : ''}{statusLabel(s.runs[0]?.status ?? '')} · {new Date(s.runs[0]?.createdAt ?? 0).toLocaleDateString('zh-CN')}
-                  </p>
+              <div key={col.root} className="rounded-lg border border-glass-border/60 overflow-hidden">
+                <div className="px-2.5 py-1.5 bg-bg-elev/30 text-[10px] text-fg-muted flex items-center gap-1">
+                  <GitBranch className="w-3 h-3" /> 对话集 · {col.sessions[0].runs[0]?.goal?.slice(0, 20)}…（{col.sessions.length} 条对话线）
                 </div>
-                <button
-                  onClick={e => {
-                    e.stopPropagation();
-                    if (isSession) handleDeleteSession(s.sessionId);
-                    else handleDeleteRun(s.runs[0]?.id ?? '');
-                  }}
-                  title={isSession ? '删除整个会话' : '删除此对话'}
-                  className="opacity-0 group-hover:opacity-100 text-fg-disabled hover:text-status-danger cursor-pointer shrink-0 transition-opacity"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                {col.sessions.map(s => renderSessionItem(s, true))}
               </div>
             );
           })}
+          {/* 旧渲染已由 collections 取代 */}
         </div>
       </aside>
 

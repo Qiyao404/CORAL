@@ -177,9 +177,12 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
     const workspaceId = (run as any).workspace_id ?? (created?.payload as any)?.workspace?.id as string | undefined;
 
     try {
+      // 用户实测语义：fork 生成【新对话 B】（继承截至 fork 点的全部上下文），
+      // 源对话 A 保持不变 — B 经 parent_run_id 血缘与 A 归入同一对话集
+      const newSessionId = `sess_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       const result = engine.startRun({
         goal: instruction || `[fork of ${runId}@${fromSeq}] ${run.goal.slice(0, 200)}`,
-        sessionId: run.session_id ?? undefined,
+        sessionId: newSessionId,
         workspaceId,
         parentRunId: runId,
         forkFromSeq: fromSeq,
