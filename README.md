@@ -71,15 +71,18 @@ AbortSignal 全链路贯穿（LLM 调用、脚本进程树强杀）；错误分�
 
 ## 快速开始
 
+**方式一：单命令（推荐）** — 构建产物一体化，自检后启动：
+
 ```bash
-# 1. 安装依赖（Node.js ≥ 20）
+npm install && npm run build && npm start   # coral CLI：自检（端口/数据库/模型配置）→ http://127.0.0.1:3001
+```
+
+**方式二：开发模式**（前后端分离热更新）：
+
+```bash
 npm install
-
-# 2. 配置环境（填入你的 API Key，任何 OpenAI 兼容端点均可）
-cp .env.example .env
-
-# 3. 启动（后端 3001 + 前端 5173）
-npm run dev
+cp .env.example .env   # 填入你的 API Key（任何 OpenAI 兼容端点）
+npm run dev            # 后端 3001 + 前端 5173
 ```
 
 ```bash
@@ -140,7 +143,7 @@ npm run dev:server -- --demo
 | 持久化 | SQLite（better-sqlite3，WAL 模式，schema 版本化迁移） |
 | Skill | YAML frontmatter（gray-matter）+ chokidar 热重载 |
 | 进度协议 | 自研 `[CORAL_PROGRESS]` stderr 单行 JSON 协议（Python + Node 双 SDK，见 [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)） |
-| 质量 | Vitest（315 用例）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
+| 质量 | Vitest（321 用例）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
 
 ---
 
@@ -289,9 +292,9 @@ CORAL/
 | M1 | Harness 内核：Agent Loop · sub-agents · Agentic Workspace · 长期记忆 · 双 provider · 技能导入 · Chat 会话 · 创新五件套 | ✅ |
 | M2 | Graph 模式：DSL + 事件驱动引擎 + goal→graph AI 编译 + 节点审批（改参数续跑）+ 断点恢复 + Workflow 页 | ✅ |
 | M3 | MCP 双向桥（coral mcp serve + 外部 server 接入）· 定时/cron/Webhook 触发器 · 进度协议 SDK 双语言包 | ✅ |
-| M4 | Time-Travel 调试器（回滚/分叉重放）· `npx coral` 单命令分发 | ⏳ |
+| M4 | Time-Travel 调试器（checkpoint 时间轴/fork 重跑）· 内置技能五件 · `coral` CLI 单命令 · 场景包 | ✅ |
 
-质量基线：Vitest 315 用例全绿 · GitHub Actions 三平台（ubuntu/windows/macos × Node 20/22）· TypeScript strict
+质量基线：Vitest 321 用例全绿 · GitHub Actions 三平台（ubuntu/windows/macos × Node 20/22）· TypeScript strict
 
 ---
 

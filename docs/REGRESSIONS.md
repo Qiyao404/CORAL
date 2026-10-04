@@ -160,6 +160,9 @@
 
 ---
 
+
+| 构建产物（server/public）两次混入提交 — .gitignore 模式 `server/public` 在 add -A 后才生效且首次 amend 移除后又被重新构建 + add -A 带回 | M4-3 实录：**构建产物入库要用精确路径模式（`packages/server/public/`），且添加 ignore 必须发生在 git add 之前**；amend 后要 `git ls-files \| grep` 验证真的不在索引里 |
+
 ## 模块 → 高频雷区地图
 
 | 改这里时 | 必查 |
