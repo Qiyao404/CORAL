@@ -267,6 +267,50 @@ describe('AgentLoop — 主循环语义（M1-3）', () => {
     expect(lastCall.messages.some(m => m.content.includes('压缩摘要#') || m.content.includes('Earlier conversation summary'))).toBe(true);
   });
 
+  it('REG-17：narration 续跑 — 过渡话不是最终回答，循环继续直到真答案', async () => {
+    const llm = new ScriptedLLM([
+      // 第 1 轮：调一个工具（建立多步语境）
+      { stopReason: 'tool_use', toolCalls: [toolCall('c1', 'echo')], content: '' },
+      // 第 2 轮：只回过渡话（用户实测的 fork 场景 — 曾被误判为最终回答）
+      { stopReason: 'end', content: "Now I'll write the document generator." },
+      // 第 3 轮：真正的最终回答
+      { stopReason: 'end', content: '文档已生成：总结.docx' },
+    ]);
+    const { loop, events } = harness({ llm });
+    const r = await loop.run();
+
+    expect(r.status).toBe('completed');
+    expect(r.steps).toBe(3); // 没有提前收尾
+    expect(r.finalContent).toBe('文档已生成：总结.docx');
+    expect(events.some(e => e.type === 'loop.narration_continued')).toBe(true);
+  });
+
+  it('REG-17：真正的短回答（如"完成"）不被续跑 — 直接收尾', async () => {
+    const llm = new ScriptedLLM([
+      { stopReason: 'end', content: '完成' },
+    ]);
+    const { loop, events } = harness({ llm });
+    const r = await loop.run();
+    expect(r.status).toBe('completed');
+    expect(r.steps).toBe(1);
+    expect(events.some(e => e.type === 'loop.narration_continued')).toBe(false);
+  });
+
+  it('REG-17：narration 续跑上限 2 次 — 模型连续耍嘴皮时不无限循环', async () => {
+    const llm = new ScriptedLLM([
+      { stopReason: 'end', content: "Let me check that." },
+      { stopReason: 'end', content: "Now I'll do it." },
+      { stopReason: 'end', content: "Next I'll try again." },
+      { stopReason: 'end', content: "I'll keep going." }, // 超过 NARRATION_MAX → 收尾
+    ]);
+    const { loop } = harness({ llm });
+    const r = await loop.run();
+    expect(r.status).toBe('completed');
+    // NARRATION_MAX=2：第 1、2 次续跑，第 3 次按最终回答收尾（防无限循环）
+    expect(r.steps).toBe(3);
+    expect(r.finalContent).toBe("Next I'll try again.");
+  });
+
   it('事件消费者抛异常不影响循环', async () => {
     const llm = new ScriptedLLM([
       { stopReason: 'tool_use', toolCalls: [toolCall('c', 'echo')], content: '' },

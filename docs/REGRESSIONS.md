@@ -32,6 +32,7 @@
 | [REG-14](#reg-14) | cron OR 语义误判（!has(0) 恒真），每周一变每天 | service | 值域假设未验证 |
 | [REG-15](#reg-15) | 多工具块中途取消的部分应答组漏网（REG-04 只堵了单工具情形） | kernel | 修复只覆盖最简场景 |
 | [REG-16](#reg-16) | 上轮补丁"成功"实际未生效（fire 推进/别名判定），终审才暴露 | 工作流 | 补丁验证不闭环 |
+| [REG-17](#reg-17) | 模型过渡话（"Now I'll…"）被当最终回答，fork run 无产出 | kernel | stopReason≠交付 |
 
 ---
 
@@ -188,6 +189,18 @@
 **教训**：**补丁的验证要在"最终文件状态"上做，不是在"patch 脚本输出"上做** —— 每轮修复合入后，用 grep 重新确认关键修复点仍在；修复别名类问题必须沿着"调用→查找表→纠正"完整链路推演。
 **防回归检查**：[ ] 每轮修复 PR 合入后跑一遍 `grep` 清单（REG-01 stream tools / REG-05 stdin 解包 / fire 推进 / todoWritten 判定）
 - 工具化：可写一个 `scripts/check-regressions.mjs` 做 grep 式哨兵（CI 可跑）
+
+
+<a name="reg-17"></a>
+## REG-17 · 过渡话被当最终回答（用户 fork 实测发现）
+
+**现象**：fork run 执行 5 次工具后，模型回 "Now I'll write the economic-analysis document generator."（无工具调用）→ AgentLoop 按 stopReason≠tool_use 判定完成 → run 以这句串场话为最终内容结束，Word 从未生成。同一串场话也被 Time-Travel 错标"阶段完成点"。
+**根因**："无 toolCalls = 最终回答"的判定把 narration（宣告接下来要做什么）也当成了交付。多步长任务/fork 场景模型常先说话再干活。
+**教训**：**"结束"要靠交付物特征判定，不能只看有没有工具调用** — 短的将来时宣告（I'll/Let me/我来/接下来）且无结构（列表/标题/长文）是过渡话。
+**防回归检查**：
+- [ ] 改最终回答判定时，REG-17 三用例（续跑到真答案/真短回答直接收尾/上限防死循环）必须仍绿
+- [ ] 前端"完成点"分类与内核同源同规则（两边各自判定会漂移）
+- 回归测试：agent-loop「REG-17」三用例（narration 续跑/直收/上限）
 
 ## 模块 → 高频雷区地图
 

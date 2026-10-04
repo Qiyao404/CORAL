@@ -124,6 +124,9 @@ export class AgentLoop {
     //（"自主规划·全程可观测"是核心卖点，不能依赖模型自觉）
     let todoWritten = false;
     let todoNudged = false;
+    // 用户实测（fork 场景）：模型回"I'll write..."式过渡话且不带工具调用 → 被误判
+    // 为最终回答提前收尾（fork run 因此没产出文档）。narration 续跑：此类回答入历史继续循环
+    let narrationContinues = 0;
 
     try {
       while (true) {
@@ -172,8 +175,20 @@ export class AgentLoop {
         tokensIn += response.usage.inputTokens;
         tokensOut += response.usage.outputTokens;
 
-        // 模型给出最终回答
+        // 模型给出最终回答 — narration 续跑例外
         if (response.stopReason !== 'tool_use' || response.toolCalls.length === 0) {
+          if (
+            narrationContinues < NARRATION_MAX &&
+            steps < budget.maxSteps - 1 &&
+            tokensIn + tokensOut < budget.maxTokens &&
+            isPlanningNarration(response.content)
+          ) {
+            narrationContinues++;
+            this.emit('loop.narration_continued', { step: steps, content: response.content.slice(0, 120) });
+            messages.push({ role: 'assistant', content: response.content });
+            this.checkpoint(steps, messages);
+            continue; // 过渡话不是答案 — 带着它继续下一轮
+          }
           messages.push({ role: 'assistant', content: response.content });
           this.closeTodos('completed');
           this.checkpoint(steps, messages);
@@ -473,4 +488,14 @@ export class AgentLoop {
 function preview(input: unknown): string {
   const s = JSON.stringify(input ?? {});
   return s.length > 200 ? s.slice(0, 200) + '…' : s;
+}
+
+/** 用户实测（fork）：判定"过渡话"——模型宣布要做某事但没带工具调用。
+ * 特征：短文本 + 第一人称将来时/起始动词开头，且不含交付性结构 */
+const NARRATION_MAX = 2;
+function isPlanningNarration(content: string): boolean {
+  const t = (content ?? '').trim();
+  if (!t || t.length > 300) return false; // 长文是正经回答
+  if (/^#|\|---|\n- |\n\n/.test(t)) return false; // 标题/表格/列表/多段 = 交付物
+  return /^(I'll|I will|Let me|Now I|Next I|First,? I|I'm going to|Now,? let|我来|我将|接下来|让我|现在我来)/i.test(t);
 }

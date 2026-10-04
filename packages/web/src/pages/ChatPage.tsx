@@ -18,7 +18,7 @@ import { useRunStream, deriveRunView, type RunEventItem } from '../hooks/useRunS
 
 interface SessionItem {
   sessionId: string | null;
-  runs: Array<{ id: string; goal: string; status: string; createdAt: string }>;
+  runs: Array<{ id: string; goal: string; status: string; createdAt: string; parentId?: string | null }>;
 }
 
 interface Workspace {
@@ -45,7 +45,7 @@ export default function ChatPage() {
   // 最终回答全文（run.completed 事件只带 500 字预览，终态后从详情拉全文）
   const [fullFinal, setFullFinal] = useState<string | null>(null);
   // 会话线程：当前会话全部 run（时间升序，含 final_content）— ChatGPT 式连续对话视图
-  const [sessionRuns, setSessionRuns] = useState<Array<{ id: string; goal: string; final_content?: string | null; created_at: string }>>([]);
+  const [sessionRuns, setSessionRuns] = useState<Array<{ id: string; goal: string; final_content?: string | null; created_at: string; parent_run_id?: string | null; fork_from_seq?: number | null }>>([]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const { events, connected } = useRunStream(activeRunId ?? undefined);
@@ -128,7 +128,7 @@ export default function ChatPage() {
         // graph 模式 run 不属于对话 — 它们在 Workflow 页管理（防止空会话/混淆）
         const key = run.session_id ?? '(未分组)';
         if (!bySession.has(key)) bySession.set(key, { sessionId: run.session_id, runs: [] });
-        bySession.get(key)!.runs.push({ id: run.id, goal: run.goal, status: run.status, createdAt: run.created_at });
+        bySession.get(key)!.runs.push({ id: run.id, goal: run.goal, status: run.status, createdAt: run.created_at, parentId: run.parent_run_id });
       }
       const list = [...bySession.values()].slice(0, 20);
       setSessions(list);
@@ -162,6 +162,7 @@ export default function ChatPage() {
     try {
       const res = await api.listRuns({ sessionId: sid, limit: 100 });
       const items = (res.items ?? []).filter((r: any) => r.mode !== 'graph')
+        .map((r: any) => ({ id: r.id, goal: r.goal, final_content: r.final_content, created_at: r.created_at, parent_run_id: r.parent_run_id, fork_from_seq: r.fork_from_seq }))
         .map((r: any) => ({ id: r.id, goal: r.goal, final_content: r.final_content, created_at: r.created_at }))
         .sort((a: any, b: any) => (a.created_at || '').localeCompare(b.created_at || ''));
       setSessionRuns(items);
@@ -327,7 +328,7 @@ export default function ChatPage() {
                 <div className="flex-1 min-w-0">
                   <p className="truncate">{title}</p>
                   <p className="text-[10px] text-fg-muted mt-0.5">
-                    {s.runs.length > 1 ? `${s.runs.length} 轮对话 · ` : ''}{statusLabel(s.runs[0]?.status ?? '')} · {new Date(s.runs[0]?.createdAt ?? 0).toLocaleDateString('zh-CN')}
+                    {s.runs.length > 1 ? `${s.runs.length} 轮对话 · ` : ''}{s.runs.filter(r => r.parentId).length > 0 ? `🌿${s.runs.filter(r => r.parentId).length} 分支 · ` : ''}{statusLabel(s.runs[0]?.status ?? '')} · {new Date(s.runs[0]?.createdAt ?? 0).toLocaleDateString('zh-CN')}
                   </p>
                 </div>
                 <button
@@ -420,7 +421,10 @@ export default function ChatPage() {
           {sessionRuns
             .filter(r => r.id !== activeRunId)
             .map(r => (
-              <div key={r.id} className="space-y-3">
+              <div key={r.id} className={`space-y-3 ${r.parent_run_id ? 'ml-8 border-l-2 border-brand/30 pl-3' : ''}`}>
+                {r.parent_run_id && (
+                  <div className="text-[11px] text-brand/80 font-mono">🌿 分支（{r.parent_run_id.slice(0, 12)}…{r.fork_from_seq != null ? `第${r.fork_from_seq}步起` : ''}）</div>
+                )}
                 <div className="flex justify-end">
                   <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{r.goal}</div>
                 </div>

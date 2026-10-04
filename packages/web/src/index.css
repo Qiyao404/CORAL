@@ -1,6 +1,11 @@
 @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;500;600;700&family=Poppins:wght@400;500;600;700&display=swap');
 
 @tailwind base;
+
+/* 用户实测反馈：整体字体太小 — 提升根字号让所有 rem 尺寸等比放大（≈ +12.5%） */
+html {
+  font-size: 112.5%; /* 16px → 18px */
+}
 @tailwind components;
 @tailwind utilities;
 

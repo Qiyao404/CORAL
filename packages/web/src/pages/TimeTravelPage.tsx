@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { History, GitBranch, Loader2, CornerUpLeft, ChevronDown, ChevronRight, Scan, HelpCircle, Eye, EyeOff } from 'lucide-react';
+import { History, GitBranch, Loader2, CornerUpLeft, ChevronDown, ChevronRight, Scan, HelpCircle, Eye, EyeOff, Trash2 } from 'lucide-react';
 import { api } from '../api/client';
 import { Tag } from '../components/ui';
 
@@ -11,7 +11,7 @@ import { Tag } from '../components/ui';
  * 原始消息保留在"查看原始消息"开关后面给高级用户。
  */
 
-interface RunItem { id: string; goal: string; status: string; mode: string; parent_run_id: string | null; created_at: string }
+interface RunItem { id: string; goal: string; status: string; mode: string; parent_run_id: string | null; fork_from_seq?: number | null; created_at: string }
 interface CpPreviewMsg { role: string; toolName: string | null; contentPreview: string; toolCalls?: string[] }
 interface CpItem {
   seq: number; kind: string; label: string; createdAt: string; messageCount: number;
@@ -81,7 +81,12 @@ function messagesToStory(msgs: CpPreviewMsg[]): StoryLine[] {
 /** checkpoint 的性质标签：阶段完成点最适合 fork */
 function classifyCheckpoint(preview: CpPreviewMsg[]): { badge: string; cls: string; hint: string } {
   const last = preview[preview.length - 1];
-  const lastIsAssistantAnswer = last?.role === 'assistant' && !last.toolCalls && !(last.contentPreview ?? '').startsWith('[调用工具');
+  // REG-17 配套：英文过渡话（Now I'll / Let me…）不是交付 — 不算完成点
+  const isNarration = (t: string) =>
+    /^(I'll|I will|Let me|Now I|Next I|First,? I|I'm going to|Now,? let|我来|我将|接下来|让我)/i.test(t.trim()) && t.length < 300;
+  const lastIsAssistantAnswer = last?.role === 'assistant' && !last.toolCalls
+    && !(last.contentPreview ?? '').startsWith('[调用工具')
+    && !isNarration(last?.contentPreview ?? '忽略长内容长内容长内容长内容长内容长内容长内容长内容长内容长内容长内容长内容');
   if (preview.length <= 2) {
     return { badge: '起点', cls: 'text-fg-muted border-glass-borderStrong', hint: '刚收到目标 — 从这里 fork 等于重来一遍' };
   }
@@ -201,17 +206,26 @@ export default function TimeTravelPage() {
           <div className="px-3 py-2 border-b border-glass-border text-xs font-medium text-fg-secondary">第一步：选择一个 run</div>
           <div className="flex-1 overflow-y-auto">
             {runs.map(r => (
-              <button key={r.id} onClick={() => loadCheckpoints(r.id)}
-                className={`w-full text-left px-3 py-2 text-xs cursor-pointer border-b border-glass-border/50 hover:bg-bg-elev/30 ${selected === r.id ? 'bg-brand/10 border-l-2 border-l-brand' : ''}`}>
+              <div key={r.id}
+                className={`w-full text-left px-3 py-2 text-xs cursor-pointer border-b border-glass-border/50 hover:bg-bg-elev/30 ${selected === r.id ? 'bg-brand/10 border-l-2 border-l-brand' : ''}`}
+                onClick={() => loadCheckpoints(r.id)}>
                 <div className="flex items-center gap-1.5">
-                  {r.parent_run_id && <GitBranch className="w-3 h-3 text-brand shrink-0" aria-label={`fork 自 ${r.parent_run_id ?? ''}`} />}
+                  {r.parent_run_id && <GitBranch className="w-3 h-3 text-brand shrink-0" />}
                   <span className={`truncate flex-1 ${r.parent_run_id ? 'text-brand' : 'text-fg-primary'}`}>{r.goal.slice(0, 60)}</span>
+                  <button
+                    onClick={e => { e.stopPropagation(); if (confirm('删除这条 run（分支连同事件一并删除）？')) { api.deleteRun(r.id).then(loadRuns).catch(err => setMsg('删除失败: ' + (err.message || err))); } }}
+                    className="text-fg-muted hover:text-status-danger cursor-pointer shrink-0" title="删除此 run">
+                    <Trash2 className="w-3 h-3" />
+                  </button>
                 </div>
+                {r.parent_run_id && (
+                  <div className="text-[10px] text-brand/80 mt-0.5 font-mono">🌿 分支自 {r.parent_run_id.slice(0, 14)}…{r.fork_from_seq != null ? ` @第${r.fork_from_seq}步` : ''}</div>
+                )}
                 <div className="flex items-center gap-2 mt-0.5">
                   <Tag variant={r.status === 'completed' ? 'success' : r.status === 'failed' ? 'danger' : 'info'}>{r.status}</Tag>
                   <span className="text-fg-muted">{new Date(r.created_at).toLocaleString()}</span>
                 </div>
-              </button>
+              </div>
             ))}
           </div>
         </div>
