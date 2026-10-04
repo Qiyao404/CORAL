@@ -14,6 +14,8 @@ import { DAGScheduler } from './scheduler/dag-scheduler.js';
 import { SkillBuilderService } from './services/skill-builder-service.js';
 import { RunEngine } from './kernel/run-engine.js';
 import { GraphRunService } from './services/graph-run-service.js';
+import { McpClientService } from './services/mcp-client-service.js';
+import { registerMcpRoutes } from './api/mcp.routes.js';
 import { RunStore } from './store/run-store.js';
 import { RunEventStore } from './store/run-event-store.js';
 import { CheckpointStore } from './store/checkpoint-store.js';
@@ -78,6 +80,7 @@ async function main() {
 
   // M1-5：Free 模式 run-engine（AgentLoop 接线到三表 + 事件总线）
   const runEngine = new RunEngine({
+    mcpTools: () => mcpClient.listMcpTools(),
     llm: llmClient,
     skillRegistry: registry,
     skillExecutor: executor,
@@ -98,6 +101,13 @@ async function main() {
   const interrupted = graphRunService.markInterruptedGraphRuns();
   if (interrupted > 0) {
     console.log(`[Graph] 检测到 ${interrupted} 个中断的 graph run（可在 Workflow 页一键恢复）`);
+  }
+
+  // M3-2：MCP client — 启动即连全部 enabled 的外部 server（失败隔离：单个失败继续）
+  const mcpClient = new McpClientService();
+  const mcpConnected = await mcpClient.connectAll();
+  if (mcpConnected > 0) {
+    console.log(`[MCP] 已连接 ${mcpConnected} 个外部 server（工具已进入 agent 工具集）`);
   }
 
   // 创建 Fastify 应用
@@ -143,6 +153,7 @@ async function main() {
   registerSkillImportRoutes(app, registry);
   registerCompanyProfileRoutes(app);
   registerRunRoutes(app, runEngine, graphRunService);
+  registerMcpRoutes(app, mcpClient);
   registerWorkspaceRoutes(app);
   registerWorkspaceFileRoutes(app);
   registerMemoryRoutes(app);

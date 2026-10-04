@@ -51,6 +51,8 @@ export interface StartRunInput {
 }
 
 export interface RunEngineDeps {
+  /** M3-2：外部 MCP server 的工具（懒取 — 连接状态随管理页启停变化） */
+  mcpTools?: () => Tool[];
   llm: {
     chat(req: ChatRequest): Promise<ChatResponse>;
     /** 创新①：流式 chat — 存在时 loop 走逐 token 直播 */
@@ -387,6 +389,9 @@ export class RunEngine {
     if (perm === 'auto') {
       tools = tools.map(t => (FS_WRITE.has(t.name) ? withPermission(t, 'auto') : t));
     }
+
+    // M3-2：外部 MCP server 工具（失败隔离 — 未连上自然缺席；调用错误按工具结果返回）
+    tools.push(...(this.deps.mcpTools?.() ?? []));
 
     tools.push(makeTodoTool()); // 事件经 ctx.emit → loop 注入 agentId
     tools.push(makePastRunsTool(taskStore as any));
