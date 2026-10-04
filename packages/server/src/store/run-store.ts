@@ -81,11 +81,13 @@ export class RunStore {
     graph?: Record<string, any>;
     /** M2 实测：graph run 绑定的工作区（产物落点，resume 时重新解析） */
     workspaceId?: string;
+    /** M4-1：fork 来源 run（parent_run_id 列） */
+    parentRunId?: string;
   }): void {
     const ts = nowIso();
     this.stmt(
-      `INSERT INTO runs (id, goal, mode, status, session_id, budget_json, model_profile_id, graph_json, workspace_id, cost_usd, tokens_in, tokens_out, created_at, updated_at)
-       VALUES (?, ?, ?, 'created', ?, ?, ?, ?, ?, 0, 0, 0, ?, ?)`
+      `INSERT INTO runs (id, goal, mode, status, session_id, budget_json, model_profile_id, graph_json, workspace_id, parent_run_id, cost_usd, tokens_in, tokens_out, created_at, updated_at)
+       VALUES (?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?)`
     ).run(
       input.id,
       input.goal,
@@ -95,6 +97,7 @@ export class RunStore {
       input.modelProfileId ?? null,
       input.graph ? JSON.stringify(input.graph) : null,
       input.workspaceId ?? null,
+      input.parentRunId ?? null,
       ts,
       ts
     );

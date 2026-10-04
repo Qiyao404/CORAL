@@ -213,6 +213,13 @@ export const api = {
     request<any>(`/mcp/servers/${id}`, { method: 'DELETE' }),
   getClaudeConfig: () => request<any>('/mcp/claude-desktop-config'),
   listTriggers: () => request<any>('/triggers'),
+  // ─── M4-1：Time-Travel ───────────────────────────────────
+  getRunCheckpoints: (runId: string) => request<any>(`/runs/${runId}/checkpoints`),
+  forkRun: (runId: string, fromSeq: number, instruction?: string) =>
+    request<any>(`/runs/${runId}/fork`, {
+      method: 'POST',
+      body: JSON.stringify({ fromSeq, ...(instruction ? { instruction } : {}) }),
+    }),
   createTrigger: (payload: { name: string; kind: string; spec: string; action: { mode: string; goal: string } }) =>
     request<any>('/triggers', { method: 'POST', body: JSON.stringify(payload) }),
   toggleTrigger: (id: string, enabled: boolean) =>

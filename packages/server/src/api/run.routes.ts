@@ -123,6 +123,70 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
     return { success: true, message: result.message };
   });
 
+  // ── M4-1：Time-Travel（checkpoint 时间轴 + fork）────────────
+
+  // checkpoint 详情（含消息状态 — 时间轴预览用）
+  app.get('/api/runs/:runId/checkpoints', async (request, reply) => {
+    const { runId } = request.params as any;
+    const run = engine.store.get(runId);
+    if (!run) return reply.status(404).send({ error: 'run 不存在' });
+    const metas = engine.checkpoints.listByRun(runId);
+    const items = metas.map(m => {
+      const state = engine.checkpoints.get(runId, m.seq);
+      const messages = (state?.messages ?? []) as Array<any>;
+      return {
+        seq: m.seq,
+        kind: m.kind,
+        label: m.label,
+        createdAt: m.createdAt,
+        messageCount: messages.length,
+        // 预览：每条消息的角色 + 摘要（不含工具结果全文 — 防大 payload）
+        preview: messages.map(msg => ({
+          role: msg.role,
+          toolName: msg.toolName ?? null,
+          contentPreview: typeof msg.content === 'string' ? msg.content.slice(0, 160) : '',
+          toolCalls: msg.toolCalls?.map((c: any) => c.name) ?? undefined,
+        })),
+      };
+    });
+    return { runId, items };
+  });
+
+  // fork：从任意 checkpoint 回放为新 run（可选追加新指令）
+  app.post('/api/runs/:runId/fork', async (request, reply) => {
+    const { runId } = request.params as any;
+    const body = (request.body || {}) as { fromSeq?: number; instruction?: string };
+    const run = engine.store.get(runId);
+    if (!run) return reply.status(404).send({ error: 'run 不存在' });
+    if (run.mode !== 'free') return reply.status(400).send({ error: 'Time-Travel fork 仅支持 free 模式 run（graph 用 resume）' });
+
+    const fromSeq = Number(body.fromSeq);
+    if (!Number.isInteger(fromSeq)) return reply.status(400).send({ error: '需要 fromSeq（checkpoint 序号）' });
+    const state = engine.checkpoints.get(runId, fromSeq);
+    if (!state?.messages?.length) return reply.status(404).send({ error: `checkpoint ${fromSeq} 不存在或无消息` });
+
+    // 追加 fork 指令（作为新的 user 消息 — 模型带着旧上下文执行新方向）
+    const history = [...state.messages];
+    const instruction = String(body.instruction ?? '').trim();
+    if (instruction) {
+      history.push({ role: 'user', content: instruction });
+    }
+
+    // 工作区沿用原 run（从 run.created 事件的 workspace 取）
+    const created = engine.events.listByRun(runId, 0, 50).find(e => e.type === 'run.created');
+    const workspaceId = (created?.payload as any)?.workspace?.id as string | undefined;
+
+    const result = engine.startRun({
+      goal: instruction || `[fork of ${runId}@${fromSeq}] ${run.goal.slice(0, 200)}`,
+      sessionId: run.session_id ?? undefined,
+      workspaceId,
+      parentRunId: runId,
+      forkFromSeq: fromSeq,
+      initialHistory: history,
+    });
+    return reply.status(201).send({ ...result, forkFrom: runId, fromSeq });
+  });
+
   // ── M2：Graph 模式端点 ──────────────────────────────────
 
   // M2-5：可恢复列表（服务重启后的提示）

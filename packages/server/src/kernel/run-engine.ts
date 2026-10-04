@@ -42,6 +42,11 @@ export interface StartRunInput {
   goal: string;
   /** D17 多会话挂靠 */
   sessionId?: string;
+  /** M4-1 Time-Travel：fork 的历史种子（从某 checkpoint 回放） */
+  initialHistory?: import('../providers/types.js').ChatMessage[];
+  /** M4-1：fork 来源 run（runs.parent_run_id 列，001 迁移预留） */
+  parentRunId?: string;
+  forkFromSeq?: number;
   budget?: RunBudgetInput;
   /** M1-10：绑定工作区（目录 + 权限档）— 不传则无 fs/shell 工具 */
   workspaceId?: string;
@@ -112,10 +117,14 @@ export class RunEngine {
     };
 
     const runId = newRunId();
-    this.deps.runStore.insert({ id: runId, goal, mode: 'free', sessionId, budget });
+    this.deps.runStore.insert({
+      id: runId, goal, mode: 'free', sessionId, budget,
+      ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
+    });
     this.emitRunEvent(runId, 'run.created', {
       goal,
       sessionId,
+      ...(input.parentRunId ? { forkFrom: input.parentRunId, forkFromSeq: input.forkFromSeq } : {}),
       budget,
       ...(workspace ? { workspace: { id: workspace.id, name: workspace.name, permission: workspace.permission } } : {}),
     });
@@ -218,10 +227,14 @@ export class RunEngine {
 
   private async executeRun(runId: string, input: StartRunInput, workspace: Workspace | null, signal: AbortSignal): Promise<void> {
     try {
-      // 多轮续接：同会话上一轮的完整对话（checkpoint 事件溯源回放）
+      // 多轮续接：同会话上一轮的完整对话（checkpoint 事件溯源回放）；
+      // M4-1 fork：显式 initialHistory 优先（Time-Travel 从任意 checkpoint 回放）
       let initialHistory: import('../providers/types.js').ChatMessage[] | undefined;
       let continuedFrom: string | undefined;
-      if (input.continueSession && input.sessionId) {
+      if (input.initialHistory && input.initialHistory.length > 0) {
+        initialHistory = input.initialHistory;
+        continuedFrom = input.parentRunId;
+      } else if (input.continueSession && input.sessionId) {
         const prev = this.loadSessionHistory(input.sessionId);
         if (prev) {
           initialHistory = prev.history;

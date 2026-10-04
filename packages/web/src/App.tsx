@@ -14,6 +14,7 @@ import {
   GitBranch,
   ShieldAlert,
   Plug,
+  History,
 } from 'lucide-react';
 import DashboardPage from './pages/DashboardPage';
 import TasksPage from './pages/TasksPage';
@@ -23,6 +24,7 @@ import ChatPage from './pages/ChatPage';
 import WorkflowPage from './pages/WorkflowPage';
 import ApprovalsPage from './pages/ApprovalsPage';
 import ConnectorsPage from './pages/ConnectorsPage';
+import TimeTravelPage from './pages/TimeTravelPage';
 import SettingsPage from './pages/SettingsPage';
 import SkillBuilderPage from './pages/SkillBuilderPage';
 import { useGlobalStream } from './hooks/useGlobalStream';
@@ -40,6 +42,7 @@ const navItems = [
   { path: '/workflows', label: 'Workflow', icon: GitBranch },
   { path: '/approvals', label: '审批中心', icon: ShieldAlert },
   { path: '/connectors', label: '连接器', icon: Plug },
+  { path: '/time-travel', label: 'Time-Travel', icon: History },
   { path: '/settings', label: '设置', icon: SettingsIcon },
 ];
 
@@ -152,6 +155,7 @@ export default function App() {
               <Route path="/workflows" element={<WorkflowPage />} />
               <Route path="/approvals" element={<ApprovalsPage />} />
               <Route path="/connectors" element={<ConnectorsPage />} />
+              <Route path="/time-travel" element={<TimeTravelPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="*" element={
                 <div className="flex items-center justify-center h-full">
