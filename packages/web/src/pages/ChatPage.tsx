@@ -202,10 +202,12 @@ export default function ChatPage() {
       const { api: apiLocal } = await import('../api/client');
       const enriched = await Promise.all(items.map(async (r: any) => {
         if (!r.parent_run_id || !r.fork_from_seq) return r;
-        let cp: any;
-        try {
-          cp = await apiLocal.getRunCheckpoints(r.parent_run_id);
-        } catch { return r; }
+        let cp: any = null;
+        for (let attempt = 0; attempt < 3 && !cp; attempt++) {
+          try { cp = await apiLocal.getRunCheckpoints(r.parent_run_id); }
+          catch { await new Promise(res => setTimeout(res, 300 * (attempt + 1))); }
+        }
+        if (!cp) return r;
         try {
           const target = (cp.items ?? []).find((c: any) => c.seq === r.fork_from_seq) ?? (cp.items ?? [])[0];
           if (!target) return r;

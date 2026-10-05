@@ -150,45 +150,28 @@ export default function TimeTravelPage() {
   /** 三层导航第一层：按"对话线"（session thread）平铺。
    * 每条线 = 一个 sessionId 的 runs；挂在其他线 run 下的分支（fork 生成的新 sessionId）
    * 通过 parent_run_id 归属到【被修改那条 run 所在的线】的对应位置下。 */
-  const threads: ThreadItem[] = useMemo(() => {
+  /** 三层导航：第一层 = 血缘对话集（源对话+它的全部分支）；第二层 = 集内的运行；第三层 = 存档 */
+  const threads: SessionGroup[] = useMemo(() => {
     const byId = new Map(runs.map(r => [r.id, r]));
-    const threadOf = new Map<string, ThreadItem>();
-    const ordered: ThreadItem[] = [];
-    // 会话按首 run 创建时间排序（对话线的名字 = 首 run goal）
-    const bySession = new Map<string, RunItem[]>();
-    for (const r of runs) {
-      const key = r.session_id ?? '(未分组)';
-      if (!bySession.has(key)) bySession.set(key, []);
-      bySession.get(key)!.push(r);
-    }
-    const sids = [...bySession.keys()].sort((a, b) =>
-      (bySession.get(a)![0]?.created_at ?? '').localeCompare(bySession.get(b)![0]?.created_at ?? ''));
-    for (const sid of sids) {
-      const rs = [...bySession.get(sid)!].sort((a, b) => a.created_at.localeCompare(b.created_at));
-      const t: ThreadItem = {
-        sessionId: sid,
-        topic: rs[0]?.goal ?? '(无标题)',
-        runs: [...rs],
-        lastAt: rs.map(r => r.created_at).sort().at(-1) ?? '',
-      };
-      threadOf.set(sid, t);
-      ordered.push(t);
-    }
-    // 把"外来的分支 run"（其 parent 在别的线）挂到 parent 所在线的 runs 尾部（带归属）
-    for (const r of runs) {
-      if (!r.parent_run_id) continue;
+    const rootOf = (r: RunItem, seen = new Set<string>()): string => {
+      if (!r.parent_run_id || seen.has(r.id)) return r.id;
+      seen.add(r.id);
       const parent = byId.get(r.parent_run_id);
-      if (!parent) continue;
-      const parentThread = threadOf.get(parent.session_id ?? '');
-      const ownThread = threadOf.get(r.session_id ?? '');
-      if (parentThread && ownThread && parentThread !== ownThread) {
-        // 从自己的线里剔除（该线只剩它自己时会保留为独立条目 — 兼容）
-        ownThread.runs = ownThread.runs.filter(x => x.id !== r.id);
-        parentThread.runs.push({ ...r, goal: `🌿 ${r.goal}` });
-      }
+      return parent ? rootOf(parent, seen) : r.parent_run_id;
+    };
+    const byRoot = new Map<string, RunItem[]>();
+    for (const r of runs) {
+      const root = rootOf(r);
+      if (!byRoot.has(root)) byRoot.set(root, []);
+      byRoot.get(root)!.push(r);
     }
-    // 剔除空线
-    return ordered.filter(t => t.runs.length > 0).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+    return [...byRoot.entries()].map(([root, rs]) => ({
+      sessionId: root,
+      runs: [...rs].sort((a, b) => a.created_at.localeCompare(b.created_at)),
+      branchCount: rs.filter(r => r.parent_run_id).length,
+      topic: rs[0]?.goal ?? '',
+      lastAt: rs.map(r => r.created_at).sort().at(-1) ?? '',
+    })).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
   }, [runs]);
 
   // 热更新：有 running 的 run 时每 4s 刷新列表（完成后自动变 ✅）
