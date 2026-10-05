@@ -177,15 +177,24 @@ export default function TimeTravelPage() {
     } finally { setBusy(false); }
   };
 
+  // 用户实测修正：对话集按【run 血缘】分组（fork 出的新会话 B 与源会话 A 同集），
+  // 不按 session_id（fork 现在生成新 sessionId — 按 session 分组会把分支拆出去）
   const sessions: SessionGroup[] = useMemo(() => {
+    const byId = new Map(runs.map(r => [r.id, r]));
+    const rootOf = (r: RunItem, seen = new Set<string>()): string => {
+      if (!r.parent_run_id || seen.has(r.id)) return r.id;
+      seen.add(r.id);
+      const parent = byId.get(r.parent_run_id);
+      return parent ? rootOf(parent, seen) : r.parent_run_id; // 父 run 不在列表（已删）→ 以父 id 为根
+    };
     const by = new Map<string, RunItem[]>();
     for (const r of runs) {
-      const key = r.session_id ?? '(未分组)';
-      if (!by.has(key)) by.set(key, []);
-      by.get(key)!.push(r);
+      const root = rootOf(r);
+      if (!by.has(root)) by.set(root, []);
+      by.get(root)!.push(r);
     }
-    return [...by.entries()].map(([sessionId, rs]) => ({
-      sessionId,
+    return [...by.entries()].map(([root, rs]) => ({
+      sessionId: root,
       runs: [...rs].sort((a, b) => a.created_at.localeCompare(b.created_at)),
       branchCount: rs.filter(r => r.parent_run_id).length,
       topic: rs[0]?.goal ?? '',

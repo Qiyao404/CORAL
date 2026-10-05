@@ -119,7 +119,7 @@ export class RunEngine {
     const runId = newRunId();
     this.deps.runStore.insert({
       id: runId, goal, mode: 'free', sessionId, budget,
-      ...(input.parentRunId ? { parentRunId: input.parentRunId } : {}),
+      ...(input.parentRunId ? { parentRunId: input.parentRunId, forkFromSeq: input.forkFromSeq } : {}),
       ...(workspace ? { workspaceId: workspace.id } : {}), // 终审 P2：fork 继承去单点（事件反查不再是唯一来源）
     });
     this.emitRunEvent(runId, 'run.created', {

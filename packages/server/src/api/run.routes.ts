@@ -180,8 +180,16 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
       // 用户实测语义：fork 生成【新对话 B】（继承截至 fork 点的全部上下文），
       // 源对话 A 保持不变 — B 经 parent_run_id 血缘与 A 归入同一对话集
       const newSessionId = `sess_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      // 用户反馈：新对话线要能看到"继承自哪、之前做了什么"——首条 user 消息
+      // 注入继承摘要（同时保持 initialHistory 供模型衔接）
+      const inheritedSummary = history
+        .filter(m => m.role === 'user' && !String(m.content).startsWith('[system]'))
+        .map(m => `· ${String(m.content).slice(0, 60)}`)
+        .join('\n');
+      const goalWithInherit = (instruction || `[fork] 继续之前的任务`)
+        + (inheritedSummary ? `\n\n（本对话继承自 ${runId.slice(0, 14)}… 第 ${fromSeq} 步；此前已完成：\n${inheritedSummary}\n）` : '');
       const result = engine.startRun({
-        goal: instruction || `[fork of ${runId}@${fromSeq}] ${run.goal.slice(0, 200)}`,
+        goal: goalWithInherit,
         sessionId: newSessionId,
         workspaceId,
         parentRunId: runId,
