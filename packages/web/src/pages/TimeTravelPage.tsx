@@ -1,27 +1,36 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { History, GitBranch, Loader2, CornerUpLeft, ChevronDown, ChevronRight, Scan, HelpCircle, Eye, EyeOff, Trash2, ArrowLeft, MessageSquare } from 'lucide-react';
+import {
+  History, GitBranch, Loader2, CornerUpLeft, ChevronDown, ChevronRight, Scan, HelpCircle, Eye, EyeOff, Trash2, ArrowLeft, MessageSquare, MessageCircle,
+} from 'lucide-react';
 import { api } from '../api/client';
 import { Tag } from '../components/ui';
 
 /**
- * M4-1：Time-Travel — 两级导航（对话 → run/分支 → checkpoint）+ fork。
- * 用户实测迭代：
- * · v3 两级导航：先选对话（会话），再选该对话里的 run/分支 — 分支归属一目了然
- * · fork 生成新对话 B（继承上下文），A 不变；B 与 A 在对话页归入同一对话集
- * · 轮询热更新：fork 后 status running → completed 自动刷新
+ * M4-1：Time-Travel — 四层导航（用户语义终版）。
+ * 第一层：选择对话（血缘对话集 — 与对话页侧栏一致）
+ * 第二层：该对话的全部提问（分支归在父提问下）
+ * 第三层：某提问的运行变体（原运行 + 🌿 分支运行，仅当有分支时出现）
+ * 第四层：存档时间轴（checkpoint）
  */
 
 interface RunItem { id: string; goal: string; status: string; mode: string; session_id: string | null; parent_run_id: string | null; fork_from_seq?: number | null; created_at: string }
-interface SessionGroup { sessionId: string; runs: RunItem[]; branchCount: number; topic: string; lastAt: string }
-/** 三层导航的中间层：会话（对话线）→ 其下的 run 列表（含兄弟会话的分支运行） */
-interface ThreadItem {
-  sessionId: string;
-  topic: string;         // 首个 run 的 goal（对话线的名字）
-  runs: RunItem[];       // 本线所有 run + 挂在任意轮下的分支 run（带归属标注）
-  lastAt: string;
-}
 interface CpPreviewMsg { role: string; toolName: string | null; contentPreview: string; toolCalls?: string[] }
 interface CpItem { seq: number; kind: string; label: string; createdAt: string; messageCount: number; preview: CpPreviewMsg[] }
+
+interface AskItem {
+  originalRun: RunItem;
+  branchRuns: RunItem[];
+  goal: string;
+  status: string;
+  createdAt: string;
+}
+
+interface ConvItem {
+  rootId: string;
+  topic: string;
+  asks: AskItem[];
+  lastAt: string;
+}
 
 function describeTool(toolName: string, resultPreview: string): string {
   const path = (resultPreview.match(/"path"\s*:\s*"([^"]{1,80})"/) || [])[1];
@@ -35,7 +44,6 @@ function describeTool(toolName: string, resultPreview: string): string {
   if (toolName === 'http_fetch') return `抓取网页 ${url ?? ''}`;
   if (toolName === 'todo_write') return '更新任务清单';
   if (toolName === 'memory_search') return '查找长期记忆';
-  if (toolName === 'memory_write' || toolName === 'memory_read' || toolName === 'memory_list') return '读写长期记忆';
   if (toolName === 'shell_run') return '执行命令';
   if (toolName === 'agent_spawn') return '派出子代理';
   if (toolName.startsWith('skill_')) return `执行技能 ${toolName.replace(/^skill_/, '')}`;
@@ -100,7 +108,7 @@ function GuidePanel() {
   if (!open) {
     return (
       <button onClick={() => setOpen(true)} className="text-xs text-fg-muted flex items-center gap-1 cursor-pointer hover:text-brand">
-        <HelpCircle className="w-3.5 h-3.5" /> Time-Travel 是什么？怎么选？（附例子）
+        <HelpCircle className="w-3.5 h-3.5" /> Time-Travel 是什么？怎么用？
       </button>
     );
   }
@@ -110,19 +118,19 @@ function GuidePanel() {
         <HelpCircle className="w-4 h-4 text-brand" />
         <span className="font-medium text-fg-primary">Time-Travel 使用指引</span>
         <span className="flex-1" />
-        <button onClick={() => { setOpen(false); localStorage.setItem('coral.tt.guide', '1'); }}
-          className="text-fg-muted hover:text-fg-primary cursor-pointer">收起</button>
+        <button onClick={() => { setOpen(false); localStorage.setItem('coral.tt.guide', '1'); }} className="text-fg-muted hover:text-fg-primary cursor-pointer">收起</button>
       </div>
-      <p><b>怎么用</b>：① 选一个<b>对话</b> → ② 选该对话里的一次运行（分支带 🌿 标记）→ ③ 时间轴上找 <span className="text-status-success">✅ 阶段完成点</span>（Agent 刚交付结果的时刻）→ ④ 写新指令点 Fork。</p>
-      <p className="mt-2"><b>Fork 后发生什么</b>：会生成一个<b>新对话</b>（继承所选时刻之前的全部上下文——读过的文件、做过的结论都在），原对话完全不变。新对话和原对话在「对话」页属于同一个对话集（主题相同），可在那里继续聊。</p>
-      <p className="mt-2"><b>例子</b>：对话 A 里 Agent 已"总结了报告并生成 Word"（第一个完成点），后面又"生成了对比文档"（第二个完成点）。想要"从成本角度重新总结"？选第一个完成点 → 写"改成从成本角度重新总结" → Fork → 新对话 B 带着 A 的文件阅读成果按新角度重做。</p>
+      <p><b>四步走</b>：① 选<b>对话</b> → ② 选该对话里的<b>提问</b> → ③ 提问有分支时选<b>运行变体</b> → ④ 时间轴上找 <span className="text-status-success">✅ 完成点</span> 写新指令 Fork。</p>
+      <p className="mt-2"><b>Fork 后</b>：生成新对话（继承上下文），原对话不变。新对话在「对话」页与原对话同属一个对话集。</p>
+      <p className="mt-2"><b>例子</b>：对话里有"总结报告并生成 Word"和"生成对比文档"两个提问。想让总结换角度？选"总结"提问 → 时间轴找"生成 Word"那个完成点 → 写"从成本角度重做" → Fork。</p>
     </div>
   );
 }
 
 export default function TimeTravelPage() {
   const [runs, setRuns] = useState<RunItem[]>([]);
-  const [selectedSession, setSelectedSession] = useState<string | null>(null);
+  const [selectedConv, setSelectedConv] = useState<string | null>(null);
+  const [selectedAsk, setSelectedAsk] = useState<string | null>(null);
   const [selectedRun, setSelectedRun] = useState<string | null>(null);
   const [checkpoints, setCheckpoints] = useState<CpItem[]>([]);
   const [activeCp, setActiveCp] = useState<number | null>(null);
@@ -138,7 +146,7 @@ export default function TimeTravelPage() {
     } catch { /* ignore */ }
   }, []);
 
-  const loadCheckpointsMeta = useCallback(async (runId: string) => {
+  const loadCheckpoints = useCallback(async (runId: string) => {
     try {
       const d = await api.getRunCheckpoints(runId);
       setCheckpoints(d.items ?? []);
@@ -147,11 +155,14 @@ export default function TimeTravelPage() {
 
   useEffect(() => { loadRuns(); }, [loadRuns]);
 
-  /** 三层导航第一层：按"对话线"（session thread）平铺。
-   * 每条线 = 一个 sessionId 的 runs；挂在其他线 run 下的分支（fork 生成的新 sessionId）
-   * 通过 parent_run_id 归属到【被修改那条 run 所在的线】的对应位置下。 */
-  /** 三层导航：第一层 = 血缘对话集（源对话+它的全部分支）；第二层 = 集内的运行；第三层 = 存档 */
-  const threads: SessionGroup[] = useMemo(() => {
+  const hasRunning = runs.some(r => !['completed', 'failed', 'cancelled'].includes(r.status));
+  useEffect(() => {
+    if (!hasRunning) return;
+    const t = setInterval(() => { void loadRuns(); }, 4000);
+    return () => clearInterval(t);
+  }, [hasRunning, loadRuns]);
+
+  const convs: ConvItem[] = useMemo(() => {
     const byId = new Map(runs.map(r => [r.id, r]));
     const rootOf = (r: RunItem, seen = new Set<string>()): string => {
       if (!r.parent_run_id || seen.has(r.id)) return r.id;
@@ -165,81 +176,58 @@ export default function TimeTravelPage() {
       if (!byRoot.has(root)) byRoot.set(root, []);
       byRoot.get(root)!.push(r);
     }
-    return [...byRoot.entries()].map(([root, rs]) => ({
-      sessionId: root,
-      runs: [...rs].sort((a, b) => a.created_at.localeCompare(b.created_at)),
-      branchCount: rs.filter(r => r.parent_run_id).length,
-      topic: rs[0]?.goal ?? '',
-      lastAt: rs.map(r => r.created_at).sort().at(-1) ?? '',
-    })).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+    return [...byRoot.entries()].map(([root, rs]) => {
+      const sorted = [...rs].sort((a, b) => a.created_at.localeCompare(b.created_at));
+      const topLevel = sorted.filter(r => !r.parent_run_id || !byId.get(r.parent_run_id));
+      const asks: AskItem[] = topLevel.map(orig => {
+        const branches = sorted.filter(r => {
+          if (r.id === orig.id) return false;
+          let cur: RunItem | undefined = r;
+          const seen = new Set<string>();
+          while (cur?.parent_run_id && !seen.has(cur.id)) {
+            seen.add(cur.id);
+            if (cur.parent_run_id === orig.id) return true;
+            cur = byId.get(cur.parent_run_id);
+          }
+          return false;
+        });
+        return { originalRun: orig, branchRuns: branches, goal: orig.goal, status: orig.status, createdAt: orig.created_at };
+      });
+      return { rootId: root, topic: sorted[0]?.goal ?? '', asks, lastAt: sorted.map(r => r.created_at).sort().at(-1) ?? '' };
+    }).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
   }, [runs]);
 
-  // 热更新：有 running 的 run 时每 4s 刷新列表（完成后自动变 ✅）
-  const hasRunning = runs.some(r => !['completed', 'failed', 'cancelled'].includes(r.status));
-  useEffect(() => {
-    if (!hasRunning) return;
-    const t = setInterval(() => { void loadRuns(); }, 4000);
-    return () => clearInterval(t);
-  }, [hasRunning, loadRuns]);
+  const conv = convs.find(c => c.rootId === selectedConv);
+  const ask = conv?.asks.find(a => a.originalRun.id === selectedAsk);
+  const runItem = runs.find(r => r.id === selectedRun);
 
-  const openSession = (sid: string) => {
-    setSelectedSession(sid);
-    setSelectedRun(null);
-    setCheckpoints([]);
-    setActiveCp(null);
-    setMsg(null);
+  const openConv = (rootId: string) => {
+    setSelectedConv(rootId); setSelectedAsk(null); setSelectedRun(null);
+    setCheckpoints([]); setActiveCp(null); setMsg(null);
   };
-
+  const openAsk = (a: AskItem) => {
+    setSelectedAsk(a.originalRun.id); setActiveCp(null); setInstruction(''); setShowRaw(false); setMsg(null);
+    if (a.branchRuns.length === 0) { setSelectedRun(a.originalRun.id); loadCheckpoints(a.originalRun.id); }
+    else { setSelectedRun(null); setCheckpoints([]); }
+  };
   const openRun = (runId: string) => {
-    setSelectedRun(runId);
-    setActiveCp(null);
-    setInstruction('');
-    setShowRaw(false);
-    setMsg(null);
-    void loadCheckpointsMeta(runId);
+    setSelectedRun(runId); setActiveCp(null); setInstruction(''); setShowRaw(false); setMsg(null);
+    loadCheckpoints(runId);
   };
-
   const fork = async () => {
     if (!selectedRun || activeCp === null) return;
     setBusy(true);
     try {
       const r = await api.forkRun(selectedRun, activeCp, instruction.trim() || undefined);
-      setMsg(`✅ 已 fork — 生成新对话（${r.runId}），继承 #${activeCp} 前的全部成果。到「对话」页左侧找带 🌿 的新对话（与源对话同属一个对话集）`);
+      setMsg(`✅ 已 fork — 生成新对话（${r.runId}），继承 #${activeCp} 前的全部成果`);
       await loadRuns();
-    } catch (err: any) {
-      setMsg('fork 失败: ' + (err.message || err));
-    } finally { setBusy(false); }
+    } catch (err: any) { setMsg('fork 失败: ' + (err.message || err)); }
+    finally { setBusy(false); }
   };
 
-  // 用户实测修正：对话集按【run 血缘】分组（fork 出的新会话 B 与源会话 A 同集），
-  // 不按 session_id（fork 现在生成新 sessionId — 按 session 分组会把分支拆出去）
-  const sessions: SessionGroup[] = useMemo(() => {
-    const byId = new Map(runs.map(r => [r.id, r]));
-    const rootOf = (r: RunItem, seen = new Set<string>()): string => {
-      if (!r.parent_run_id || seen.has(r.id)) return r.id;
-      seen.add(r.id);
-      const parent = byId.get(r.parent_run_id);
-      return parent ? rootOf(parent, seen) : r.parent_run_id; // 父 run 不在列表（已删）→ 以父 id 为根
-    };
-    const by = new Map<string, RunItem[]>();
-    for (const r of runs) {
-      const root = rootOf(r);
-      if (!by.has(root)) by.set(root, []);
-      by.get(root)!.push(r);
-    }
-    return [...by.entries()].map(([root, rs]) => ({
-      sessionId: root,
-      runs: [...rs].sort((a, b) => a.created_at.localeCompare(b.created_at)),
-      branchCount: rs.filter(r => r.parent_run_id).length,
-      topic: rs[0]?.goal ?? '',
-      lastAt: rs.map(r => r.created_at).sort().at(-1) ?? '',
-    })).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
-  }, [runs]);
-
-  const session = threads.find(t => t.sessionId === selectedSession);
-  const runItem = runs.find(r => r.id === selectedRun);
   const activeItem = checkpoints.find(c => c.seq === activeCp);
-
+  const showAskList = selectedConv && !selectedAsk;
+  const showRunVariants = selectedConv && selectedAsk && ask && ask.branchRuns.length > 0 && !selectedRun;
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-4">
@@ -249,94 +237,88 @@ export default function TimeTravelPage() {
         </div>
         <div>
           <h1 className="text-xl font-heading font-medium text-fg-primary">Time-Travel</h1>
-          <p className="text-xs text-fg-muted">对话 → 运行 → 存档点 · 从任意存档带着已有成果分叉出新对话</p>
+          <p className="text-xs text-fg-muted">对话 → 提问 → 运行变体 → 存档点 · 从任意存档分叉出新对话</p>
         </div>
       </div>
-
       <GuidePanel />
-
       {runs.length === 0 && (
-        <div className="glass rounded-xl border border-glass-border p-6 text-center text-xs text-fg-muted leading-6">
-          还没有任何对话。先到<b>「对话」</b>页发一个任务，完成后再回到这里。
-        </div>
+        <div className="glass rounded-xl border border-glass-border p-6 text-center text-xs text-fg-muted">先到「对话」页发一个任务</div>
       )}
-
       <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-4">
+        {/* 左栏：层级导航 */}
         <div className="glass rounded-xl border border-glass-border overflow-hidden flex flex-col max-h-[580px]">
-          {!selectedSession ? (
+          <div className="px-3 py-1.5 border-b border-glass-border flex items-center gap-1 text-[11px] text-fg-muted">
+            <button onClick={() => { setSelectedConv(null); setSelectedAsk(null); setSelectedRun(null); setCheckpoints([]); }} className={`cursor-pointer hover:text-brand ${!selectedConv ? 'font-bold text-fg-primary' : ''}`}>对话</button>
+            {selectedConv && <><ChevronRight className="w-3 h-3" /><button onClick={() => { setSelectedAsk(null); setSelectedRun(null); setCheckpoints([]); }} className={`cursor-pointer hover:text-brand truncate max-w-[100px] ${showAskList ? 'font-bold text-fg-primary' : ''}`}>{conv?.topic.slice(0, 16)}…</button></>}
+            {selectedAsk && <><ChevronRight className="w-3 h-3" /><button onClick={() => { setSelectedRun(null); setCheckpoints([]); }} className={`cursor-pointer hover:text-brand truncate max-w-[100px] ${showRunVariants ? 'font-bold text-fg-primary' : ''}`}>{ask?.goal.slice(0, 14)}…</button></>}
+            {selectedRun && ask && ask.branchRuns.length > 0 && <><ChevronRight className="w-3 h-3" /><span className="text-fg-secondary font-bold">变体</span></>}
+          </div>
+          {!selectedConv && (
             <>
-              <div className="px-3 py-2 border-b border-glass-border text-xs font-medium text-fg-secondary">第一步：选择对话</div>
+              <div className="px-3 py-2 border-b border-glass-border text-xs font-medium text-fg-secondary">选择对话</div>
               <div className="flex-1 overflow-y-auto">
-                {threads.map(t => {
-                  const branchCount = t.runs.filter(r => r.parent_run_id).length;
+                {convs.map(c => {
+                  const bt = c.asks.reduce((n, a) => n + a.branchRuns.length, 0);
                   return (
-                  <button key={t.sessionId} onClick={() => openSession(t.sessionId)}
-                    className="w-full text-left px-3 py-2 text-xs cursor-pointer border-b border-glass-border/50 hover:bg-bg-elev/30">
-                    <div className="flex items-center gap-1.5">
-                      <MessageSquare className="w-3 h-3 text-fg-muted shrink-0" />
-                      <span className="truncate flex-1 text-fg-primary">{t.topic.slice(0, 60)}</span>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-fg-muted">{t.runs.length} 次运行</span>
-                      {branchCount > 0 && <span className="text-brand">🌿 {branchCount} 分支</span>}
-                      <span className="flex-1" />
-                      <span className="text-fg-muted">{new Date(t.lastAt).toLocaleDateString()}</span>
-                    </div>
-                  </button>
+                    <button key={c.rootId} onClick={() => openConv(c.rootId)} className="w-full text-left px-3 py-2 text-xs cursor-pointer border-b border-glass-border/50 hover:bg-bg-elev/30">
+                      <div className="flex items-center gap-1.5"><MessageSquare className="w-3 h-3 text-fg-muted shrink-0" /><span className="truncate flex-1 text-fg-primary">{c.topic.slice(0, 55)}</span></div>
+                      <div className="flex items-center gap-2 mt-0.5"><span className="text-fg-muted">{c.asks.length} 个提问</span>{bt > 0 && <span className="text-brand">🌿 {bt}</span>}<span className="flex-1" /><span className="text-fg-muted">{new Date(c.lastAt).toLocaleDateString()}</span></div>
+                    </button>
                   );
                 })}
               </div>
             </>
-          ) : (
+          )}
+          {showAskList && (
             <>
-              <div className="px-3 py-2 border-b border-glass-border text-xs font-medium text-fg-secondary flex items-center gap-2">
-                <button onClick={() => { setSelectedSession(null); setSelectedRun(null); setCheckpoints([]); }}
-                  className="text-fg-muted hover:text-brand cursor-pointer shrink-0"><ArrowLeft className="w-3.5 h-3.5" /></button>
-                <span className="truncate">{session?.topic.slice(0, 40)}</span>
-              </div>
-              <div className="px-3 py-1.5 text-[10px] text-fg-muted border-b border-glass-border/50">第二步：选该对话中的一次运行（含分支）</div>
+              <div className="px-3 py-1.5 text-[10px] text-fg-muted border-b border-glass-border/50">选择提问</div>
               <div className="flex-1 overflow-y-auto">
-                {session?.runs.map(r => (
-                  <div key={r.id} onClick={() => openRun(r.id)}
-                    className={`w-full text-left px-3 py-2 text-xs cursor-pointer border-b border-glass-border/50 hover:bg-bg-elev/30 ${selectedRun === r.id ? 'bg-brand/10 border-l-2 border-l-brand' : ''}`}>
-                    <div className="flex items-center gap-1.5">
-                      {r.parent_run_id && <GitBranch className="w-3 h-3 text-brand shrink-0" />}
-                      <span className={`truncate flex-1 ${r.parent_run_id ? 'text-brand' : 'text-fg-primary'}`}>{r.goal.slice(0, 50)}</span>
-                      <button
-                        onClick={e => { e.stopPropagation(); if (confirm('删除这条运行（分支连同事件一并删除）？')) { api.deleteRun(r.id).then(loadRuns).catch(err => setMsg('删除失败: ' + (err.message || err))); } }}
-                        className="text-fg-muted hover:text-status-danger cursor-pointer shrink-0" title="删除">
-                        <Trash2 className="w-3 h-3" />
-                      </button>
-                    </div>
-                    <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                      <Tag variant={r.status === 'completed' ? 'success' : r.status === 'failed' ? 'danger' : 'info'}>{r.status}</Tag>
-                      <span className="text-fg-muted">{new Date(r.created_at).toLocaleTimeString()}</span>
-                      {r.parent_run_id && <span className="text-brand/80 font-mono text-[10px]">🌿{r.parent_run_id.slice(0, 10)}…{r.fork_from_seq != null ? `@${r.fork_from_seq}` : ''}</span>}
-                    </div>
+                {conv?.asks.map(a => (
+                  <div key={a.originalRun.id} onClick={() => openAsk(a)} className="px-3 py-2 text-xs cursor-pointer border-b border-glass-border/50 hover:bg-bg-elev/30">
+                    <div className="flex items-center gap-1.5"><MessageCircle className="w-3 h-3 text-fg-muted shrink-0" /><span className="truncate flex-1 text-fg-primary">{a.goal.slice(0, 50)}</span>{a.branchRuns.length > 0 && <GitBranch className="w-3 h-3 text-brand shrink-0" />}</div>
+                    <div className="flex items-center gap-2 mt-0.5"><Tag variant={a.status === 'completed' ? 'success' : a.status === 'failed' ? 'danger' : 'info'}>{a.status}</Tag>{a.branchRuns.length > 0 && <span className="text-brand">🌿 {a.branchRuns.length}</span>}<span className="flex-1" /><span className="text-fg-muted">{new Date(a.createdAt).toLocaleTimeString()}</span></div>
                   </div>
                 ))}
               </div>
             </>
           )}
+          {showRunVariants && (
+            <>
+              <div className="px-3 py-1.5 text-[10px] text-fg-muted border-b border-glass-border/50">选择运行变体</div>
+              <div className="flex-1 overflow-y-auto">
+                <div onClick={() => openRun(ask!.originalRun.id)} className="px-3 py-2 text-xs cursor-pointer border-b border-glass-border/50 hover:bg-bg-elev/30">
+                  <div className="flex items-center gap-1.5"><span className="text-fg-primary flex-1">原始运行</span><Tag variant={ask!.originalRun.status === 'completed' ? 'success' : 'info'}>{ask!.originalRun.status}</Tag></div>
+                </div>
+                {ask!.branchRuns.map(b => (
+                  <div key={b.id} onClick={() => openRun(b.id)} className="px-3 py-2 text-xs cursor-pointer border-b border-glass-border/50 hover:bg-bg-elev/30">
+                    <div className="flex items-center gap-1.5"><GitBranch className="w-3 h-3 text-brand shrink-0" /><span className="text-brand truncate flex-1">{b.goal.split('\n')[0].slice(0, 40)}</span><Tag variant={b.status === 'completed' ? 'success' : 'info'}>{b.status}</Tag></div>
+                    {b.fork_from_seq != null && <div className="text-[10px] text-brand/60 mt-0.5">🌿 从第 {b.fork_from_seq} 步分出</div>}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+          {selectedRun && (
+            <div className="px-3 py-1.5 text-[10px] text-fg-muted">存档时间轴在右侧 ↓</div>
+          )}
         </div>
 
+        {/* 右栏：存档时间轴 */}
         <div className="space-y-3">
           {!selectedRun && (
             <div className="glass rounded-xl border border-glass-border p-8 text-center text-xs text-fg-muted">
               <Scan className="w-6 h-6 mx-auto mb-2 opacity-50" />
-              ← 先选对话，再选运行 — 这里会显示存档时间轴（每项中文摘要 + ✅ 完成点标记）
+              ← 逐层选择后这里显示存档时间轴
             </div>
           )}
           {selectedRun && (
             <>
               <div className="text-xs text-fg-muted">
-                第三步：找 <span className="text-status-success">✅ 阶段完成点</span> 写新指令分叉。运行目标：<span className="text-fg-primary">{runItem?.goal.slice(0, 60)}</span>
+                找 <span className="text-status-success">✅ 完成点</span> 写新指令分叉
+                {runItem?.parent_run_id && <span className="text-brand"> · 🌿 分支运行</span>}
               </div>
-
               <div className="space-y-2 max-h-[340px] overflow-y-auto pr-1">
-                {checkpoints.length === 0 && (
-                  <div className="glass rounded-xl border border-glass-border p-6 text-center text-xs text-fg-muted">该运行没有存档</div>
-                )}
+                {checkpoints.length === 0 && <div className="glass rounded-xl border border-glass-border p-6 text-center text-xs text-fg-muted">该运行没有存档</div>}
                 {checkpoints.map((cp, idx) => {
                   const meta = classifyCheckpoint(cp.preview);
                   const prevCount = idx > 0 ? checkpoints[idx - 1].messageCount : 0;
@@ -344,61 +326,40 @@ export default function TimeTravelPage() {
                   const story = messagesToStory(delta.length > 0 ? delta : cp.preview).slice(0, 6);
                   const isActive = activeCp === cp.seq;
                   return (
-                    <div key={cp.seq} className={`glass rounded-xl border p-2.5 cursor-pointer transition-colors ${isActive ? 'border-brand/50 bg-brand/5' : 'border-glass-border hover:border-brand/30'}`}
-                      onClick={() => { setActiveCp(cp.seq); setShowRaw(false); }}>
+                    <div key={cp.seq} className={`glass rounded-xl border p-2.5 cursor-pointer transition-colors ${isActive ? 'border-brand/50 bg-brand/5' : 'border-glass-border hover:border-brand/30'}`} onClick={() => { setActiveCp(cp.seq); setShowRaw(false); }}>
                       <div className="flex items-center gap-2 text-xs flex-wrap">
                         <span className="font-mono text-brand shrink-0">#{cp.seq}</span>
                         <span className={`px-1.5 py-0.5 rounded border text-[10px] ${meta.cls}`}>{meta.badge}</span>
-                        <span className="flex-1" />
-                        <span className="text-fg-muted">{new Date(cp.createdAt).toLocaleTimeString()}</span>
+                        <span className="flex-1" /><span className="text-fg-muted">{new Date(cp.createdAt).toLocaleTimeString()}</span>
                         {isActive ? <ChevronDown className="w-3.5 h-3.5 text-fg-muted" /> : <ChevronRight className="w-3.5 h-3.5 text-fg-muted" />}
                       </div>
                       <div className="mt-1.5 space-y-0.5">
-                        {story.length === 0
-                          ? <p className="text-[11px] text-fg-muted">（这一步没有新动作）</p>
-                          : story.map((l, i) => (
-                            <div key={i} className="flex gap-1.5 text-[11px] leading-4 text-fg-secondary">
-                              <span className="shrink-0">{l.icon}</span>
-                              <span className="break-all">{l.text}</span>
-                            </div>
-                          ))}
+                        {story.length === 0 ? <p className="text-[11px] text-fg-muted">（这一步没有新动作）</p> : story.map((l, i) => (
+                          <div key={i} className="flex gap-1.5 text-[11px] leading-4 text-fg-secondary"><span className="shrink-0">{l.icon}</span><span className="break-all">{l.text}</span></div>
+                        ))}
                       </div>
                       {isActive && meta.hint && <p className="mt-1.5 text-[11px] text-fg-muted">💡 {meta.hint}</p>}
                     </div>
                   );
                 })}
               </div>
-
               {activeCp !== null && activeItem && (
                 <div className="glass rounded-xl border border-brand/30 p-3 space-y-2">
-                  <p className="text-xs text-fg-secondary">
-                    第四步：写新指令（可留空 = 原样重跑）。将生成<b>新对话</b>，继承 #{activeCp} 之前的全部成果：
-                  </p>
-                  <textarea
-                    value={instruction}
-                    onChange={e => setInstruction(e.target.value)}
-                    placeholder='例如："改成从成本角度重新总结，其他保持不变"'
-                    className="w-full h-16 glass border border-glass-border rounded-lg p-2 text-xs outline-none focus:border-brand/40 resize-none"
-                  />
+                  <p className="text-xs text-fg-secondary">写新指令（可留空 = 原样重跑），将生成<b>新对话</b>继承 #{activeCp} 前的全部成果：</p>
+                  <textarea value={instruction} onChange={e => setInstruction(e.target.value)} placeholder='例如："改成从成本角度重新总结，其他保持不变"' className="w-full h-16 glass border border-glass-border rounded-lg p-2 text-xs outline-none focus:border-brand/40 resize-none" />
                   <div className="flex items-center gap-2 flex-wrap">
-                    <button onClick={fork} disabled={busy}
-                      className="px-3 py-1.5 rounded-lg bg-brand text-white text-xs flex items-center gap-1.5 cursor-pointer hover:bg-brand-hover disabled:opacity-50">
-                      {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CornerUpLeft className="w-3.5 h-3.5" />}
-                      Fork 出新对话
+                    <button onClick={fork} disabled={busy} className="px-3 py-1.5 rounded-lg bg-brand text-white text-xs flex items-center gap-1.5 cursor-pointer hover:bg-brand-hover disabled:opacity-50">
+                      {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <CornerUpLeft className="w-3.5 h-3.5" />} Fork 出新对话
                     </button>
-                    <button onClick={() => setShowRaw(v => !v)}
-                      className="px-2.5 py-1.5 rounded-lg glass border border-glass-border text-xs text-fg-secondary flex items-center gap-1.5 cursor-pointer hover:border-brand/40">
-                      {showRaw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                      {showRaw ? '隐藏原始消息' : '原始消息'}
+                    <button onClick={() => setShowRaw(v => !v)} className="px-2.5 py-1.5 rounded-lg glass border border-glass-border text-xs text-fg-secondary flex items-center gap-1.5 cursor-pointer hover:border-brand/40">
+                      {showRaw ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />} {showRaw ? '隐藏' : '原始消息'}
                     </button>
                   </div>
                   {showRaw && (
                     <div className="mt-1 space-y-1 max-h-52 overflow-y-auto border-t border-glass-border pt-2">
                       {activeItem.preview.map((m, i) => (
                         <div key={i} className="flex gap-2 text-[11px] leading-4">
-                          <span className={m.role === 'user' ? 'text-brand shrink-0' : m.role === 'tool' ? 'text-fg-muted shrink-0' : 'text-status-info shrink-0'}>
-                            {m.role}{m.toolName ? `:${m.toolName}` : ''}
-                          </span>
+                          <span className={m.role === 'user' ? 'text-brand shrink-0' : m.role === 'tool' ? 'text-fg-muted shrink-0' : 'text-status-info shrink-0'}>{m.role}{m.toolName ? `:${m.toolName}` : ''}</span>
                           <span className="text-fg-secondary break-all line-clamp-2">{m.contentPreview || (m.toolCalls ? `[调用: ${m.toolCalls.join(', ')}]` : '')}</span>
                         </div>
                       ))}

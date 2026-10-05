@@ -222,7 +222,12 @@ export default function ChatPage() {
           return { ...r, inherited: bubbles };
         } catch { return r; }
       }));
-      setSessionRuns(enriched);
+      // Fix3：保留已有 inherited（防止 view.runStatus 触发的重载覆盖掉之前加载的继承气泡）
+      setSessionRuns(prev => enriched.map(item => {
+        if (item.inherited?.length) return item;
+        const old = prev.find(p => p.id === item.id);
+        return old?.inherited?.length ? { ...item, inherited: old.inherited } : item;
+      }));
     } catch { setSessionRuns([]); }
   }, []);
 
@@ -520,7 +525,7 @@ export default function ChatPage() {
                   </div>
                 ))}
                 <div className="flex justify-end">
-                  <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{String(r.goal).split('\\n\\n（本对话继承自')[0]}</div>
+                  <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{(() => { const g = String(r.goal); const cut = g.indexOf('\n\n（本对话继承自'); return cut >= 0 ? g.slice(0, cut) : g; })()}</div>
                 </div>
                 <SentAttachments names={runAttachments[r.id]} />
                 <ProcessSection runId={r.id} defaultOpen={false} />
