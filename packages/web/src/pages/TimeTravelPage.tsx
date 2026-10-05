@@ -13,6 +13,13 @@ import { Tag } from '../components/ui';
 
 interface RunItem { id: string; goal: string; status: string; mode: string; session_id: string | null; parent_run_id: string | null; fork_from_seq?: number | null; created_at: string }
 interface SessionGroup { sessionId: string; runs: RunItem[]; branchCount: number; topic: string; lastAt: string }
+/** 三层导航的中间层：会话（对话线）→ 其下的 run 列表（含兄弟会话的分支运行） */
+interface ThreadItem {
+  sessionId: string;
+  topic: string;         // 首个 run 的 goal（对话线的名字）
+  runs: RunItem[];       // 本线所有 run + 挂在任意轮下的分支 run（带归属标注）
+  lastAt: string;
+}
 interface CpPreviewMsg { role: string; toolName: string | null; contentPreview: string; toolCalls?: string[] }
 interface CpItem { seq: number; kind: string; label: string; createdAt: string; messageCount: number; preview: CpPreviewMsg[] }
 
@@ -140,6 +147,50 @@ export default function TimeTravelPage() {
 
   useEffect(() => { loadRuns(); }, [loadRuns]);
 
+  /** 三层导航第一层：按"对话线"（session thread）平铺。
+   * 每条线 = 一个 sessionId 的 runs；挂在其他线 run 下的分支（fork 生成的新 sessionId）
+   * 通过 parent_run_id 归属到【被修改那条 run 所在的线】的对应位置下。 */
+  const threads: ThreadItem[] = useMemo(() => {
+    const byId = new Map(runs.map(r => [r.id, r]));
+    const threadOf = new Map<string, ThreadItem>();
+    const ordered: ThreadItem[] = [];
+    // 会话按首 run 创建时间排序（对话线的名字 = 首 run goal）
+    const bySession = new Map<string, RunItem[]>();
+    for (const r of runs) {
+      const key = r.session_id ?? '(未分组)';
+      if (!bySession.has(key)) bySession.set(key, []);
+      bySession.get(key)!.push(r);
+    }
+    const sids = [...bySession.keys()].sort((a, b) =>
+      (bySession.get(a)![0]?.created_at ?? '').localeCompare(bySession.get(b)![0]?.created_at ?? ''));
+    for (const sid of sids) {
+      const rs = [...bySession.get(sid)!].sort((a, b) => a.created_at.localeCompare(b.created_at));
+      const t: ThreadItem = {
+        sessionId: sid,
+        topic: rs[0]?.goal ?? '(无标题)',
+        runs: [...rs],
+        lastAt: rs.map(r => r.created_at).sort().at(-1) ?? '',
+      };
+      threadOf.set(sid, t);
+      ordered.push(t);
+    }
+    // 把"外来的分支 run"（其 parent 在别的线）挂到 parent 所在线的 runs 尾部（带归属）
+    for (const r of runs) {
+      if (!r.parent_run_id) continue;
+      const parent = byId.get(r.parent_run_id);
+      if (!parent) continue;
+      const parentThread = threadOf.get(parent.session_id ?? '');
+      const ownThread = threadOf.get(r.session_id ?? '');
+      if (parentThread && ownThread && parentThread !== ownThread) {
+        // 从自己的线里剔除（该线只剩它自己时会保留为独立条目 — 兼容）
+        ownThread.runs = ownThread.runs.filter(x => x.id !== r.id);
+        parentThread.runs.push({ ...r, goal: `🌿 ${r.goal}` });
+      }
+    }
+    // 剔除空线
+    return ordered.filter(t => t.runs.length > 0).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
+  }, [runs]);
+
   // 热更新：有 running 的 run 时每 4s 刷新列表（完成后自动变 ✅）
   const hasRunning = runs.some(r => !['completed', 'failed', 'cancelled'].includes(r.status));
   useEffect(() => {
@@ -202,9 +253,10 @@ export default function TimeTravelPage() {
     })).sort((a, b) => b.lastAt.localeCompare(a.lastAt));
   }, [runs]);
 
-  const session = sessions.find(s => s.sessionId === selectedSession);
+  const session = threads.find(t => t.sessionId === selectedSession);
   const runItem = runs.find(r => r.id === selectedRun);
   const activeItem = checkpoints.find(c => c.seq === activeCp);
+
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-4">
@@ -232,21 +284,24 @@ export default function TimeTravelPage() {
             <>
               <div className="px-3 py-2 border-b border-glass-border text-xs font-medium text-fg-secondary">第一步：选择对话</div>
               <div className="flex-1 overflow-y-auto">
-                {sessions.map(s => (
-                  <button key={s.sessionId} onClick={() => openSession(s.sessionId)}
+                {threads.map(t => {
+                  const branchCount = t.runs.filter(r => r.parent_run_id).length;
+                  return (
+                  <button key={t.sessionId} onClick={() => openSession(t.sessionId)}
                     className="w-full text-left px-3 py-2 text-xs cursor-pointer border-b border-glass-border/50 hover:bg-bg-elev/30">
                     <div className="flex items-center gap-1.5">
                       <MessageSquare className="w-3 h-3 text-fg-muted shrink-0" />
-                      <span className="truncate flex-1 text-fg-primary">{s.topic.slice(0, 60)}</span>
+                      <span className="truncate flex-1 text-fg-primary">{t.topic.slice(0, 60)}</span>
                     </div>
                     <div className="flex items-center gap-2 mt-0.5">
-                      <span className="text-fg-muted">{s.runs.length} 次运行</span>
-                      {s.branchCount > 0 && <span className="text-brand">🌿 {s.branchCount} 分支</span>}
+                      <span className="text-fg-muted">{t.runs.length} 次运行</span>
+                      {branchCount > 0 && <span className="text-brand">🌿 {branchCount} 分支</span>}
                       <span className="flex-1" />
-                      <span className="text-fg-muted">{new Date(s.lastAt).toLocaleDateString()}</span>
+                      <span className="text-fg-muted">{new Date(t.lastAt).toLocaleDateString()}</span>
                     </div>
                   </button>
-                ))}
+                  );
+                })}
               </div>
             </>
           ) : (
@@ -256,7 +311,7 @@ export default function TimeTravelPage() {
                   className="text-fg-muted hover:text-brand cursor-pointer shrink-0"><ArrowLeft className="w-3.5 h-3.5" /></button>
                 <span className="truncate">{session?.topic.slice(0, 40)}</span>
               </div>
-              <div className="px-3 py-1.5 text-[10px] text-fg-muted border-b border-glass-border/50">第二步：选该对话中的一次运行</div>
+              <div className="px-3 py-1.5 text-[10px] text-fg-muted border-b border-glass-border/50">第二步：选该对话中的一次运行（含分支）</div>
               <div className="flex-1 overflow-y-auto">
                 {session?.runs.map(r => (
                   <div key={r.id} onClick={() => openRun(r.id)}

@@ -45,7 +45,7 @@ export default function ChatPage() {
   // 最终回答全文（run.completed 事件只带 500 字预览，终态后从详情拉全文）
   const [fullFinal, setFullFinal] = useState<string | null>(null);
   // 会话线程：当前会话全部 run（时间升序，含 final_content）— ChatGPT 式连续对话视图
-  const [sessionRuns, setSessionRuns] = useState<Array<{ id: string; goal: string; final_content?: string | null; created_at: string; parent_run_id?: string | null; fork_from_seq?: number | null }>>([]);
+  const [sessionRuns, setSessionRuns] = useState<Array<{ id: string; goal: string; final_content?: string | null; created_at: string; parent_run_id?: string | null; fork_from_seq?: number | null; inherited?: Array<{ goal: string; answer: string }> }>>([]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
   const { events, connected } = useRunStream(activeRunId ?? undefined);
@@ -197,9 +197,33 @@ export default function ChatPage() {
       const res = await api.listRuns({ sessionId: sid, limit: 100 });
       const items = (res.items ?? []).filter((r: any) => r.mode !== 'graph')
         .map((r: any) => ({ id: r.id, goal: r.goal, final_content: r.final_content, created_at: r.created_at, parent_run_id: r.parent_run_id, fork_from_seq: r.fork_from_seq }))
-        .map((r: any) => ({ id: r.id, goal: r.goal, final_content: r.final_content, created_at: r.created_at }))
         .sort((a: any, b: any) => (a.created_at || '').localeCompare(b.created_at || ''));
-      setSessionRuns(items);
+      // 用户实测语义：分支线要显示"继承的气泡问答"（父 run 被修改那轮之前的完整问答）
+      const { api: apiLocal } = await import('../api/client');
+      const enriched = await Promise.all(items.map(async (r: any) => {
+        if (!r.parent_run_id || !r.fork_from_seq) return r;
+        try {
+          const cp = await apiLocal.getRunCheckpoints(r.parent_run_id);
+          const target = (cp.items ?? []).find((c: any) => c.seq === r.fork_from_seq) ?? (cp.items ?? [])[0];
+          if (!target) return r;
+          const bubbles: Array<{ goal: string; answer: string }> = [];
+          // 从快照重建问答对：user 消息 + 其后第一个 assistant 文本回答
+          let lastUser = '';
+          for (const m of target.preview ?? []) {
+            if (m.role === 'user') {
+              if (!String(m.contentPreview).startsWith('[system]')) lastUser = String(m.contentPreview);
+            } else if (m.role === 'assistant' && !m.toolCalls?.length && lastUser) {
+              const c = String(m.contentPreview ?? '');
+              if (c && !c.startsWith('[调用工具')) {
+                bubbles.push({ goal: lastUser, answer: c });
+                lastUser = '';
+              }
+            }
+          }
+          return { ...r, inherited: bubbles };
+        } catch { return r; }
+      }));
+      setSessionRuns(enriched);
     } catch { setSessionRuns([]); }
   }, []);
 
@@ -486,10 +510,23 @@ export default function ChatPage() {
             .map(r => (
               <div key={r.id} className={`space-y-3 ${r.parent_run_id ? 'ml-8 border-l-2 border-brand/30 pl-3' : ''}`}>
                 {r.parent_run_id && (
-                  <div className="text-[11px] text-brand/80 font-mono">🌿 分支（{r.parent_run_id.slice(0, 12)}…{r.fork_from_seq != null ? `第${r.fork_from_seq}步起` : ''}）</div>
+                  <div className="text-[11px] text-brand/80 flex items-center gap-1">
+                    <GitBranch className="w-3 h-3" /> 分支线（从原对话第 {r.fork_from_seq ?? '?'} 步分出）
+                    {r.inherited && r.inherited.length > 0 && <span className="text-fg-muted">· 以下为继承的问答（只读）</span>}
+                  </div>
                 )}
+                {r.inherited?.map((b, i) => (
+                  <div key={`inh-${i}`} className="space-y-1 opacity-70">
+                    <div className="flex justify-end">
+                      <div className="max-w-[80%] bg-brand/60 text-white rounded-2xl px-3 py-1.5 text-xs whitespace-pre-wrap break-words">{b.goal}</div>
+                    </div>
+                    <div className="flex justify-start">
+                      <div className="max-w-[85%] glass border border-glass-border rounded-2xl px-3 py-1.5 text-xs text-fg-secondary whitespace-pre-wrap break-words line-clamp-3">{b.answer}</div>
+                    </div>
+                  </div>
+                ))}
                 <div className="flex justify-end">
-                  <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{r.goal}</div>
+                  <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{String(r.goal).split('\\n\\n（本对话继承自')[0]}</div>
                 </div>
                 <SentAttachments names={runAttachments[r.id]} />
                 <ProcessSection runId={r.id} defaultOpen={false} />
