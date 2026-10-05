@@ -153,8 +153,14 @@ export default function ChatPage() {
         byRoot.get(root)!.push(s);
       }
       const cols = [...byRoot.values()]
-        .map(group => ({ root: group[0].sessionId ?? '(未分组)', sessions: group }))
-        .sort((a, b) => (b.sessions[0].runs[0]?.createdAt ?? '').localeCompare(a.sessions[0].runs[0]?.createdAt ?? ''))
+        .map(group => {
+          // 集合内会话线按首 run 时间排序（源对话在上，分支对话在下）
+          group.sort((a, b) => (a.runs[0]?.createdAt ?? '').localeCompare(b.runs[0]?.createdAt ?? ''));
+          // 集合头主题取最新会话的首 goal（最接近当前话题）
+          const latest = group[group.length - 1];
+          return { root: group[0].sessionId ?? '(未分组)', sessions: group, topic: latest.runs[0]?.goal ?? '' };
+        })
+        .sort((a, b) => (b.sessions.at(-1)?.runs.at(-1)?.createdAt ?? '').localeCompare(a.sessions.at(-1)?.runs.at(-1)?.createdAt ?? ''))
         .slice(0, 20);
       setCollections(cols);
       const list = [...bySession.values()].slice(0, 20);
@@ -288,7 +294,8 @@ export default function ChatPage() {
     setSubmitting(true);
     try {
       const res = await api.createRun({
-        goal: '继续完成上一个未完成的任务：请从上一次的进度接着做（已完成的部分不要重做），直到产出最终成果。',
+        // 终审 P2：续接 goal 聚焦"完成剩余项"（配合 checkpoint 续接，模型直接从断点继续）
+        goal: '继续：上一轮因预算中断，请直接从上次进度继续（已完成的部分不要重做），完成剩余步骤并产出最终成果。若中途需要长篇输出，请分步写盘再合并，避免单次超长。',
         sessionId: currentSessionId,
         workspaceId: workspaceId || undefined,
         continueSession: true,
@@ -377,7 +384,7 @@ export default function ChatPage() {
             return (
               <div key={col.root} className="rounded-lg border border-glass-border/60 overflow-hidden">
                 <div className="px-2.5 py-1.5 bg-bg-elev/30 text-[10px] text-fg-muted flex items-center gap-1">
-                  <GitBranch className="w-3 h-3" /> 对话集 · {col.sessions[0].runs[0]?.goal?.slice(0, 20)}…（{col.sessions.length} 条对话线）
+                  <GitBranch className="w-3 h-3" /> 对话集（{col.sessions.length} 条对话线，互不影响）
                 </div>
                 {col.sessions.map(s => renderSessionItem(s, true))}
               </div>

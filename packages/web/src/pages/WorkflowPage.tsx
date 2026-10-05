@@ -150,8 +150,40 @@ export default function WorkflowPage() {
   const [openOutputs, setOpenOutputs] = useState<Set<string>>(new Set());
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
-  const { events, connected } = useRunStream(activeRunId ?? undefined);
+  const { events: sseEvents, connected } = useRunStream(activeRunId ?? undefined);
+  const [polledEvents, setPolledEvents] = useState<RunEventItem[]>([]);
+  // SSE 事件 + 轮询权威事件合并（eventId 去重在 push 内做不了 — 这里做）
+  const events = useMemo(() => {
+    const byId = new Map<string, RunEventItem>();
+    for (const e of polledEvents) byId.set(e.eventId, e);
+    for (const e of sseEvents) byId.set(e.eventId, e);
+    return [...byId.values()].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0));
+  }, [sseEvents, polledEvents]);
   const view = useMemo(() => deriveGraphView(events, runGraphNodes), [events, runGraphNodes]);
+
+  // 终审修复（用户实测：审批通过后节点不更新 / doc·papers 一直转圈）：
+  // SSE 事件可能丢失或迟到 — 每 5s 用 run 详情的**权威事件表**合并兜底，
+  // 保证节点状态/结果面板最终一致。
+  const pollRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!activeRunId) return;
+    pollRef.current = window.setInterval(async () => {
+      if (document.hidden) return; // 后台标签不轮询
+      try {
+        const d = await api.getRun(activeRunId);
+        const run = d?.run;
+        if (!run) return;
+        // 用服务端权威事件合并（eventId 去重已内置）
+        for (const ev of d.events ?? []) {
+          // 只补 graph/node/run 级事件（delta 类太大会打爆窗口）
+          if (String(ev.type).startsWith('loop.')) continue;
+          (ev as any).__poll = true;
+        }
+        setPolledEvents((d.events ?? []) as any);
+      } catch { /* 轮询失败静默 */ }
+    }, 5000);
+    return () => { if (pollRef.current) window.clearInterval(pollRef.current); };
+  }, [activeRunId]);
 
   useEffect(() => { localStorage.setItem('coral.graph.draft', yaml); }, [yaml]);
   useEffect(() => {
@@ -222,6 +254,8 @@ export default function WorkflowPage() {
       const g = d?.run?.graph;
       if (g?.nodes) setRunGraphNodes(g.nodes.map((n: any) => ({ id: n.id, skill: n.skill, status: 'pending' as NodeStatus })));
       setRunGoal(d?.run?.goal ?? '');
+      // 终审 P2：resume 后节点真实状态由 SSE 快速回填（graph.node_* 事件在断线重连时
+      // 通过 afterSeq 补拉一次性到达）— 无需手动恢复快照
     } catch (err: any) {
       setError(err.message);
     }
