@@ -153,7 +153,15 @@ async function main() {
   const publicDir = pathJoin(process.cwd(), 'public');
   if (publicExists(publicDir)) {
     const fastifyStatic = (await import('@fastify/static')).default;
-    await app.register(fastifyStatic, { root: publicDir, prefix: '/' });
+    await app.register(fastifyStatic, {
+      root: publicDir,
+      prefix: '/',
+      // REG-18 补充：index.html 禁缓存（hash 命名的 assets 可长缓存）—
+      // 防浏览器拿旧 index.html 引旧 bundle，用户看到"改了没变"
+      setHeaders: (res, path) => {
+        if (path.endsWith('.html')) res.header('Cache-Control', 'no-cache, must-revalidate');
+      },
+    });
     // SPA 回退：非 /api、非 /ws 的未命中路径回 index.html（前端路由）
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api') || req.url.startsWith('/ws')) {
