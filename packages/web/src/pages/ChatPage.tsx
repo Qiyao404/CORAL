@@ -121,7 +121,8 @@ export default function ChatPage() {
   };
 
   // 会话集：fork 出的新会话经 parent_run_id 血缘归入源会话的集合（主题相同 = 一个合集）
-  const [collections, setCollections] = useState<Array<{ root: string; sessions: SessionItem[] }>>([]);
+  const [collections, setCollections] = useState<Array<{ root: string; sessions: SessionItem[]; topic: string }>>([]);
+  const [expandedSets, setExpandedSets] = useState<Set<string>>(new Set()); // 对话集折叠状态
   const loadSessions = useCallback(async (): Promise<SessionItem[]> => {
     try {
       const res = await api.listRuns({ limit: 100 });
@@ -376,17 +377,33 @@ export default function ChatPage() {
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {sessions.length === 0 && <p className="text-xs text-fg-muted p-2">暂无历史</p>}
           {collections.map(col => {
-            // 单会话集合 = 原来的单条目；多会话 = 对话集（含 fork 出的分支对话）
+            // 单会话 = 单条目；多会话 = 可折叠对话集（点开看全部对话线：原对话 + 分支）
             if (col.sessions.length <= 1) {
               const s = col.sessions[0];
               return renderSessionItem(s);
             }
+            const expanded = expandedSets.has(col.root);
+            const totalRuns = col.sessions.reduce((n, s) => n + s.runs.length, 0);
             return (
               <div key={col.root} className="rounded-lg border border-glass-border/60 overflow-hidden">
-                <div className="px-2.5 py-1.5 bg-bg-elev/30 text-[10px] text-fg-muted flex items-center gap-1">
-                  <GitBranch className="w-3 h-3" /> 对话集（{col.sessions.length} 条对话线，互不影响）
-                </div>
-                {col.sessions.map(s => renderSessionItem(s, true))}
+                <button
+                  onClick={() => setExpandedSets(prev => {
+                    const next = new Set(prev);
+                    next.has(col.root) ? next.delete(col.root) : next.add(col.root);
+                    return next;
+                  })}
+                  className="w-full px-2.5 py-1.5 bg-bg-elev/40 text-[11px] text-fg-secondary flex items-center gap-1.5 cursor-pointer hover:bg-bg-elev/60 text-left">
+                  {expanded ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
+                  <GitBranch className="w-3 h-3 text-brand shrink-0" />
+                  <span className="truncate flex-1 font-medium">{col.topic.slice(0, 22)}…</span>
+                  <span className="text-fg-muted shrink-0">{col.sessions.length} 线 · {totalRuns} 轮</span>
+                </button>
+                {expanded && (
+                  <div className="pb-1">
+                    <p className="px-3 pt-1 text-[10px] text-fg-muted">对话线（互不影响，可独立打开/删除）：</p>
+                    {col.sessions.map(s => renderSessionItem(s, true))}
+                  </div>
+                )}
               </div>
             );
           })}
