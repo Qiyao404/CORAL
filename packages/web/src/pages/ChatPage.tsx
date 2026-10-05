@@ -202,22 +202,19 @@ export default function ChatPage() {
       const { api: apiLocal } = await import('../api/client');
       const enriched = await Promise.all(items.map(async (r: any) => {
         if (!r.parent_run_id || !r.fork_from_seq) return r;
+        let cp: any;
         try {
-          const cp = await apiLocal.getRunCheckpoints(r.parent_run_id);
+          cp = await apiLocal.getRunCheckpoints(r.parent_run_id);
+        } catch { return r; }
+        try {
           const target = (cp.items ?? []).find((c: any) => c.seq === r.fork_from_seq) ?? (cp.items ?? [])[0];
           if (!target) return r;
           const bubbles: Array<{ goal: string; answer: string }> = [];
-          // 从快照重建问答对：user 消息 + 其后第一个 assistant 文本回答
-          let lastUser = '';
+          // 用户语义修正：只显示继承的【提问】气泡（新线的回答就是对这些提问的覆盖，
+          // 不再重复显示旧回答）
           for (const m of target.preview ?? []) {
-            if (m.role === 'user') {
-              if (!String(m.contentPreview).startsWith('[system]')) lastUser = String(m.contentPreview);
-            } else if (m.role === 'assistant' && !m.toolCalls?.length && lastUser) {
-              const c = String(m.contentPreview ?? '');
-              if (c && !c.startsWith('[调用工具')) {
-                bubbles.push({ goal: lastUser, answer: c });
-                lastUser = '';
-              }
+            if (m.role === 'user' && !String(m.contentPreview).startsWith('[system]')) {
+              bubbles.push({ goal: String(m.contentPreview), answer: '' });
             }
           }
           return { ...r, inherited: bubbles };
@@ -516,13 +513,8 @@ export default function ChatPage() {
                   </div>
                 )}
                 {r.inherited?.map((b, i) => (
-                  <div key={`inh-${i}`} className="space-y-1 opacity-70">
-                    <div className="flex justify-end">
-                      <div className="max-w-[80%] bg-brand/60 text-white rounded-2xl px-3 py-1.5 text-xs whitespace-pre-wrap break-words">{b.goal}</div>
-                    </div>
-                    <div className="flex justify-start">
-                      <div className="max-w-[85%] glass border border-glass-border rounded-2xl px-3 py-1.5 text-xs text-fg-secondary whitespace-pre-wrap break-words line-clamp-3">{b.answer}</div>
-                    </div>
+                  <div key={`inh-${i}`} className="opacity-60 flex justify-end">
+                    <div className="max-w-[80%] bg-brand/50 text-white rounded-2xl px-3 py-1.5 text-xs whitespace-pre-wrap break-words">{b.goal}</div>
                   </div>
                 ))}
                 <div className="flex justify-end">
