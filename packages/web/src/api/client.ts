@@ -203,6 +203,8 @@ export const api = {
   listResumable: () => request<any>('/runs/graph/resumable'),
   resumeRun: (runId: string) => request<any>(`/runs/${runId}/resume`, { method: 'POST' }),
   listPendingApprovals: () => request<any>('/approvals/pending'),
+  // ─── 上下文用量 ────────────────────────────────────────────
+  getSessionContextUsage: (sessionId: string) => request<any>(`/sessions/${sessionId}/context-usage`),
 
   // ─── M3：连接器（MCP + 触发器）────────────────────────────
   listMcpServers: () => request<any>('/mcp/servers'),

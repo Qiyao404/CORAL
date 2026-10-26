@@ -150,7 +150,13 @@ export class AgentLoop {
         }
 
         steps++;
-        this.emit('loop.step_started', { step: steps, tokensIn, tokensOut });
+        this.emit('loop.step_started', {
+          step: steps, tokensIn, tokensOut,
+          // 上下文用量（ZCode 风格指示器数据源）
+          contextChars: messages.reduce((n, m) => n + (m.content ?? '').length, 0),
+          contextMax: this.options.maxTotalChars ?? 240_000,
+          messageCount: messages.length,
+        });
 
         // 创新①：流式直播 — 支持则逐 token 聚为 loop.delta 事件（前端逐字渲染）
         let deltaBuf = '';

@@ -203,6 +203,48 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
     }
   });
 
+  // ── 上下文用量（ZCode 风格指示器）────────────────────
+  app.get('/api/sessions/:sessionId/context-usage', async (request, reply) => {
+    const { sessionId } = request.params as any;
+    const { items } = engine.store.list({ sessionId, limit: 50 });
+    if (items.length === 0) return { sessionId, contextChars: 0, contextMax: 240_000, messageCount: 0, sessionContext: null };
+
+    // 取最近一个有 checkpoint 的 run 的最新快照
+    let contextChars = 0;
+    let messageCount = 0;
+    for (const run of items) {
+      const cps = engine.checkpoints.listByRun(run.id);
+      if (cps.length === 0) continue;
+      const state = engine.checkpoints.get(run.id, cps[cps.length - 1].seq);
+      if (state?.messages?.length) {
+        contextChars = state.messages.reduce((n: number, m: any) => n + (m.content ?? '').length, 0);
+        messageCount = state.messages.length;
+        break;
+      }
+    }
+
+    // 会话上下文（文件摘要等）
+    let sessionContext: { fileCount: number; keyPointCount: number; totalChars: number } | null = null;
+    try {
+      const { SessionContextService } = await import('../services/session-context-service.js');
+      const { platformConfig } = await import('../services/config.js');
+      const svc = new SessionContextService(
+        (await import('path')).dirname(platformConfig.databasePath)
+      );
+      const ctx = svc.get(sessionId);
+      const total = svc.toPromptText(sessionId).length;
+      if (ctx.fileSummaries.length > 0 || ctx.keyPoints.length > 0) {
+        sessionContext = {
+          fileCount: ctx.fileSummaries.length,
+          keyPointCount: ctx.keyPoints.length,
+          totalChars: total,
+        };
+      }
+    } catch { /* ignore */ }
+
+    return { sessionId, contextChars, contextMax: 240_000, messageCount, sessionContext };
+  });
+
   // ── M2：Graph 模式端点 ──────────────────────────────────
 
   // M2-5：可恢复列表（服务重启后的提示）

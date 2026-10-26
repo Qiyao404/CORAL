@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Bot, Send, FolderOpen, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight,
   Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type, Trash2, MessageSquare,
-  FolderPlus, Activity, ChevronDown as ChevronDownIcon, GitBranch,
+  FolderPlus, Activity, ChevronDown as ChevronDownIcon, GitBranch, Database,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState, Modal, Input } from '../components/ui';
@@ -45,6 +45,8 @@ export default function ChatPage() {
   const [runAttachments, setRunAttachments] = useState<Record<string, string[]>>({});
   // 最终回答全文（run.completed 事件只带 500 字预览，终态后从详情拉全文）
   const [fullFinal, setFullFinal] = useState<string | null>(null);
+  // 上下文用量（ZCode 风格指示器）
+  const [ctxUsage, setCtxUsage] = useState<{ contextChars: number; contextMax: number; messageCount: number; sessionContext: { fileCount: number; keyPointCount: number; totalChars: number } | null } | null>(null);
   // 会话线程：当前会话全部 run（时间升序，含 final_content）— ChatGPT 式连续对话视图
   const [sessionRuns, setSessionRuns] = useState<Array<{ id: string; goal: string; final_content?: string | null; created_at: string; parent_run_id?: string | null; fork_from_seq?: number | null; inherited?: Array<{ goal: string; answer: string }> }>>([]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
@@ -233,6 +235,16 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => { loadSessionThread(currentSessionId); }, [currentSessionId, loadSessionThread]);
+
+  // 上下文用量：会话切换/终态后刷新
+  useEffect(() => {
+    if (!currentSessionId) { setCtxUsage(null); return; }
+    let cancelled = false;
+    api.getSessionContextUsage(currentSessionId).then((d: any) => {
+      if (!cancelled) setCtxUsage(d);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentSessionId, view.runStatus]);
 
   // 活跃 run 终态后刷新线程（补上它的最终回答）
   useEffect(() => {
@@ -448,6 +460,18 @@ export default function ChatPage() {
             <h1 className="text-lg font-heading font-bold text-fg-primary">Agent 会话</h1>
             <p className="text-xs text-fg-muted">
               自主规划 · 工具调用 · 全程可观测 {connected ? '· 实时已连接' : ''}
+              {ctxUsage && ctxUsage.contextMax > 0 && (() => {
+                const pct = Math.min(100, Math.round((ctxUsage.contextChars / ctxUsage.contextMax) * 100));
+                const kb = Math.round(ctxUsage.contextChars / 1024);
+                const maxKb = Math.round(ctxUsage.contextMax / 1024);
+                const color = pct > 85 ? 'text-status-danger' : pct > 60 ? 'text-status-warning' : 'text-fg-muted';
+                return (
+                  <span className={`ml-2 inline-flex items-center gap-1 ${color}`} title={`消息 ${ctxUsage.messageCount} 条 · 会话文件 ${ctxUsage.sessionContext?.fileCount ?? 0} 个`}>
+                    <Database className="w-3 h-3" />
+                    {kb}/{maxKb}KB ({pct}%)
+                  </span>
+                );
+              })()}
             </p>
           </div>
           {/* 工作区选择器 + 快捷新建 + 权限快改 */}
