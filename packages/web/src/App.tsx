@@ -84,15 +84,13 @@ function Sidebar() {
   const { wsConnected, runningTasks } = useGlobalStream();
 
   return (
-    <aside className="w-60 glass border-r border-glass-border flex flex-col h-screen sticky top-0 rounded-none">
-      <div className="p-5 border-b border-glass-border">
+    <aside className="w-60 bg-bg-panel border-r border-glass-border flex flex-col h-screen sticky top-0 shadow-sidebar">
+      <div className="p-4 border-b border-glass-border">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 bg-brand rounded-xl flex items-center justify-center text-white font-bold text-base font-heading shadow-lg shadow-brand/20">
-            C
-          </div>
+          <img src="/coral-logo.svg" alt="CORAL" className="w-9 h-9 rounded-xl" />
           <div>
             <h1 className="font-heading font-bold text-lg leading-tight text-fg-primary">CORAL</h1>
-            <p className="text-xs text-fg-muted">智能体运行时平台</p>
+            <p className="text-xs text-fg-muted">个人 Agent 运行时</p>
           </div>
         </div>
       </div>
@@ -106,10 +104,10 @@ function Sidebar() {
             <Link
               key={item.path}
               to={item.path}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm transition-colors cursor-pointer ${
+              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all cursor-pointer ${
                 isActive
-                  ? 'bg-brand-soft text-brand font-medium border border-brand/20'
-                  : 'text-fg-secondary hover:bg-bg-elev/40 hover:text-fg-primary border border-transparent'
+                  ? 'bg-brand/10 text-brand font-medium'
+                  : 'text-fg-secondary hover:bg-bg-raise hover:text-fg-primary'
               }`}
             >
               <Icon className="w-4 h-4" />
@@ -118,7 +116,7 @@ function Sidebar() {
           );
         })}
       </nav>
-      <div className="p-3 border-t border-glass-border space-y-2">
+      <div className="px-3 py-2 border-t border-glass-border space-y-1">
         <ThemeQuickToggle />
         <div className="flex items-center justify-between px-2 text-xs">
           <ConnectionDot

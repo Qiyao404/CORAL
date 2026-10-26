@@ -1,221 +1,200 @@
-@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@300;400;500;600;700&family=Poppins:wght@400;500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
 
 @tailwind base;
 
-/* 用户实测反馈：整体字体太小 — 提升根字号让所有 rem 尺寸等比放大（≈ +12.5%） */
 html {
-  font-size: 112.5%; /* 16px → 18px */
+  font-size: 100%; /* 16px — 系统级标准，ChatGPT 同款 */
 }
 @tailwind components;
 @tailwind utilities;
 
 /* ============================================================
- * 主题变量
- * - :root 默认 = 浅色
- * - .dark 类  = 深色
- *   * darkMode: 'class' (tailwind.config.js)
- *   * 切换：document.documentElement.classList.add/remove('dark')
- * - 颜色统一以 "R G B" 三分量存储，便于 Tailwind 的 / <alpha-value>
+ * CORAL v2 UI — ChatGPT-inspired clean design
+ * 珊瑚色品牌 + 极简灰底 + 充足留白 + 细边框替代毛玻璃
  * ============================================================ */
 @layer base {
   :root {
     color-scheme: light;
 
-    /* 背景层（浅色） */
-    --bg-base:  248 250 252;   /* slate-50  */
-    --bg-panel: 255 255 255;   /* white     */
-    --bg-raise: 241 245 249;   /* slate-100 */
-    --bg-elev:  226 232 240;   /* slate-200 */
+    /* 背景层 — 纯净灰阶 */
+    --bg-base:  255 255 255;
+    --bg-panel: 255 255 255;
+    --bg-raise: 247 247 248;
+    --bg-elev:  240 240 241;
 
-    /* 文字层（浅色） */
-    --fg-primary:   15  23  42;   /* slate-900 */
-    --fg-secondary: 51  65  85;   /* slate-700 */
-    --fg-muted:     100 116 139;  /* slate-500 */
-    --fg-disabled:  148 163 184;  /* slate-400 */
+    /* 文字层 */
+    --fg-primary:   20  20  20;
+    --fg-secondary: 64  64  65;
+    --fg-muted:     130 130 134;
+    --fg-disabled:  180 180 184;
 
-    /* 品牌色（浅色下用更深的绿，保证 AA 对比度） */
-    --brand:        22  163 74;   /* green-600 */
-    --brand-hover:  21  128 61;   /* green-700 */
-    --brand-active: 22  101 52;   /* green-800 */
+    /* 品牌 — 珊瑚色（coral，与平台名呼应） */
+    --brand:        244  81  30;   /* coral-600 */
+    --brand-hover:  228  68  22;
+    --brand-active: 210  58  15;
 
     /* 状态色 */
-    --status-info:    14  165 233;
-    --status-success: 22  163 74;
-    --status-warn:    217 119 6;
-    --status-danger:  220 38  38;
-    --status-pending: 100 116 139;
+    --status-info:    59 130 246;
+    --status-success: 34 197 94;
+    --status-warn:    245 158 11;
+    --status-danger:  239 68  68;
+    --status-pending: 130 130 134;
 
-    /* Glass 边框（浅色用深色描边低透明度） */
-    --glass-border: 15 23 42;
-    --glass-border-alpha: 0.08;
-    --glass-border-strong-alpha: 0.16;
+    /* 边框（简洁细线） */
+    --glass-border: 0 0 0;
+    --glass-border-alpha: 0.10;
+    --glass-border-strong-alpha: 0.18;
 
-    /* 阴影（浅色用低强度，更柔和） */
-    --shadow-glass: 0 1px 0 rgba(255,255,255,0.65) inset, 0 6px 24px rgba(15,23,42,0.08);
-    --shadow-glass-strong: 0 1px 0 rgba(255,255,255,0.7) inset, 0 12px 36px rgba(15,23,42,0.12);
+    /* 阴影（极轻） */
+    --shadow-glass: 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-glass-strong: 0 4px 12px rgba(0,0,0,0.08);
+    --shadow-sidebar: 1px 0 0 rgba(0,0,0,0.06);
 
     /* 滚动条 */
-    --scrollbar: 100 116 139;
-
-    /* 页面背景晕染（浅色） */
-    --bg-image:
-      radial-gradient(at 8% 0%, rgba(34, 197, 94, 0.10) 0px, transparent 40%),
-      radial-gradient(at 92% 12%, rgba(56, 189, 248, 0.08) 0px, transparent 36%);
+    --scrollbar: 180 180 184;
   }
 
   .dark {
     color-scheme: dark;
 
-    /* 背景层（深色） */
-    --bg-base:  2   6   23;    /* slate-950 */
-    --bg-panel: 15  23  42;    /* slate-900 */
-    --bg-raise: 30  41  59;    /* slate-800 */
-    --bg-elev:  51  65  85;    /* slate-700 */
+    --bg-base:  32  32  36;
+    --bg-panel: 32  32  36;
+    --bg-raise: 42  42  47;
+    --bg-elev:  52  52  58;
 
-    /* 文字层（深色） */
-    --fg-primary:   248 250 252;
-    --fg-secondary: 203 213 225;
-    --fg-muted:     148 163 184;
-    --fg-disabled:  100 116 139;
+    --fg-primary:   236 236 240;
+    --fg-secondary: 200 200 205;
+    --fg-muted:     140 140 145;
+    --fg-disabled:  100 100 105;
 
-    /* 品牌色（深色用亮一点的绿） */
-    --brand:        34  197 94;
-    --brand-hover:  22  163 74;
-    --brand-active: 21  128 61;
+    --brand:        251 106  60;
+    --brand-hover:  252 126  82;
+    --brand-active: 244  81  30;
 
-    /* 状态色 */
-    --status-info:    56  189 248;
-    --status-success: 34  197 94;
-    --status-warn:    245 158 11;
-    --status-danger:  239 68  68;
-    --status-pending: 148 163 184;
+    --status-info:    96 165 250;
+    --status-success: 74 222 128;
+    --status-warn:    251 191 36;
+    --status-danger:  248 113 113;
+    --status-pending: 140 140 145;
 
-    /* Glass 边框（深色用白色描边） */
     --glass-border: 255 255 255;
-    --glass-border-alpha: 0.10;
-    --glass-border-strong-alpha: 0.18;
+    --glass-border-alpha: 0.08;
+    --glass-border-strong-alpha: 0.15;
 
-    /* 阴影（深色更深） */
-    --shadow-glass: 0 1px 0 rgba(255,255,255,0.04) inset, 0 8px 32px rgba(2, 6, 23, 0.45);
-    --shadow-glass-strong: 0 1px 0 rgba(255,255,255,0.07) inset, 0 12px 48px rgba(2, 6, 23, 0.6);
+    --shadow-glass: 0 1px 2px rgba(0,0,0,0.2);
+    --shadow-glass-strong: 0 4px 16px rgba(0,0,0,0.3);
+    --shadow-sidebar: 1px 0 0 rgba(255,255,255,0.06);
 
-    /* 滚动条 */
-    --scrollbar: 148 163 184;
-
-    /* 页面背景晕染（深色） */
-    --bg-image:
-      radial-gradient(at 8% 0%, rgba(34, 197, 94, 0.06) 0px, transparent 40%),
-      radial-gradient(at 92% 12%, rgba(56, 189, 248, 0.05) 0px, transparent 36%);
+    --scrollbar: 80 80 84;
   }
 
   html, body {
     background: rgb(var(--bg-base));
     color: rgb(var(--fg-primary));
-    font-family: 'Open Sans', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', -apple-system, sans-serif;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
-    transition: background-color 200ms ease, color 200ms ease;
   }
   h1, h2, h3, h4 {
-    font-family: 'Poppins', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-    font-feature-settings: 'cv11';
-  }
-  body {
-    background-image: var(--bg-image);
-    background-attachment: fixed;
+    font-family: 'Inter', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    letter-spacing: -0.02em;
   }
 }
 
 /* ============================================================
- * Glassmorphism 组件类
- *   两套主题各自定义，业务代码继续用 .glass 即可
+ * 组件类 — 简洁替代 glassmorphism
  * ============================================================ */
 @layer components {
+  /* 卡片：纯色底 + 细边框（ChatGPT 风格） */
   .glass {
-    background: linear-gradient(135deg, rgba(255,255,255,0.85), rgba(255,255,255,0.65));
-    backdrop-filter: blur(16px) saturate(120%);
-    -webkit-backdrop-filter: blur(16px) saturate(120%);
-    border: 1px solid rgba(15, 23, 42, 0.08);
+    background: rgb(var(--bg-panel));
+    border: 1px solid rgb(var(--glass-border) / var(--glass-border-alpha));
     box-shadow: var(--shadow-glass);
-    transition: background 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
-  }
-  .dark .glass {
-    background: linear-gradient(135deg, rgba(15, 23, 42, 0.65), rgba(30, 41, 59, 0.45));
-    border: 1px solid rgba(255, 255, 255, 0.10);
   }
 
   .glass-hover {
-    transition: transform 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
   }
   .glass-hover:hover {
-    border-color: rgba(15, 23, 42, 0.16);
-    transform: translateY(-1px);
+    border-color: rgb(var(--glass-border) / var(--glass-border-strong-alpha));
     box-shadow: var(--shadow-glass-strong);
-  }
-  .dark .glass-hover:hover {
-    border-color: rgba(255, 255, 255, 0.18);
   }
 
   .glass-soft {
-    background: rgba(255, 255, 255, 0.6);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
-    border: 1px solid rgba(15, 23, 42, 0.06);
-  }
-  .dark .glass-soft {
-    background: rgba(15, 23, 42, 0.45);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgb(var(--bg-raise));
+    border: 1px solid rgb(var(--glass-border) / calc(var(--glass-border-alpha) * 0.5));
   }
 
-  /* 主进度条带流光 */
+  /* 聊天消息 */
+  .chat-bubble-user {
+    background: rgb(var(--bg-raise));
+    border-radius: 1.25rem;
+    padding: 0.75rem 1rem;
+  }
+
+  .chat-bubble-ai {
+    background: transparent;
+  }
+
+  /* 输入框容器 */
+  .input-shell {
+    background: rgb(var(--bg-panel));
+    border: 1px solid rgb(var(--glass-border) / var(--glass-border-strong-alpha));
+    border-radius: 1.5rem;
+    box-shadow: var(--shadow-glass);
+    transition: border-color 150ms ease;
+  }
+  .input-shell:focus-within {
+    border-color: rgb(var(--brand) / 0.5);
+  }
+
+  /* 主进度条 */
   .progress-bar-fill {
-    background: linear-gradient(
-      90deg,
-      rgb(var(--brand)) 0%,
-      rgba(255, 255, 255, 0.45) 50%,
-      rgb(var(--brand)) 100%
-    );
-    background-size: 200% 100%;
-    animation: progress-flow 1.8s linear infinite;
+    background: rgb(var(--brand));
+    transition: width 300ms ease;
   }
 
-  /* 运行中节点脉冲 */
   .node-running {
     animation: node-pulse 1.6s ease-in-out infinite alternate;
   }
 
-  /* 骨架屏 */
   .skeleton {
-    background: linear-gradient(
-      90deg,
-      rgba(148, 163, 184, 0.15) 0%,
-      rgba(148, 163, 184, 0.30) 50%,
-      rgba(148, 163, 184, 0.15) 100%
-    );
+    background: linear-gradient(90deg,
+      rgb(var(--bg-elev)) 0%, rgb(var(--bg-raise)) 50%, rgb(var(--bg-elev)) 100%);
     background-size: 200% 100%;
     animation: skeleton-shimmer 1.2s ease-in-out infinite;
     border-radius: 0.5rem;
   }
 }
 
-/* 滚动条 — 跟随主题 */
-::-webkit-scrollbar { width: 8px; height: 8px; }
+/* 滚动条 */
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgb(var(--scrollbar) / 0.35);
-  border-radius: 4px;
+  background: rgb(var(--scrollbar) / 0.3);
+  border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--scrollbar) / 0.55);
+  background: rgb(var(--scrollbar) / 0.5);
+}
+
+/* 动画 */
+@keyframes progress-flow {
+  '0%': { backgroundPosition: '0% 0' };
+  '100%': { backgroundPosition: '-200% 0' };
+}
+@keyframes node-pulse {
+  0%   { box-shadow: 0 0 0 0 rgb(var(--brand) / 0.35); }
+  100% { box-shadow: 0 0 0 6px rgb(var(--brand) / 0.05); }
+}
+@keyframes skeleton-shimmer {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
 }
 
 /* 尊重 reduce-motion */
 @media (prefers-reduced-motion: reduce) {
-  .progress-bar-fill,
-  .node-running,
-  .skeleton {
-    animation: none !important;
-  }
+  .progress-bar-fill, .node-running, .skeleton { animation: none !important; }
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;

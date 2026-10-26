@@ -514,7 +514,7 @@ export default function ChatPage() {
         </div>
 
         {/* 运行视图 */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6 space-y-4 max-w-3xl mx-auto">
           {!activeRunId && (
             <div className="text-center py-16">
               <div className="w-14 h-14 bg-brand-soft rounded-2xl flex items-center justify-center mx-auto mb-3 border border-brand/30">
@@ -546,17 +546,17 @@ export default function ChatPage() {
                 )}
                 {r.inherited?.map((b, i) => (
                   <div key={`inh-${i}`} className="opacity-60 flex justify-end">
-                    <div className="max-w-[80%] bg-brand/50 text-white rounded-2xl px-3 py-1.5 text-xs whitespace-pre-wrap break-words">{b.goal}</div>
+                    <div className="max-w-[80%] bg-bg-raise text-fg-secondary rounded-3xl px-4 py-2 text-xs whitespace-pre-wrap break-words border border-glass-border/40 opacity-70">{b.goal}</div>
                   </div>
                 ))}
                 <div className="flex justify-end">
-                  <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{(() => { const g = String(r.goal); const cut = g.indexOf('\n\n（本对话继承自'); return cut >= 0 ? g.slice(0, cut) : g; })()}</div>
+                  <div className="max-w-[80%] bg-bg-raise text-fg-primary rounded-3xl px-5 py-3 text-sm whitespace-pre-wrap break-words border border-glass-border/50">{(() => { const g = String(r.goal); const cut = g.indexOf('\n\n（本对话继承自'); return cut >= 0 ? g.slice(0, cut) : g; })()}</div>
                 </div>
                 <SentAttachments names={runAttachments[r.id]} />
                 <ProcessSection runId={r.id} defaultOpen={false} />
                 {(r.final_content || '').trim() && (
                   <div className="flex justify-start">
-                    <div className="max-w-[85%] glass border border-glass-border rounded-2xl px-4 py-3">
+                    <div className="max-w-[90%] text-fg-primary text-sm leading-relaxed">
                       <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{r.final_content}</p>
                     </div>
                   </div>
@@ -604,9 +604,9 @@ export default function ChatPage() {
               <input type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = ''; }} />
             </label>
             {activeRunId && !view.runStatus ? (
-              <Button variant="danger" onClick={cancel} icon={<Square className="w-4 h-4" />}>停止</Button>
+              <button onClick={cancel} className="w-9 h-9 rounded-full bg-status-danger text-white flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity shrink-0"><Square className="w-3.5 h-3.5" /></button>
             ) : (
-              <Button onClick={submit} loading={submitting} icon={<Send className="w-4 h-4" />}>发送</Button>
+              <button onClick={submit} disabled={submitting} className="w-9 h-9 rounded-full bg-brand text-white flex items-center justify-center cursor-pointer hover:bg-brand-hover disabled:opacity-50 transition-colors shrink-0"><Send className="w-4 h-4" /></button>
             )}
           </div>
         </div>
@@ -772,12 +772,12 @@ function RunLiveView({
       {/* 继承的提问气泡（分支线） */}
       {inherited?.map((b, i) => (
         <div key={`inh-${i}`} className="opacity-60 flex justify-end">
-          <div className="max-w-[80%] bg-brand/50 text-white rounded-2xl px-3 py-1.5 text-xs whitespace-pre-wrap break-words">{b.goal}</div>
+          <div className="max-w-[80%] bg-bg-raise text-fg-secondary rounded-3xl px-4 py-2 text-xs whitespace-pre-wrap break-words border border-glass-border/40 opacity-70">{b.goal}</div>
         </div>
       ))}
       {/* 目标 */}
       <div className="flex justify-end">
-        <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{goal}</div>
+        <div className="max-w-[80%] bg-bg-raise text-fg-primary rounded-3xl px-5 py-3 text-sm whitespace-pre-wrap break-words border border-glass-border/50">{goal}</div>
       </div>
       <SentAttachments names={attachments} />
 
@@ -813,7 +813,7 @@ function RunLiveView({
       {/* 创新①：流式直播中的回答 */}
       {streamingText && !view.finalContent && (
         <div className="flex justify-start">
-          <div className="max-w-[85%] glass border border-glass-border rounded-2xl px-4 py-3">
+          <div className="max-w-[90%] text-fg-primary text-sm leading-relaxed">
             <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{streamingText}<span className="animate-pulse">▍</span></p>
           </div>
         </div>
@@ -822,7 +822,7 @@ function RunLiveView({
       {/* 最终回答 */}
       {(fullFinal ?? view.finalContent) && (
         <div className="flex justify-start">
-          <div className="max-w-[85%] glass border border-glass-border rounded-2xl px-4 py-3">
+          <div className="max-w-[90%] text-fg-primary text-sm leading-relaxed">
             <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{fullFinal ?? view.finalContent}</p>
             {view.endReason === 'budget_exceeded' && (
               <div className="mt-2 flex items-center gap-2">
