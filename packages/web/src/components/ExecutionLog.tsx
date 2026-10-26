@@ -120,7 +120,7 @@ function ActionRow({ card }: { card: ToolCardItem }) {
 
       {/* 展开的详情 */}
       {open && (
-        <div className="ml-[26px] mb-1 space-y-1">
+        <div className="ml-[26px] mb-1 space-y-1 expand-anim">
           {card.inputPreview && (
             <div>
               <p className="text-[9px] text-fg-muted mb-0.5 uppercase tracking-wide">Input</p>

@@ -1,20 +1,13 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
-  <!-- CORAL logo: 珊瑚枝 + 圆润气泡 = 对话型 agent -->
   <defs>
     <linearGradient id="coral-grad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#FB6A3C"/>
       <stop offset="100%" stop-color="#F4511E"/>
     </linearGradient>
   </defs>
-
-  <!-- 圆角底板 -->
   <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#coral-grad)"/>
-
-  <!-- 珊瑚枝（三叉） -->
   <path d="M32 48 L32 30 M32 38 C 32 34 26 32 22 28 M32 34 C 32 30 38 28 42 24"
         stroke="white" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
-
-  <!-- 气泡（对话） -->
   <circle cx="22" cy="24" r="5" fill="white" opacity="0.95"/>
   <circle cx="42" cy="20" r="4" fill="white" opacity="0.80"/>
   <circle cx="32" cy="46" r="3" fill="white" opacity="0.60"/>

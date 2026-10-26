@@ -514,7 +514,7 @@ export default function ChatPage() {
         </div>
 
         {/* 运行视图 */}
-        <div className="flex-1 overflow-y-auto px-4 md:px-8 py-6 space-y-4 max-w-3xl mx-auto">
+        <div className="flex-1 overflow-y-auto px-4 md:px-12 py-6 space-y-4 w-full">
           {!activeRunId && (
             <div className="text-center py-16">
               <div className="w-14 h-14 bg-brand-soft rounded-2xl flex items-center justify-center mx-auto mb-3 border border-brand/30">
@@ -537,7 +537,7 @@ export default function ChatPage() {
           {sessionRuns
             .filter(r => r.id !== activeRunId)
             .map(r => (
-              <div key={r.id} className={`space-y-3 ${r.parent_run_id ? 'ml-8 border-l-2 border-brand/30 pl-3' : ''}`}>
+              <div key={r.id} className={`space-y-3 msg-enter ${r.parent_run_id ? 'ml-8 border-l-2 border-brand/30 pl-3' : ''}`}>
                 {r.parent_run_id && (
                   <div className="text-[11px] text-brand/80 flex items-center gap-1">
                     <GitBranch className="w-3 h-3" /> 分支线（从原对话第 {r.fork_from_seq ?? '?'} 步分出）
@@ -556,7 +556,7 @@ export default function ChatPage() {
                 <ProcessSection runId={r.id} defaultOpen={false} />
                 {(r.final_content || '').trim() && (
                   <div className="flex justify-start">
-                    <div className="max-w-[90%] text-fg-primary text-sm leading-relaxed">
+                    <div className="max-w-[85%] chat-bubble-ai text-sm leading-relaxed">
                       <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{r.final_content}</p>
                     </div>
                   </div>
@@ -568,7 +568,7 @@ export default function ChatPage() {
         </div>
 
         {/* 输入区 */}
-        <div className="p-4 glass border-t border-glass-border rounded-none">
+        <div className="p-4 bg-bg-panel border-t border-glass-border input-glow">
           {uploadedFiles.length > 0 && (
             <div className="max-w-4xl mx-auto mb-2 flex flex-wrap gap-1.5 items-center">
               {uploadedFiles.map(name => (
@@ -604,9 +604,9 @@ export default function ChatPage() {
               <input type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = ''; }} />
             </label>
             {activeRunId && !view.runStatus ? (
-              <button onClick={cancel} className="w-9 h-9 rounded-full bg-status-danger text-white flex items-center justify-center cursor-pointer hover:opacity-80 transition-opacity shrink-0"><Square className="w-3.5 h-3.5" /></button>
+              <button onClick={cancel} className="w-9 h-9 rounded-full bg-status-danger text-white flex items-center justify-center cursor-pointer hover:opacity-80 btn-press shrink-0"><Square className="w-3.5 h-3.5" /></button>
             ) : (
-              <button onClick={submit} disabled={submitting} className="w-9 h-9 rounded-full bg-brand text-white flex items-center justify-center cursor-pointer hover:bg-brand-hover disabled:opacity-50 transition-colors shrink-0"><Send className="w-4 h-4" /></button>
+              <button onClick={submit} disabled={submitting} className="w-9 h-9 rounded-full bg-brand text-white flex items-center justify-center cursor-pointer hover:bg-brand-hover disabled:opacity-50 btn-press shrink-0"><Send className="w-4 h-4" /></button>
             )}
           </div>
         </div>
@@ -813,7 +813,7 @@ function RunLiveView({
       {/* 创新①：流式直播中的回答 */}
       {streamingText && !view.finalContent && (
         <div className="flex justify-start">
-          <div className="max-w-[90%] text-fg-primary text-sm leading-relaxed">
+          <div className="max-w-[85%] chat-bubble-ai text-sm leading-relaxed">
             <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{streamingText}<span className="animate-pulse">▍</span></p>
           </div>
         </div>
@@ -822,7 +822,7 @@ function RunLiveView({
       {/* 最终回答 */}
       {(fullFinal ?? view.finalContent) && (
         <div className="flex justify-start">
-          <div className="max-w-[90%] text-fg-primary text-sm leading-relaxed">
+          <div className="max-w-[85%] chat-bubble-ai text-sm leading-relaxed">
             <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{fullFinal ?? view.finalContent}</p>
             {view.endReason === 'budget_exceeded' && (
               <div className="mt-2 flex items-center gap-2">

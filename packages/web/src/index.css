@@ -133,7 +133,11 @@ html {
   }
 
   .chat-bubble-ai {
-    background: transparent;
+    background: rgb(var(--bg-panel));
+    border: 1px solid rgb(var(--glass-border) / var(--glass-border-alpha));
+    border-radius: 1.25rem;
+    padding: 0.75rem 1rem;
+    box-shadow: var(--shadow-glass);
   }
 
   /* 输入框容器 */
@@ -199,4 +203,84 @@ html {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+
+/* ============================================================
+ * 丝滑过渡
+ * ============================================================ */
+
+/* 消息淡入 */
+@keyframes msg-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.msg-enter {
+  animation: msg-in 280ms cubic-bezier(0.25, 0.8, 0.35, 1) both;
+}
+
+/* 通用交互过渡 */
+.smooth {
+  transition: all 200ms cubic-bezier(0.25, 0.8, 0.35, 1);
+}
+
+/* 侧栏导航项弹性过渡 */
+.nav-item {
+  transition: all 180ms cubic-bezier(0.25, 0.8, 0.35, 1);
+}
+.nav-item:active {
+  transform: scale(0.97);
+}
+
+/* 按钮按下反馈 */
+.btn-press {
+  transition: all 150ms cubic-bezier(0.25, 0.8, 0.35, 1);
+}
+.btn-press:active {
+  transform: scale(0.93);
+}
+
+/* 卡片悬浮 */
+.card-hover {
+  transition: all 220ms cubic-bezier(0.25, 0.8, 0.35, 1);
+}
+.card-hover:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-glass-strong);
+}
+
+/* 页面切换淡入 */
+@keyframes page-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.page-enter {
+  animation: page-in 320ms cubic-bezier(0.25, 0.8, 0.35, 1) both;
+}
+
+/* 输入框聚焦发光 */
+.input-glow {
+  transition: border-color 200ms ease, box-shadow 200ms ease;
+}
+.input-glow:focus-within {
+  border-color: rgb(var(--brand) / 0.4);
+  box-shadow: 0 0 0 3px rgb(var(--brand) / 0.08);
+}
+
+/* 执行过程展开/收起平滑 */
+@keyframes expand-down {
+  from { opacity: 0; max-height: 0; }
+  to   { opacity: 1; max-height: 600px; }
+}
+.expand-anim {
+  animation: expand-down 300ms cubic-bezier(0.25, 0.8, 0.35, 1) both;
+  overflow: hidden;
+}
+
+/* 字体大小调节（Settings 存储 localStorage） */
+:root {
+  --font-scale: 1;
+}
+html {
+  font-size: calc(16px * var(--font-scale));
 }

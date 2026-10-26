@@ -104,7 +104,7 @@ function Sidebar() {
             <Link
               key={item.path}
               to={item.path}
-              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-all cursor-pointer ${
+              className={`flex items-center gap-3 px-3 py-2 rounded-lg text-sm nav-item cursor-pointer ${
                 isActive
                   ? 'bg-brand/10 text-brand font-medium'
                   : 'text-fg-secondary hover:bg-bg-raise hover:text-fg-primary'
@@ -140,7 +140,7 @@ export default function App() {
     <BrowserRouter>
       <div className="flex min-h-screen bg-bg-base text-fg-primary">
         <Sidebar />
-        <main className="flex-1 overflow-auto">
+        <main className="flex-1 overflow-auto page-enter">
           <ErrorBoundary>
             <Routes>
               <Route path="/" element={<DashboardPage />} />

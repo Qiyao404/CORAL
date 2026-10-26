@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, Monitor, Palette, Brain, FileText, FolderOpen , User } from 'lucide-react';
+import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, Monitor, Palette, Brain, FileText, FolderOpen , User , Type } from 'lucide-react';
 import { api } from '../api/client';
 import { Card, Button, Input, Textarea, Tag, Select, Skeleton } from '../components/ui';
 import { useTheme, type ThemeMode } from '../contexts/ThemeContext';
@@ -53,6 +53,15 @@ export default function SettingsPage() {
   const [profileForm, setProfileForm] = useState<Record<string, any>>({});
   const [profileMessage, setProfileMessage] = useState('');
   const [loading, setLoading] = useState(true);
+  const [fontScale, setFontScale] = useState(() => {
+    if (typeof window === 'undefined') return 1;
+    const saved = localStorage.getItem('coral.fontScale');
+    if (saved) {
+      document.documentElement.style.setProperty('--font-scale', saved);
+      return parseFloat(saved);
+    }
+    return 1;
+  });
   const [saving, setSaving] = useState(false);
   // M1-10：工作区管理
   const [workspaces, setWorkspaces] = useState<Array<{ id: string; name: string; dir: string; permission: string }>>([]);
@@ -246,6 +255,34 @@ export default function SettingsPage() {
           </p>
         </div>
       )}
+
+      
+      {/* 字体大小调节 */}
+      <Card className="mb-6">
+        <h2 className="font-heading font-semibold text-fg-primary mb-4 flex items-center gap-2">
+          <Type className="w-5 h-5" /> 字体大小
+        </h2>
+        <div className="flex items-center gap-4">
+          <input
+            type="range"
+            min="0.85"
+            max="1.3"
+            step="0.05"
+            value={typeof window !== 'undefined' ? document.documentElement.style.getPropertyValue('--font-scale') || '1' : '1'}
+            onChange={(e) => {
+              const val = e.target.value;
+              document.documentElement.style.setProperty('--font-scale', val);
+              localStorage.setItem('coral.fontScale', val);
+              setFontScale(parseFloat(val));
+            }}
+            className="flex-1 accent-[rgb(var(--brand))]"
+          />
+          <span className="text-sm text-fg-secondary w-16 text-right">
+            {Math.round(fontScale * 100)}%
+          </span>
+        </div>
+        <p className="text-xs text-fg-muted mt-2">调整全局字体大小（85% ~ 130%），立即生效并保存</p>
+      </Card>
 
       <ThemeSettingsCard />
 
