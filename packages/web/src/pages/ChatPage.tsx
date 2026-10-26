@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState, Modal, Input } from '../components/ui';
+import { ExecutionLogView } from '../components/ExecutionLog';
 import { useRunStream, deriveRunView, type RunEventItem } from '../hooks/useRunStream';
 
 /**
@@ -681,7 +682,7 @@ function ProcessSection({
       {open && (
         <div className="px-3 pb-3 space-y-2 max-h-[480px] overflow-y-auto">
           {!v && <p className="text-xs text-fg-muted py-2">加载事件中…</p>}
-          {v && <ToolCardsView view={v} running={running} />}
+          {v && <ExecutionLogView todos={v.todos} toolCards={v.toolCards} running={running} />}
         </div>
       )}
     </div>
@@ -704,72 +705,6 @@ function SentAttachments({ names }: { names?: string[] }) {
   );
 }
 
-/** todo 清单 + 工具卡片（ProcessSection 内容体，直播/回放共用） */
-function ToolCardsView({ view, running }: { view: ReturnType<typeof deriveRunView>; running?: boolean }) {
-  const [openCards, setOpenCards] = useState<Set<string>>(new Set());
-  const toggle = (id: string) => setOpenCards(prev => {
-    const next = new Set(prev);
-    if (next.has(id)) next.delete(id); else next.add(id);
-    return next;
-  });
-
-  return (
-    <>
-      {view.todos.length > 0 && (
-        <div className="pt-1">
-          <h4 className="text-[10px] text-fg-muted mb-1 flex items-center gap-1"><ListTodo className="w-3 h-3" /> 任务清单</h4>
-          <ul className="space-y-1">
-            {view.todos.map((t, i) => (
-              <li key={i} className="flex items-start gap-2 text-xs">
-                {t.status === 'completed' ? <CheckCircle2 className="w-3.5 h-3.5 text-status-success shrink-0 mt-0.5" />
-                  : t.status === 'in_progress' ? <Loader2 className="w-3.5 h-3.5 text-status-info animate-spin shrink-0 mt-0.5" />
-                  : <span className="w-3.5 h-3.5 rounded-full border border-glass-borderStrong shrink-0 mt-0.5" />}
-                <span className={t.status === 'completed' ? 'text-fg-muted line-through' : 'text-fg-primary'}>{t.content}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      {view.todos.length === 0 && running && (
-        <p className="text-[11px] text-fg-muted py-0.5">任务清单创建中 — agent 开工后会先列出计划步骤…</p>
-      )}
-      {view.toolCards.map(card => {
-        const open = openCards.has(card.callId);
-        const subAgent = card.agentId !== 'main';
-        return (
-          <div key={card.callId} className={'rounded-lg border ' + (card.status === 'failed' ? 'border-status-danger/30' : 'border-glass-border') + ' bg-bg-panel/40' + (subAgent ? ' ml-4' : '')}>
-            <button className="w-full flex items-center gap-2 px-2.5 py-2 cursor-pointer text-left" onClick={() => toggle(card.callId)}>
-              {card.status === 'running' ? <Loader2 className="w-3.5 h-3.5 text-status-info animate-spin shrink-0" />
-                : card.status === 'ok' ? <CheckCircle2 className="w-3.5 h-3.5 text-status-success shrink-0" />
-                : <XCircle className="w-3.5 h-3.5 text-status-danger shrink-0" />}
-              <Wrench className="w-3 h-3 text-fg-muted shrink-0" />
-              <span className="text-xs font-medium text-fg-primary flex-1 truncate">{card.tool}</span>
-              {subAgent && <Tag variant="brand">{card.agentId}</Tag>}
-              {open ? <ChevronDown className="w-3.5 h-3.5 text-fg-muted" /> : <ChevronRight className="w-3.5 h-3.5 text-fg-muted" />}
-            </button>
-            {open && (
-              <div className="px-2.5 pb-2 space-y-1.5">
-                {card.inputPreview && (
-                  <div>
-                    <p className="text-[10px] text-fg-muted mb-0.5">输入</p>
-                    <pre className="bg-bg-panel/70 rounded p-1.5 text-[10px] font-mono text-fg-secondary overflow-auto max-h-32 whitespace-pre-wrap break-all">{card.inputPreview}</pre>
-                  </div>
-                )}
-                {card.resultPreview && (
-                  <div>
-                    <p className="text-[10px] text-fg-muted mb-0.5">结果</p>
-                    <pre className="bg-bg-panel/70 rounded p-1.5 text-[10px] font-mono text-fg-secondary overflow-auto max-h-40 whitespace-pre-wrap break-all">{card.resultPreview}</pre>
-                  </div>
-                )}
-                {card.error && <p className="text-[10px] text-status-danger">{card.error}</p>}
-              </div>
-            )}
-          </div>
-        );
-      })}
-    </>
-  );
-}
 
 function statusLabel(s: string): string {
   return ({ created: '已创建', running: '运行中', waiting_human: '等待审批', completed: '已完成', failed: '已失败', cancelled: '已取消' } as Record<string, string>)[s] ?? s;
@@ -816,44 +751,7 @@ function RunLiveView({
 
       {/* 执行过程（深度思考式：运行中实时展开，完成后折叠可回看） */}
       <ProcessSection liveView={view} defaultOpen={!view.runStatus} />
-
-      {/* 工具卡片（保留用于直播中紧跟过程展示 — ProcessSection 已含，此块留空防重复） */}
-      {false && view.toolCards.map(card => {
-        const open = openCards.has(card.callId);
-        const subAgent = card.agentId !== 'main';
-        return (
-          <div key={card.callId} className={`glass rounded-xl border ${card.status === 'failed' ? 'border-status-danger/30' : 'border-glass-border'} ${subAgent ? 'ml-6' : ''}`}>
-            <button className="w-full flex items-center gap-2 p-3 cursor-pointer text-left" onClick={() => toggle(card.callId)}>
-              {card.status === 'running' ? <Loader2 className="w-4 h-4 text-status-info animate-spin shrink-0" />
-                : card.status === 'ok' ? <CheckCircle2 className="w-4 h-4 text-status-success shrink-0" />
-                : <XCircle className="w-4 h-4 text-status-danger shrink-0" />}
-              <Wrench className="w-3.5 h-3.5 text-fg-muted shrink-0" />
-              <span className="text-sm font-medium text-fg-primary flex-1 truncate">{card.tool}</span>
-              {subAgent && <Tag variant="brand">{card.agentId}</Tag>}
-              {open ? <ChevronDown className="w-4 h-4 text-fg-muted" /> : <ChevronRight className="w-4 h-4 text-fg-muted" />}
-            </button>
-            {open && (
-              <div className="px-3 pb-3 space-y-2">
-                {card.inputPreview && (
-                  <div>
-                    <p className="text-[10px] text-fg-muted mb-0.5">输入</p>
-                    <pre className="bg-bg-panel/60 rounded p-2 text-[11px] font-mono text-fg-secondary overflow-auto max-h-40 whitespace-pre-wrap break-all">{card.inputPreview}</pre>
-                  </div>
-                )}
-                {card.resultPreview && (
-                  <div>
-                    <p className="text-[10px] text-fg-muted mb-0.5">结果</p>
-                    <pre className="bg-bg-panel/60 rounded p-2 text-[11px] font-mono text-fg-secondary overflow-auto max-h-56 whitespace-pre-wrap break-all">{card.resultPreview}</pre>
-                  </div>
-                )}
-                {card.error && <p className="text-xs text-status-danger">{card.error}</p>}
-              </div>
-            )}
-          </div>
-        );
-      })}
-
-      {/* 审批卡片 */}
+{/* 审批卡片 */}
       {view.pendingApprovals.map(a => (
         <Card key={a.approvalId} className="!p-4 border-status-warn/40">
           <h3 className="text-sm font-semibold text-status-warn mb-2 flex items-center gap-1.5">
