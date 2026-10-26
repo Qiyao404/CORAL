@@ -744,7 +744,7 @@ function RunLiveView({
     : <Tag variant="info">运行中</Tag>;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-4">
+    <div className="space-y-4">
       {/* 继承的提问气泡（分支线） */}
       {inherited?.map((b, i) => (
         <div key={`inh-${i}`} className="opacity-60 flex justify-end">

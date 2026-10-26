@@ -164,15 +164,18 @@ export default function TimeTravelPage() {
 
   const convs: ConvItem[] = useMemo(() => {
     const byId = new Map(runs.map(r => [r.id, r]));
-    const rootOf = (r: RunItem, seen = new Set<string>()): string => {
-      if (!r.parent_run_id || seen.has(r.id)) return r.id;
+    // 用户语义：第一层 = 对话（Chat 侧栏的对话集）— 按血缘根 run 所在的 SESSION 分组
+    // （fork 出的新 session 通过 parent 链归回源对话的 session，不会拆出独立条目）
+    const rootSessionOf = (r: RunItem, seen = new Set<string>()): string => {
+      if (!r.parent_run_id || seen.has(r.id)) return r.session_id ?? '(未分组)';
       seen.add(r.id);
       const parent = byId.get(r.parent_run_id);
-      return parent ? rootOf(parent, seen) : r.parent_run_id;
+      if (!parent) return r.session_id ?? '(未分组)'; // 父 run 不在列表 → 用自己的 session
+      return rootSessionOf(parent, seen);
     };
     const byRoot = new Map<string, RunItem[]>();
     for (const r of runs) {
-      const root = rootOf(r);
+      const root = rootSessionOf(r);
       if (!byRoot.has(root)) byRoot.set(root, []);
       byRoot.get(root)!.push(r);
     }
