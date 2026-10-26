@@ -335,7 +335,8 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
       } catch { /* 客户端已断开 */ }
     };
     // 终审 P2：回放取尾部（长 run 的 run.completed 不能被头部 2000 条挤掉）
-    for (const e of engine.events.listByRun(runId, 0, 100000).slice(-2000)) writeSse(e);
+    const maxSeq = engine.events.maxSeq(runId);
+    for (const e of engine.events.listByRun(runId, Math.max(0, maxSeq - 2000), 2000)) writeSse(e);
 
     const handler = (event: any) => {
       if (event.taskId !== runId) return;

@@ -232,6 +232,7 @@ export default function WorkflowPage() {
       try { input = JSON.parse(runInput); } catch { setError('运行输入不是合法 JSON'); return; }
     }
     try {
+      setPolledEvents([]); // P1-5: 清空旧 run 事件防污染
       const res = await api.createGraphRun({ goal: goal.trim() || yaml.match(/^name:\s*(\S+)/m)?.[1] || 'graph run', graph: yaml, input, workspaceId: workspaceId || undefined });
       setActiveRunId(res.runId);
       setRunGoal(goal.trim() || 'graph run');
@@ -246,6 +247,7 @@ export default function WorkflowPage() {
   const resume = async (runId: string) => {
     setError(null);
     try {
+      setPolledEvents([]); // P1-5
       await api.resumeRun(runId);
       setActiveRunId(runId);
       setResumable(prev => prev.filter(r => r.runId !== runId));

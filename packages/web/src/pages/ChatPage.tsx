@@ -539,7 +539,7 @@ export default function ChatPage() {
                 )}
               </div>
             ))}
-          {activeRunId && <RunLiveView goal={sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? sessionRuns.find(r => r.id === activeRunId)?.goal ?? ''} attachments={runAttachments[activeRunId]} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} onDecide={decide} onContinue={continueRun} />}
+          {activeRunId && <RunLiveView goal={(() => { const g = sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? sessionRuns.find(r => r.id === activeRunId)?.goal ?? ''; const cut = g.indexOf('\n\n（本对话继承从'); return cut >= 0 ? g.slice(0, cut) : g; })()} attachments={runAttachments[activeRunId]} inherited={sessionRuns.find(r => r.id === activeRunId)?.inherited} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} onDecide={decide} onContinue={continueRun} />}
           <div ref={bottomRef} />
         </div>
 
@@ -566,7 +566,7 @@ export default function ChatPage() {
                 el.style.height = 'auto';
                 el.style.height = Math.min(el.scrollHeight, 288) + 'px';
               }}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } }}
+              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); } }}
               placeholder="描述你的目标…（Enter 发送，Shift+Enter 换行）"
               rows={2}
               className="flex-1 resize-none"
@@ -579,7 +579,7 @@ export default function ChatPage() {
               <Upload className="w-4 h-4" />
               <input type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = ''; }} />
             </label>
-            {activeRunId && view.runStatus === 'running' ? (
+            {activeRunId && !view.runStatus ? (
               <Button variant="danger" onClick={cancel} icon={<Square className="w-4 h-4" />}>停止</Button>
             ) : (
               <Button onClick={submit} loading={submitting} icon={<Send className="w-4 h-4" />}>发送</Button>
@@ -714,6 +714,7 @@ function statusLabel(s: string): string {
 function RunLiveView({
   goal,
   attachments,
+  inherited,
   view,
   events,
   streamingText,
@@ -723,6 +724,7 @@ function RunLiveView({
 }: {
   goal: string;
   attachments?: string[];
+  inherited?: Array<{ goal: string; answer: string }>;
   view: ReturnType<typeof deriveRunView>;
   events: RunEventItem[];
   streamingText: string;
@@ -743,6 +745,12 @@ function RunLiveView({
 
   return (
     <div className="max-w-4xl mx-auto space-y-4">
+      {/* 继承的提问气泡（分支线） */}
+      {inherited?.map((b, i) => (
+        <div key={`inh-${i}`} className="opacity-60 flex justify-end">
+          <div className="max-w-[80%] bg-brand/50 text-white rounded-2xl px-3 py-1.5 text-xs whitespace-pre-wrap break-words">{b.goal}</div>
+        </div>
+      ))}
       {/* 目标 */}
       <div className="flex justify-end">
         <div className="max-w-[80%] bg-brand text-white rounded-2xl px-4 py-2.5 text-sm whitespace-pre-wrap break-words">{goal}</div>

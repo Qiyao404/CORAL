@@ -295,9 +295,11 @@ export class GraphRunService {
         },
         onEvent: e => this.onGraphEvent(runId, e.type, e.payload ?? {}),
         onCheckpoint: (seq, state) => {
+          // P1: resume 时 checkpoint seq 必须接续已有的（否则 INSERT OR REPLACE 覆盖历史快照）
+          const baseSeq = this.deps.checkpointStore.listByRun(runId).at(-1)?.seq ?? 0;
           this.deps.checkpointStore.insert({
             runId,
-            seq,
+            seq: baseSeq + seq,
             kind: 'graph_node', // 001 迁移预留的 kind（全图状态快照，按节点迁移逐次写入）
             label: `graph-${seq}`,
             state: { vars: { graphState: state } } as any,

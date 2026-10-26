@@ -352,6 +352,9 @@ export class AgentLoop {
     }
     try {
       if (resolvedTool.permission === 'approval') {
+        // P1: 审批入口 abort 检查（终审发现：取消后同块第二个审批工具会把已 cancelled
+        // 的 run 改回 waiting_human 并永久挂起 — 在进入审批前先确认 run 未被取消）
+        this.options.signal.throwIfAborted?.();
         const approved = this.options.approveTool
           ? await this.options.approveTool(resolvedTool, call.input, call.id)
           : false; // 安全默认：未接审批通道时拒绝

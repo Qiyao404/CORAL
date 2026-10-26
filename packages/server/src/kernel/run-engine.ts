@@ -182,7 +182,12 @@ export class RunEngine {
     if (!run) return null;
     return {
       run,
-      events: this.deps.eventStore.listByRun(runId, 0, 100000).slice(-2000), // 终审 P2：取尾部
+      // P2: 取尾部 — listByRun 内部 cap 2000 实际返回头部，必须先查 maxSeq 再从尾部拉
+      events: (() => {
+        const maxSeq = this.deps.eventStore.maxSeq(runId);
+        const from = Math.max(0, maxSeq - 2000);
+        return this.deps.eventStore.listByRun(runId, from, 2000);
+      })(),
       checkpoints: this.deps.checkpointStore.listByRun(runId),
     };
   }
@@ -506,7 +511,11 @@ export class RunEngine {
     const approvalId = nanoid(10);
     const diff = this.previewDiff(tool.name, input, workspace.dir);
 
-    this.deps.runStore.update(runId, { status: 'waiting_human' });
+    // P1: 只在 run 非终态时置 waiting_human（防止取消后的审批把状态复活）
+    const runNow = this.deps.runStore.get(runId);
+    if (runNow && !['completed', 'failed', 'cancelled'].includes(runNow.status)) {
+      this.deps.runStore.update(runId, { status: 'waiting_human' });
+    }
     this.emitRunEvent(runId, 'tool.approval_required', {
       approvalId,
       tool: tool.name,
