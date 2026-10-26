@@ -154,7 +154,7 @@ export class AgentLoop {
           step: steps, tokensIn, tokensOut,
           // 上下文用量（ZCode 风格指示器数据源）
           contextChars: messages.reduce((n, m) => n + (m.content ?? '').length, 0),
-          contextMax: this.options.maxTotalChars ?? 240_000,
+          contextMax: this.options.maxTotalChars ?? 1_000_000,
           messageCount: messages.length,
         });
 

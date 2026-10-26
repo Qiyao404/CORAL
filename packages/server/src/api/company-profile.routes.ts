@@ -30,3 +30,22 @@ export function registerCompanyProfileRoutes(app: FastifyInstance) {
     return resetCompanyProfile();
   });
 }
+
+
+// ── 个人画像（原公司画像升级，开源个人轻量级定位）──────────────────
+import { getUserProfile, putUserProfile, resetUserProfile, userProfileToPrompt } from '../services/user-profile-service.js';
+
+export function registerUserProfileRoutes(app: FastifyInstance) {
+  app.get('/api/user-profile', async () => {
+    return getUserProfile();
+  });
+
+  app.put('/api/user-profile', async (request, reply) => {
+    const body = (request.body || {}) as Record<string, any>;
+    return putUserProfile(body);
+  });
+
+  app.post('/api/user-profile/reset', async () => {
+    return resetUserProfile();
+  });
+}

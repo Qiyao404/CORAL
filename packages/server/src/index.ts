@@ -35,6 +35,7 @@ import { registerSystemRoutes } from './api/system.routes.js';
 import { registerSkillBuilderRoutes } from './api/skill-builder.routes.js';
 import { registerSkillImportRoutes } from './api/skill-import.routes.js';
 import { registerCompanyProfileRoutes } from './api/company-profile.routes.js';
+import { registerUserProfileRoutes } from './api/company-profile.routes.js';
 import { closeDb } from './store/db.js';
 import { abortAll } from './services/task-abort-registry.js';
 import { llmClient } from './services/llm-client.js';
@@ -181,6 +182,7 @@ async function main() {
   registerSkillBuilderRoutes(app, skillBuilderService);
   registerSkillImportRoutes(app, registry);
   registerCompanyProfileRoutes(app);
+  registerUserProfileRoutes(app);
   registerRunRoutes(app, runEngine, graphRunService);
   registerMcpRoutes(app, mcpClient);
 

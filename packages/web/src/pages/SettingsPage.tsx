@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, Monitor, Palette, Brain, FileText, FolderOpen } from 'lucide-react';
+import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, Monitor, Palette, Brain, FileText, FolderOpen , User } from 'lucide-react';
 import { api } from '../api/client';
 import { Card, Button, Input, Textarea, Tag, Select, Skeleton } from '../components/ui';
 import { useTheme, type ThemeMode } from '../contexts/ThemeContext';
@@ -49,8 +49,8 @@ export default function SettingsPage() {
     profileId: '', name: '', provider: 'openai-compat' as 'openai-compat' | 'anthropic', baseUrl: '', model: '', apiKey: '', setActive: true,
   });
   const [llmMessage, setLlmMessage] = useState('');
-  const [profile, setProfile] = useState<CompanyProfile | null>(null);
-  const [profileForm, setProfileForm] = useState<Partial<CompanyProfile>>({});
+  const [profile, setProfile] = useState<Record<string, any> | null>(null);
+  const [profileForm, setProfileForm] = useState<Record<string, any>>({});
   const [profileMessage, setProfileMessage] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -68,7 +68,7 @@ export default function SettingsPage() {
     const [configRes, llmRes, profileRes] = await Promise.all([
       api.config(),
       api.listLlmConfigs(),
-      api.getCompanyProfile(),
+      api.getUserProfile(),
     ]);
     setConfig(configRes);
     const items: LlmProfile[] = llmRes.items || [];
@@ -209,10 +209,10 @@ export default function SettingsPage() {
   };
 
   const handleSaveProfile = async () => {
-    if (!profileForm.companyName) return setProfileMessage('公司名称必填');
+    if (!profileForm.name) return setProfileMessage('请填写名字/昵称');
     setSaving(true); setProfileMessage('');
     try {
-      const res = await api.putCompanyProfile(profileForm);
+      const res = await api.putUserProfile(profileForm);
       setProfile(res);
       setProfileForm(res);
       setProfileMessage(`已保存（v${res.version}）`);
@@ -223,7 +223,7 @@ export default function SettingsPage() {
     if (!confirm('恢复为默认画像？当前修改将被覆盖。')) return;
     setSaving(true);
     try {
-      const res = await api.resetCompanyProfile();
+      const res = await api.resetUserProfile();
       setProfile(res); setProfileForm(res);
       setProfileMessage('已恢复默认');
     } catch (err: any) { setProfileMessage(err.message); } finally { setSaving(false); }
@@ -235,7 +235,7 @@ export default function SettingsPage() {
     <div className="p-8 max-w-4xl mx-auto animate-fade-in-up">
       <div className="mb-6">
         <h1 className="text-2xl font-heading font-bold text-fg-primary">系统设置</h1>
-        <p className="text-fg-muted mt-1">配置 LLM 模型、公司业务画像与平台参数</p>
+        <p className="text-fg-muted mt-1">配置 LLM 模型、个人画像与平台参数</p>
       </div>
 
       {config?.demoMode && (
@@ -328,59 +328,92 @@ export default function SettingsPage() {
       <Card className="mb-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-heading font-semibold text-fg-primary flex items-center gap-2">
-            <Building2 className="w-5 h-5" /> 公司业务画像
+            <User className="w-5 h-5" /> 个人画像（越聊越懂你）
           </h2>
           {profile && <Tag variant="info">v{profile.version}</Tag>}
+        </div>
+        <p className="text-xs text-fg-muted mb-4 -mt-2">个人画像会注入每次对话的系统提示（Agent 根据它调整回答风格）；同时通过长期记忆自动丰富 — 越聊越了解你。旧公司画像已自动迁移。</p>
+        <div className="flex items-center justify-between mb-4">
         </div>
 
         <div className="space-y-4">
           <div>
-            <label className="block text-xs text-fg-muted mb-1">公司名称<span className="text-status-danger">*</span></label>
+            <label className="block text-xs text-fg-muted mb-1">你的名字/昵称</label>
             <Input
-              value={profileForm.companyName || ''}
-              onChange={e => setProfileForm(p => ({ ...p, companyName: e.target.value }))}
-              placeholder="例如：中试科技有限公司"
+              value={profileForm.name || ''}
+              onChange={e => setProfileForm(p => ({ ...p, name: e.target.value }))}
+              placeholder="例如：小徐"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-fg-muted mb-1">职业/角色</label>
+            <Input
+              value={profileForm.role || ''}
+              onChange={e => setProfileForm(p => ({ ...p, role: e.target.value }))}
+              placeholder="例如：大模型应用开发工程师"
             />
           </div>
 
           <KeywordInput
-            label="行业领域"
-            values={profileForm.industries || []}
-            onChange={v => setProfileForm(p => ({ ...p, industries: v }))}
+            label="兴趣领域"
+            values={profileForm.interests || []}
+            onChange={v => setProfileForm(p => ({ ...p, interests: v }))}
           />
           <KeywordInput
-            label="核心业务"
-            values={profileForm.coreBusinesses || []}
-            onChange={v => setProfileForm(p => ({ ...p, coreBusinesses: v }))}
+            label="专业特长"
+            values={profileForm.expertise || []}
+            onChange={v => setProfileForm(p => ({ ...p, expertise: v }))}
           />
           <KeywordInput
-            label="关注关键词（命中即保留）"
-            values={profileForm.focusKeywords || []}
-            onChange={v => setProfileForm(p => ({ ...p, focusKeywords: v }))}
+            label="喜欢的内容/话题"
+            values={profileForm.preferences?.likeKeywords || []}
+            onChange={v => setProfileForm(p => ({ ...p, preferences: { ...(p.preferences || {}), likeKeywords: v } }))}
           />
           <KeywordInput
-            label="排除关键词（命中即剔除）"
-            values={profileForm.excludeKeywords || []}
-            onChange={v => setProfileForm(p => ({ ...p, excludeKeywords: v }))}
+            label="不喜欢的内容/话题"
+            values={profileForm.preferences?.avoidKeywords || []}
+            onChange={v => setProfileForm(p => ({ ...p, preferences: { ...(p.preferences || {}), avoidKeywords: v } }))}
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <KeywordInput
-              label="保留政策类型"
-              values={profileForm.policyTypes?.keep || []}
-              onChange={v => setProfileForm(p => ({ ...p, policyTypes: { ...(p.policyTypes || { keep: [], exclude: [] }), keep: v } }))}
-            />
-            <KeywordInput
-              label="剔除政策类型"
-              values={profileForm.policyTypes?.exclude || []}
-              onChange={v => setProfileForm(p => ({ ...p, policyTypes: { ...(p.policyTypes || { keep: [], exclude: [] }), exclude: v } }))}
-            />
+            <div>
+              <label className="block text-xs text-fg-muted mb-1">偏好输出格式</label>
+              <Input
+                value={profileForm.workStyle?.outputFormat || ''}
+                onChange={e => setProfileForm(p => ({ ...p, workStyle: { ...(p.workStyle || { outputFormat: '', language: '', detailLevel: '', tone: '' }), outputFormat: e.target.value } }))}
+                placeholder="例如：表格汇总、Markdown"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-fg-muted mb-1">偏好语言</label>
+              <Input
+                value={profileForm.workStyle?.language || ''}
+                onChange={e => setProfileForm(p => ({ ...p, workStyle: { ...(p.workStyle || { outputFormat: '', language: '', detailLevel: '', tone: '' }), language: e.target.value } }))}
+                placeholder="例如：中文"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-fg-muted mb-1">偏好详细程度</label>
+              <Input
+                value={profileForm.workStyle?.detailLevel || ''}
+                onChange={e => setProfileForm(p => ({ ...p, workStyle: { ...(p.workStyle || { outputFormat: '', language: '', detailLevel: '', tone: '' }), detailLevel: e.target.value } }))}
+                placeholder="例如：简明扼要"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-fg-muted mb-1">偏好语气</label>
+              <Input
+                value={profileForm.workStyle?.tone || ''}
+                onChange={e => setProfileForm(p => ({ ...p, workStyle: { ...(p.workStyle || { outputFormat: '', language: '', detailLevel: '', tone: '' }), tone: e.target.value } }))}
+                placeholder="例如：直接、技术向"
+              />
+            </div>
           </div>
           <div>
             <label className="block text-xs text-fg-muted mb-1">自由描述（150-500 字，给 LLM 的额外上下文）</label>
             <Textarea
               rows={3}
-              value={profileForm.description || ''}
-              onChange={e => setProfileForm(p => ({ ...p, description: e.target.value }))}
+              value={profileForm.background || ''}
+              onChange={e => setProfileForm(p => ({ ...p, background: e.target.value }))}
             />
           </div>
 

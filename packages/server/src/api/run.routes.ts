@@ -207,7 +207,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
   app.get('/api/sessions/:sessionId/context-usage', async (request, reply) => {
     const { sessionId } = request.params as any;
     const { items } = engine.store.list({ sessionId, limit: 50 });
-    if (items.length === 0) return { sessionId, contextChars: 0, contextMax: 240_000, messageCount: 0, sessionContext: null };
+    if (items.length === 0) return { sessionId, contextChars: 0, contextMax: 1_000_000, messageCount: 0, sessionContext: null };
 
     // 取最近一个有 checkpoint 的 run 的最新快照
     let contextChars = 0;
@@ -242,7 +242,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
       }
     } catch { /* ignore */ }
 
-    return { sessionId, contextChars, contextMax: 240_000, messageCount, sessionContext };
+    return { sessionId, contextChars, contextMax: 1_000_000, messageCount, sessionContext };
   });
 
   // ── M2：Graph 模式端点 ──────────────────────────────────

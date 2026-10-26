@@ -279,7 +279,14 @@ export class RunEngine {
         workspaceDir: workspace?.dir,
         initialHistory,
         // D18：记忆使用指引常驻系统提示；调用方的 extraSystem 追加在后
-        extraSystem: input.extraSystem ? `${MEMORY_GUIDE}\n\n${input.extraSystem}` : MEMORY_GUIDE,
+        // D18 记忆指引 + 个人画像（越聊越懂用户）+ 调用方 extraSystem
+        extraSystem: [
+          MEMORY_GUIDE,
+          (await import('../services/user-profile-service.js')).userProfileToPrompt(
+            (await import('../services/user-profile-service.js')).getUserProfile()
+          ),
+          input.extraSystem,
+        ].filter(Boolean).join('\n\n'),
         onEvent: e => this.onLoopEvent(runId, e),
         saveCheckpoint: cp => this.saveCheckpoint(runId, cp),
         // M1-10：工作区存在时启用审批流（ask/auto 的 approval 工具 + shell）

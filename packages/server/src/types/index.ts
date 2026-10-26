@@ -335,6 +335,29 @@ export interface SkillBuilderSession {
 }
 
 /** 公司业务画像（FR-G）*/
+export interface UserProfile {
+  version: number;
+  name: string;
+  role: string;
+  interests: string[];
+  expertise: string[];
+  workStyle: {
+    outputFormat: string;
+    language: string;
+    detailLevel: string;
+    tone: string;
+  };
+  preferences: {
+    likeKeywords: string[];
+    avoidKeywords: string[];
+    preferredTools: string[];
+  };
+  background: string;
+  goals: string[];
+  updatedAt: string;
+}
+
+/** @deprecated 使用 UserProfile 代替（开源个人定位） */
 export interface CompanyProfile {
   version: number;
   companyName: string;

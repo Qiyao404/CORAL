@@ -205,6 +205,12 @@ export const api = {
   listPendingApprovals: () => request<any>('/approvals/pending'),
   // ─── 上下文用量 ────────────────────────────────────────────
   getSessionContextUsage: (sessionId: string) => request<any>(`/sessions/${sessionId}/context-usage`),
+  // ─── 个人画像 ───────────────────────────────────────────
+  getUserProfile: () => request<any>('/user-profile'),
+  putUserProfile: (payload: any) =>
+    request<any>('/user-profile', { method: 'PUT', body: JSON.stringify(payload) }),
+  resetUserProfile: () =>
+    request<any>('/user-profile/reset', { method: 'POST' }),
 
   // ─── M3：连接器（MCP + 触发器）────────────────────────────
   listMcpServers: () => request<any>('/mcp/servers'),

@@ -42,7 +42,7 @@ export interface CompressOptions {
 }
 
 const DEFAULT_COMPRESS: CompressOptions = {
-  maxTotalChars: 240_000,
+  maxTotalChars: 1_000_000,
   keepRecent: 12,
   summarize: async t => `[摘要生成器未注入] ${t.slice(0, 2000)}`,
 };
