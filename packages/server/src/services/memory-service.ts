@@ -139,18 +139,42 @@ export interface DistillItem {
  * LLM 提炼本次 run 值得长期保留的内容并写入 memory/。
  * 返回写入结果；LLM 输出非法/无值得保留 → 空数组（绝不因整理失败影响 run）。
  */
+export interface DistillResult {
+  longTermWritten: Array<{ name: string; bytes: number }>;
+  sessionFiles: Array<{ filename: string; summary: string }>;
+  sessionPoints: string[];
+}
+
 export async function distillMemory(
   llm: { complete(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, options?: any): Promise<{ content: string }> },
   service: MemoryService,
-  transcript: string
-): Promise<Array<{ name: string; bytes: number }>> {
-  const system = `You maintain the long-term memory of a personal agent runtime. Given a finished task transcript, extract ONLY durable facts worth remembering across future sessions: user preferences, corrections, conventions, project facts, lessons learned.
+  transcript: string,
+  sessionContext?: { addFileSummary(sessionId: string, filename: string, summary: string): void; addKeyPoint(sessionId: string, point: string): void },
+  sessionId?: string
+): Promise<DistillResult> {
+  const system = `You maintain TWO memory tiers of a personal agent runtime.
+
+TIER 1 — LONG-TERM MEMORY (data/memory/): ONLY universal facts that apply across ALL future sessions:
+- User preferences (output format, language, tone, review style)
+- Corrections the user made ("don't do X, do Y instead")
+- Project conventions and facts (names, goals, tech stack of ongoing projects)
+- Lessons learned (tool quirks, environment issues encountered repeatedly)
+- STICTLY EXCLUDE: file contents, file summaries, document analysis results, task-specific data.
+  These are SESSION-scoped and belong in Tier 2. If the transcript is mostly about analyzing
+  a specific document, the only long-term memory should be things like "user prefers tables"
+  — NOT what the document said.
+
+TIER 2 — SESSION CONTEXT: File summaries and task-specific facts from THIS conversation.
+- Summarize each analyzed file in 2-5 sentences (what it contains, key conclusions)
+- Record task progress points ("completed X, pending Y")
+
 Rules:
-- Ignore volatile task details, one-off data, and anything derivable from the transcript's goal itself.
-- Prefer updating an existing topic file over creating near-duplicates (existing files are listed in the transcript header).
-- Filenames: short kebab-case English or pinyin topic names, e.g. user-preferences.md, project-x.md.
-- Each file content: concise markdown, at most ~40 lines.
-Output STRICT JSON: an array of {"filename": "...", "content": "..."} objects. Output [] if nothing is worth remembering. No prose, no code fences.`;
+- Prefer updating an existing topic file over creating near-duplicates.
+- Long-term filenames: short kebab-case, e.g. user-preferences.md, project-x.md.
+- Each long-term file: concise markdown, at most ~40 lines.
+Output STRICT JSON with two arrays:
+{"long_term": [{"filename": "...", "content": "..."}], "session_files": [{"filename": "...", "summary": "..."}], "session_points": ["point1", "point2"]}
+Output empty arrays if nothing is worth remembering. No prose, no code fences.`;
 
   const existing = service.list().map(m => m.name).join(', ') || '(empty)';
   const clipped = transcript.slice(0, 60_000);
@@ -162,16 +186,17 @@ Output STRICT JSON: an array of {"filename": "...", "content": "..."} objects. O
         { role: 'system', content: system },
         { role: 'user', content: `Existing memory files: ${existing}\n\n--- TRANSCRIPT ---\n${clipped}` },
       ],
-      { temperature: 0.2, maxTokens: 2000 }
+      { temperature: 0.2, maxTokens: 3000 }
     );
     raw = r.content;
   } catch {
-    return []; // 整理失败不影响 run
+    return { longTermWritten: [], sessionFiles: [], sessionPoints: [] }; // 整理失败不影响 run
   }
 
-  const items = parseDistillItems(raw);
+  const parsed = parseTwoTierDistill(raw);
   const written: Array<{ name: string; bytes: number }> = [];
-  for (const item of items.slice(0, 10)) {
+  // Tier 1: 写入长期记忆
+  for (const item of parsed.long_term.slice(0, 8)) {
     const safe = service.sanitizeName(item.filename);
     if (!safe) continue;
     try {
@@ -179,27 +204,45 @@ Output STRICT JSON: an array of {"filename": "...", "content": "..."} objects. O
       written.push(w);
     } catch { /* 跳过单文件失败 */ }
   }
-  return written;
+  // Tier 2: 写入会话上下文
+  if (sessionContext && sessionId) {
+    for (const f of parsed.session_files.slice(0, 10)) {
+      try { sessionContext.addFileSummary(sessionId, f.filename, f.summary); } catch { /* ignore */ }
+    }
+    for (const p of parsed.session_points.slice(0, 10)) {
+      try { sessionContext.addKeyPoint(sessionId, p); } catch { /* ignore */ }
+    }
+  }
+  return {
+    longTermWritten: written,
+    sessionFiles: parsed.session_files,
+    sessionPoints: parsed.session_points,
+  };
 }
 
-function parseDistillItems(raw: string): DistillItem[] {
+/** 解析两级输出 JSON */
+function parseTwoTierDistill(raw: string): { long_term: DistillItem[]; session_files: Array<{ filename: string; summary: string }>; session_points: string[] } {
   const cleaned = raw.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-  try {
-    const parsed = JSON.parse(cleaned);
-    if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (x: any) => x && typeof x.filename === 'string' && typeof x.content === 'string' && x.content.trim()
-    );
-  } catch {
-    // 括号配对兜底
-    const start = cleaned.indexOf('[');
-    const end = cleaned.lastIndexOf(']');
-    if (start >= 0 && end > start) {
-      try {
-        const parsed = JSON.parse(cleaned.slice(start, end + 1));
-        return Array.isArray(parsed) ? parsed.filter((x: any) => x?.filename && x?.content) : [];
-      } catch { return []; }
-    }
-    return [];
+  const tryParse = (text: string) => {
+    try {
+      const obj = JSON.parse(text);
+      return {
+        long_term: Array.isArray(obj.long_term) ? obj.long_term.filter((x: any) => x?.filename && x?.content) : [],
+        session_files: Array.isArray(obj.session_files) ? obj.session_files.filter((x: any) => x?.filename && x?.summary) : [],
+        session_points: Array.isArray(obj.session_points) ? obj.session_points.filter((x: any) => typeof x === 'string') : [],
+      };
+    } catch { return null; }
+  };
+  const direct = tryParse(cleaned);
+  if (direct) return direct;
+  // 括号兜底
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    const bracket = tryParse(cleaned.slice(start, end + 1));
+    if (bracket) return bracket;
   }
+  return { long_term: [], session_files: [], session_points: [] };
 }
+
+

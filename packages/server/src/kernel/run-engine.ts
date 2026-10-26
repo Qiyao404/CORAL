@@ -248,6 +248,15 @@ export class RunEngine {
           initialHistory = prev.history;
           continuedFrom = prev.fromRunId;
         }
+        // 会话级上下文：本会话已分析的文件摘要（不进长期记忆，跨 run 共享）
+        try {
+          const dataDir = (await import('path')).dirname(platformConfig.databasePath);
+          const sessionCtx = new (await import('../services/session-context-service.js')).SessionContextService(dataDir);
+          const ctxText = sessionCtx.toPromptText(input.sessionId);
+          if (ctxText) {
+            input.extraSystem = (input.extraSystem ? input.extraSystem + '\n\n' : '') + ctxText;
+          }
+        } catch { /* 会话上下文加载失败不影响 run */ }
       }
 
       this.deps.runStore.update(runId, { status: 'running' });
@@ -311,7 +320,7 @@ export class RunEngine {
 
       // M1-11（D18）：会话结束记忆整理 — 仅正常完成时；demo 模式与开关关闭时跳过
       if (result.status === 'completed' && platformConfig.memoryDistillEnabled && !(this.deps.llm as any).isDemoMode?.()) {
-        await this.distillAfterRun(runId, result.messages);
+        await this.distillAfterRun(runId, result.messages, input.sessionId);
       }
     } catch (err: any) {
       if (signal.aborted) {
@@ -569,16 +578,19 @@ export class RunEngine {
   }
 
   /** M1-11：把本次 run 的对话转录交给 LLM 提炼长期记忆（失败不影响 run 终态） */
-  private async distillAfterRun(runId: string, messages: Array<{ role: string; content: string }>): Promise<void> {
+  private async distillAfterRun(runId: string, messages: Array<{ role: string; content: string }>, sessionId?: string): Promise<void> {
     try {
       const transcript = messages
         .map(m => `[${m.role}] ${m.content}`)
         .join('\n');
       const service = new MemoryService(platformConfig.memoryDir);
-      const written = await distillMemory(this.deps.llm, service, transcript);
-      if (written.length > 0) {
+      const dataDir = (await import('path')).dirname(platformConfig.databasePath);
+      const sessionCtx = sessionId ? new (await import('../services/session-context-service.js')).SessionContextService(dataDir) : undefined;
+      const result = await distillMemory(this.deps.llm, service, transcript, sessionCtx, sessionId);
+      if (result.longTermWritten.length > 0 || result.sessionFiles.length > 0) {
         this.emitRunEvent(runId, 'memory.distilled', {
-          files: written,
+          files: result.longTermWritten,
+          sessionFiles: result.sessionFiles.length,
         });
       }
     } catch (err: any) {
