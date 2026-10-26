@@ -360,7 +360,7 @@ export default function ChatPage() {
         onClick={() => {
           if (isSession) {
             setCurrentSessionId(s.sessionId);
-            setActiveRunId(s.runs.at(-1)?.id ?? null);
+            setActiveRunId(s.runs[0]?.id ?? null);
           } else {
             setActiveRunId(s.runs[0]?.id ?? null);
             setCurrentSessionId(null);
@@ -371,7 +371,7 @@ export default function ChatPage() {
         <div className="flex-1 min-w-0">
           <p className="truncate">{title}</p>
           <p className="text-[10px] text-fg-muted mt-0.5">
-            {s.runs.length > 1 ? `${s.runs.length} 轮 · ` : ''}{statusLabel(s.runs.at(-1)?.status ?? '')} · {new Date(s.runs.at(-1)?.createdAt ?? 0).toLocaleDateString('zh-CN')}
+            {s.runs.length > 1 ? `${s.runs.length} 轮 · ` : ''}{statusLabel(s.runs[0]?.status ?? '')} · {new Date(s.runs[0]?.createdAt ?? 0).toLocaleDateString('zh-CN')}
           </p>
         </div>
         <button

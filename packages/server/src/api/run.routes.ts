@@ -182,9 +182,10 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
       const newSessionId = `sess_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
       // 用户反馈：新对话线要能看到"继承自哪、之前做了什么"——首条 user 消息
       // 注入继承摘要（同时保持 initialHistory 供模型衔接）
-      const inheritedSummary = history
-        .filter(m => m.role === 'user' && !String(m.content).startsWith('[system]'))
-        .map(m => `· ${String(m.content).slice(0, 60)}`)
+      // Bug1: 从原始 checkpoint 消息构建（不含本次 fork 指令 — 避免自引用）
+      const inheritedSummary = (state.messages as Array<any>)
+        .filter(m => m.role === 'user' && !String(m.content ?? '').startsWith('[system]'))
+        .map(m => `· ${String(m.content ?? '').slice(0, 60)}`)
         .join('\n');
       const goalWithInherit = (instruction || `[fork] 继续之前的任务`)
         + (inheritedSummary ? `\n\n（本对话继承自 ${runId.slice(0, 14)}… 第 ${fromSeq} 步；此前已完成：\n${inheritedSummary}\n）` : '');
