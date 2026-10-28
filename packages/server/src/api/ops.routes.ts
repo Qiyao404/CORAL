@@ -102,6 +102,32 @@ export function registerOpsRoutes(app: FastifyInstance, runEngine: RunEngine, ll
     return { ...saved, effective: svc.effective() };
   });
 
+  // ─── 提示词优化（输入框的 ✨ 按钮）────────────────────────────────────
+
+  app.post('/api/prompt-optimize', async (request, reply) => {
+    const body = (request.body || {}) as { text?: string };
+    const text = String(body.text ?? '').trim();
+    if (!text) return reply.status(400).send({ error: '缺少 text' });
+    if (text.length > 4000) return reply.status(400).send({ error: '文本过长（上限 4000 字符）' });
+    try {
+      const r = await llm.complete(
+        [
+          {
+            role: 'system',
+            content:
+              'You improve short task prompts for a personal agent runtime. First infer what the user actually wants (deliverable, scope, constraints). Then rewrite the prompt so the agent can complete it better: make the goal and expected deliverable explicit, add measurable/specific criteria, mention desired output format (file name / structure / language) when inferable, remove ambiguity and filler — but NEVER invent requirements the user did not imply, and keep it in the SAME language as the input. Keep @file references intact if present. Output ONLY the rewritten prompt, no explanations, no quotes.',
+          },
+          { role: 'user', content: text },
+        ],
+        { temperature: 0.3, maxTokens: 1200 }
+      );
+      const optimized = r.content.trim().replace(/^["“](.*)["”]$/s, '$1');
+      return { optimized: optimized || text };
+    } catch (err: any) {
+      return reply.status(500).send({ error: `优化失败: ${err?.message ?? err}` });
+    }
+  });
+
   // ─── 斜杠命令 / 具名子代理（用户快捷面）────────────────────────────────
 
   app.get('/api/commands', async () => {
