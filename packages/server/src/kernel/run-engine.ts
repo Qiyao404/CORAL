@@ -11,13 +11,22 @@ import { makeTodoTool } from '../tools/builtin/todo.js';
 import { makePastRunsTool } from '../tools/builtin/past-runs.js';
 import { makeSpawnTool } from '../tools/builtin/spawn.js';
 import { makeMemoryTools, MEMORY_GUIDE } from '../tools/builtin/memory.js';
+import { makeEvidenceReadTool } from '../tools/builtin/evidence.js';
+import { makeDualReviewTool } from '../tools/builtin/dual-review.js';
+import { EvidenceStore } from './evidence.js';
 import { MemoryService, distillMemory } from '../services/memory-service.js';
+import { HabitService } from '../services/habit-service.js';
+import { AgentPresetService } from '../services/agent-presets.js';
+import { SlashCommandService } from '../services/slash-commands.js';
+import { isEstopped, estopReason } from '../services/estop.js';
+import { HookService, type HookEvent } from '../hooks/hook-service.js';
 import { WorkspaceService, type Workspace } from '../services/workspace-service.js';
 import { fsSearchTool } from '../tools/builtin/fs-search.js';
 import { docxTools } from '../tools/builtin/docx.js';
 import { unifiedDiff } from '../tools/diff.js';
 import { resolveWorkspacePath } from '../tools/workspace-path.js';
 import { readFileSync, existsSync } from 'fs';
+import { dirname as pathDirname } from 'path';
 import { nanoid } from 'nanoid';
 import type { Tool, ToolPermission } from '../tools/types.js';
 import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-registry.js';
@@ -77,6 +86,25 @@ const MAX_TOKENS_CAP = 2_000_000;
 
 export class RunEngine {
   private deps: RunEngineDeps;
+  /** 证据记录层：超预算工具结果的不可变存档（data/evidence/{runId}/） */
+  private evidence = new EvidenceStore(pathDirname(platformConfig.databasePath));
+  /** 习惯学习管线：观察 → 蒸馏 → 置信度 → 晋升技能（data/habits/） */
+  private habits = new HabitService(pathDirname(platformConfig.databasePath));
+  /** 具名子代理预设（data/agents/*.md — description 注入主提示，正文按名加载） */
+  private agentPresets = new AgentPresetService(pathDirname(platformConfig.databasePath));
+  /** 斜杠命令（data/commands/*.md — 用户快捷指令，goal 以 "/" 开头时展开） */
+  private slashCommands = new SlashCommandService(pathDirname(platformConfig.databasePath));
+  /** 外部命令守卫（data/hooks.json — 8 生命周期事件，可拒/可改/可补） */
+  private hookSvc = new HookService(pathDirname(platformConfig.databasePath));
+
+  /** hooks 的 loop 注入形态（结构化包装 — kernel 不 import 具体服务） */
+  private loopHooks = {
+    run: (event: string, payload: Record<string, any>) => this.hookSvc.run(event as HookEvent, payload),
+  };
+  /** runId → 会话/目标（习惯观察的上下文标注） */
+  private runMeta = new Map<string, { sessionId: string; goal: string }>();
+  /** callId → 工具输入预览（观察在 call_completed 时落笔，需要 started 的输入） */
+  private pendingObs = new Map<string, { tool: string; inputPreview: string; agentId: string }>();
 
   constructor(deps: RunEngineDeps) {
     this.deps = deps;
@@ -94,10 +122,31 @@ export class RunEngine {
     return this.deps.checkpointStore;
   }
 
+  /** 习惯学习管线（API 路由用：列表/蒸馏/晋升/纠偏） */
+  get habitService(): HabitService {
+    return this.habits;
+  }
+
+  /** 外部命令守卫（hooks — API/启动接线用） */
+  get hooks(): HookService {
+    return this.hookSvc;
+  }
+
   /** 创建并异步执行一个 Free 模式 run */
   startRun(input: StartRunInput): { runId: string; sessionId?: string } {
-    const goal = String(input.goal ?? '').trim();
+    // ESTOP 哨兵：拉闸期间拒绝一切新工作（在跑的不杀）
+    if (isEstopped()) {
+      throw new Error(`平台已暂停（ESTOP）：${estopReason()}。解除：coral resume 或删除 data/ESTOP 文件。`);
+    }
+    let goal = String(input.goal ?? '').trim();
     if (!goal) throw new Error('缺少 goal');
+    // 斜杠命令展开：/cmd 参数 → 命令模板（用户快捷指令；展开事实记入事件流）
+    let expandedFrom: string | undefined;
+    const slash = this.slashCommands.expand(goal);
+    if (slash) {
+      goal = slash.goal.slice(0, GOAL_LIMIT);
+      expandedFrom = `/${slash.command.name} ${slash.arguments}`.trim();
+    }
     if (goal.length > GOAL_LIMIT) {
       throw new Error(`goal 过长（${goal.length} 字符，上限 ${GOAL_LIMIT}）`);
     }
@@ -125,6 +174,7 @@ export class RunEngine {
     this.emitRunEvent(runId, 'run.created', {
       goal,
       sessionId,
+      ...(expandedFrom ? { expandedFrom } : {}),
       ...(input.parentRunId ? { forkFrom: input.parentRunId, forkFromSeq: input.forkFromSeq } : {}),
       budget,
       ...(workspace ? { workspace: { id: workspace.id, name: workspace.name, permission: workspace.permission } } : {}),
@@ -153,7 +203,7 @@ export class RunEngine {
     return { ok: true, message: 'run 已取消' };
   }
 
-  /** 删除 run（运行中先取消；事件/检查点级联清除） */
+  /** 删除 run（运行中先取消；事件/检查点/证据记录级联清除） */
   deleteRun(runId: string): { ok: boolean; message: string } {
     const run = this.deps.runStore.get(runId);
     if (!run) return { ok: false, message: 'run 不存在' };
@@ -161,6 +211,7 @@ export class RunEngine {
       this.cancelRun(runId); // 先中止，避免悬挂的 loop 往已删除的 run 写事件
     }
     this.rejectAllApprovals(runId);
+    this.evidence.deleteRun(runId);
     const deleted = this.deps.runStore.delete(runId);
     return { ok: deleted, message: deleted ? '已删除' : '删除失败' };
   }
@@ -252,6 +303,7 @@ export class RunEngine {
         try {
           const dataDir = (await import('path')).dirname(platformConfig.databasePath);
           const sessionCtx = new (await import('../services/session-context-service.js')).SessionContextService(dataDir);
+          sessionCtx.setGoal(input.sessionId, input.goal); // 接力简报的 goal（已设置则不覆盖）
           const ctxText = sessionCtx.toPromptText(input.sessionId);
           if (ctxText) {
             input.extraSystem = (input.extraSystem ? input.extraSystem + '\n\n' : '') + ctxText;
@@ -261,6 +313,7 @@ export class RunEngine {
 
       this.deps.runStore.update(runId, { status: 'running' });
       this.emitRunEvent(runId, 'run.started', continuedFrom ? { continuedFrom } : {});
+      this.runMeta.set(runId, { sessionId: input.sessionId ?? '', goal: input.goal });
 
       const run = this.deps.runStore.get(runId)!;
       const budget = (run.budget ?? {}) as { maxSteps?: number; maxTokens?: number };
@@ -279,16 +332,20 @@ export class RunEngine {
         workspaceDir: workspace?.dir,
         initialHistory,
         // D18：记忆使用指引常驻系统提示；调用方的 extraSystem 追加在后
-        // D18 记忆指引 + 个人画像（越聊越懂用户）+ 调用方 extraSystem
+        // D18 记忆指引 + 个人画像（越聊越懂用户）+ 协作习惯 + 具名子代理目录 + 调用方 extraSystem
         extraSystem: [
           MEMORY_GUIDE,
           (await import('../services/user-profile-service.js')).userProfileToPrompt(
             (await import('../services/user-profile-service.js')).getUserProfile()
           ),
+          this.habits.toPromptText(),
+          this.agentPresets.toPromptText(),
           input.extraSystem,
         ].filter(Boolean).join('\n\n'),
         onEvent: e => this.onLoopEvent(runId, e),
         saveCheckpoint: cp => this.saveCheckpoint(runId, cp),
+        evidenceStore: this.evidence,
+        hooks: this.loopHooks,
         // M1-10：工作区存在时启用审批流（ask/auto 的 approval 工具 + shell）
         approveTool: workspace
           ? (tool, inp, callId) => this.requestApproval(runId, tool, inp, callId, workspace)
@@ -328,6 +385,16 @@ export class RunEngine {
       // M1-11（D18）：会话结束记忆整理 — 仅正常完成时；demo 模式与开关关闭时跳过
       if (result.status === 'completed' && platformConfig.memoryDistillEnabled && !(this.deps.llm as any).isDemoMode?.()) {
         await this.distillAfterRun(runId, result.messages, input.sessionId);
+        // 习惯蒸馏：观察攒够阈值才跑（个人量级：约每 20 次工具调用一次）
+        if (this.habits.observationsSinceLastDistill() >= 20) {
+          void this.habits.distill(this.deps.llm, input.sessionId)
+            .then(r => {
+              if (r.created + r.reinforced > 0 || r.promotedReady.length > 0) {
+                this.emitRunEvent(runId, 'habit.distilled', r);
+              }
+            })
+            .catch(() => { /* 学习失败静默 */ });
+        }
       }
     } catch (err: any) {
       if (signal.aborted) {
@@ -338,6 +405,8 @@ export class RunEngine {
       this.emitRunEvent(runId, 'run.failed', { error: err?.message ?? String(err) });
     } finally {
       this.releaseSeq(runId);
+      this.runMeta.delete(runId);
+      this.pendingObs.clear();
       this.rejectAllApprovals(runId); // 挂起的审批随 run 结束一并落定（防泄漏/悬挂）
       releaseAbortController(runId);
     }
@@ -350,7 +419,7 @@ export class RunEngine {
     // 事件由 cancelRun API 统一发出；此处不重复
   }
 
-  /** loop 事件 → events 表 + eventBus（双写）；agentId 区分主循环/sub-agent（M1-4） */
+  /** loop 事件 → events 表 + eventBus（双写）+ 习惯观察；agentId 区分主循环/sub-agent（M1-4） */
   private onLoopEvent(runId: string, e: LoopEvent): void {
     const payload = { runId, ...(e.payload ?? {}) };
     const agentId = typeof (payload as any).agentId === 'string' ? (payload as any).agentId : 'main';
@@ -364,6 +433,56 @@ export class RunEngine {
       payload,
     });
     this.bridgeToBus(stored);
+    this.observeForHabits(runId, e.type, payload as any, agentId);
+    this.bridgeToHooks(runId, e.type, payload as any);
+  }
+
+  /** 观察/通知类钩子桥接（fire-and-forget — 绝不拖慢事件流）：终态→session_end，审批→notification */
+  private bridgeToHooks(runId: string, type: string, payload: any): void {
+    try {
+      if (type === 'run.completed' || type === 'run.failed' || type === 'run.cancelled') {
+        void this.hookSvc.run('session_end', {
+          runId,
+          outcome: type.replace('run.', ''),
+          status: payload?.error ? 'failed' : 'ok',
+          steps: payload?.steps,
+        }).catch(() => {});
+      } else if (type === 'tool.approval_required') {
+        void this.hookSvc.run('notification', {
+          runId, kind: 'approval_required', tool: payload?.tool,
+        }).catch(() => {});
+      }
+    } catch { /* 桥接异常不影响事件流 */ }
+  }
+
+  /** 习惯观察：call_started 记输入，completed/failed 落笔（确定性事件流，不依赖模型自觉） */
+  private observeForHabits(runId: string, type: string, payload: any, agentId: string): void {
+    try {
+      if (type === 'tool.call_started' && payload.callId) {
+        this.pendingObs.set(payload.callId, {
+          tool: String(payload.tool ?? ''),
+          inputPreview: String(payload.inputPreview ?? ''),
+          agentId,
+        });
+        return;
+      }
+      if (type !== 'tool.call_completed' && type !== 'tool.call_failed') return;
+      const callId = payload.callId;
+      if (!callId) return;
+      const pending = this.pendingObs.get(callId);
+      this.pendingObs.delete(callId);
+      if (!pending || pending.tool.startsWith('skill_')) return; // 技能=提示生成，观察价值低
+      const meta = this.runMeta.get(runId);
+      this.habits.observe({
+        runId,
+        sessionId: meta?.sessionId ?? '',
+        agentId: pending.agentId,
+        tool: pending.tool,
+        ok: type === 'tool.call_completed',
+        inputPreview: pending.inputPreview,
+        goalPreview: meta?.goal.slice(0, 120) ?? '',
+      });
+    } catch { /* 观察失败不影响事件流 */ }
   }
 
   /** run 级事件（与 loop 事件同通道） */
@@ -458,12 +577,17 @@ export class RunEngine {
     tools.push(makeTodoTool()); // 事件经 ctx.emit → loop 注入 agentId
     tools.push(makePastRunsTool(taskStore as any));
     tools.push(...makeMemoryTools(new MemoryService(platformConfig.memoryDir)));
+    tools.push(makeEvidenceReadTool(this.evidence));
+    tools.push(makeDualReviewTool({ llm: this.deps.llm }));
 
     // M1-4：spawn 工具 — 子预算上限为平台默认的 1/2 量级，spawn 限额 run 级共享
     const spawn = makeSpawnTool({
       llm: this.deps.llm,
       summarize: async transcript => this.summarizeTranscript(transcript),
       baseTools: tools,
+      evidenceStore: this.evidence,
+      presets: this.agentPresets,
+      hooks: this.loopHooks,
       // 审查 P2：审批通道透传（与主循环同一 requestApproval — waiting_human 语义一致）
       ...(workspace ? { approveTool: (tool, inp, callId) => this.requestApproval(runId, tool, inp, callId, workspace) } : {}),
       depth: 0,
@@ -482,6 +606,8 @@ export class RunEngine {
   // ─── M1-10：审批流（waiting_human → 人工决定 → 恢复）──────────────────
 
   private pendingApprovals = new Map<string, { runId: string; tool: string; resolve: (v: boolean) => void }>();
+  /** 审批选择记忆（会话级 always）：key = workspaceId:toolName，命中即自动放行 */
+  private sessionApprovalRules = new Set<string>();
 
   /** fs 工具的改动预览（diff 卡片数据）；其他工具返回 null */
   private previewDiff(toolName: string, input: any, workspaceDir: string): string | null {
@@ -516,7 +642,8 @@ export class RunEngine {
     return null;
   }
 
-  /** 审批请求：emit tool.approval_required（带 diff 预览）→ 挂起等待 → 状态机 waiting_human */
+  /** 审批请求：emit tool.approval_required（带 diff 预览）→ 挂起等待 → 状态机 waiting_human。
+   *  会话级 always 规则命中时跳过人工（自动放行 + 留痕事件）。 */
   private async requestApproval(
     runId: string,
     tool: Tool,
@@ -524,6 +651,18 @@ export class RunEngine {
     callId: string | undefined,
     workspace: Workspace
   ): Promise<boolean> {
+    // 审批选择记忆：本服务会话内用户曾对同工作区同工具选过"总是允许" → 直接放行
+    const ruleKey = `${workspace.id}:${tool.name}`;
+    if (this.sessionApprovalRules.has(ruleKey)) {
+      this.emitRunEvent(runId, 'tool.approval_auto', {
+        tool: tool.name,
+        ...(callId ? { callId } : {}),
+        rule: 'session_always',
+        workspace: { id: workspace.id, name: workspace.name },
+      });
+      return true;
+    }
+
     const approvalId = nanoid(10);
     const diff = this.previewDiff(tool.name, input, workspace.dir);
 
@@ -554,13 +693,25 @@ export class RunEngine {
     return approved;
   }
 
-  /** API 调用：解决一个待审批（approved=true 放行 / false 拒绝） */
-  resolveApproval(runId: string, approvalId: string, approved: boolean): boolean {
+  /** API 调用：解决一个待审批（approved=true 放行 / false 拒绝；
+   *  scope='session' 额外记住"本服务会话内同工作区同工具总是允许"） */
+  resolveApproval(runId: string, approvalId: string, approved: boolean, scope?: 'once' | 'session'): boolean {
     const pending = this.pendingApprovals.get(approvalId);
     if (!pending || pending.runId !== runId) return false;
     this.pendingApprovals.delete(approvalId);
+    if (approved && scope === 'session') {
+      const run = this.deps.runStore.get(runId);
+      if (run?.workspace_id) this.sessionApprovalRules.add(`${run.workspace_id}:${pending.tool}`);
+    }
     pending.resolve(approved);
     return true;
+  }
+
+  /** 清空审批选择记忆（用户反悔通道） */
+  clearSessionApprovalRules(): number {
+    const n = this.sessionApprovalRules.size;
+    this.sessionApprovalRules.clear();
+    return n;
   }
 
   /** 某 run 的待审批列表（刷新页面后重取） */

@@ -36,6 +36,9 @@ import { registerSkillBuilderRoutes } from './api/skill-builder.routes.js';
 import { registerSkillImportRoutes } from './api/skill-import.routes.js';
 import { registerCompanyProfileRoutes } from './api/company-profile.routes.js';
 import { registerUserProfileRoutes } from './api/company-profile.routes.js';
+import { registerOpsRoutes } from './api/ops.routes.js';
+import { seedAgentPresets } from './services/agent-presets.js';
+import { seedSlashCommands } from './services/slash-commands.js';
 import { closeDb } from './store/db.js';
 import { abortAll } from './services/task-abort-registry.js';
 import { llmClient } from './services/llm-client.js';
@@ -55,6 +58,16 @@ async function main() {
 
   // 启动迁移（v1.1.0：检测旧 SiliconFlow 配置 → 自动加入新 dashscope coding 并设为 active）
   ensureLlmConfigsInitialized();
+  // 具名子代理预设：目录为空时播种 4 个预置专员（data/agents/）
+  {
+    const seeded = seedAgentPresets(dataDir);
+    if (seeded > 0) console.log(`[服务启动] 已播种 ${seeded} 个具名子代理预设 → data/agents/`);
+  }
+  // 斜杠命令：目录为空时播种 4 条快捷指令（data/commands/）
+  {
+    const seeded = seedSlashCommands(dataDir);
+    if (seeded > 0) console.log(`[服务启动] 已播种 ${seeded} 条斜杠命令 → data/commands/`);
+  }
   // 初始化公司画像（不存在则写默认）
   getCompanyProfile();
 
@@ -91,6 +104,15 @@ async function main() {
     eventStore: new RunEventStore(),
     checkpointStore: new CheckpointStore(),
   });
+  // 外部命令守卫（hooks）：配置存在则热监听变更
+  runEngine.hooks.watchConfig();
+  {
+    const hookCfg = runEngine.hooks.listConfig();
+    const entries = Object.entries(hookCfg) as Array<[string, unknown[]]>;
+    if (entries.length > 0) {
+      console.log(`[服务启动] 外部守卫已装载: ${entries.map(([k, v]) => `${k}×${v.length}`).join(', ')}`);
+    }
+  }
 
   // M2：Graph 模式（GraphEngine 接线：durable execution + HITL + resume）
   const graphRunService = new GraphRunService({
@@ -184,6 +206,7 @@ async function main() {
   registerCompanyProfileRoutes(app);
   registerUserProfileRoutes(app);
   registerRunRoutes(app, runEngine, graphRunService);
+  registerOpsRoutes(app, runEngine, llmClient);
   registerMcpRoutes(app, mcpClient);
 
   // M3-5：触发器 — fire 即创建 run（free/graph 均可），60s 调度循环

@@ -207,9 +207,23 @@ export class McpClientService {
     }
   }
 
-  private wrapTool(server: McpServerRow, client: Client, t: { name: string; description?: string; inputSchema?: any }): Tool {
+  private wrapTool(
+    server: McpServerRow,
+    client: Client,
+    t: { name: string; description?: string; inputSchema?: any; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean } }
+  ): Tool {
     const fullName = `mcp_${sanitizeToolName(server.name)}_${sanitizeToolName(t.name)}`;
     const self = this;
+    // 效果契约：MCP 标准注解 → CORAL 效果位。
+    // 声明 destructive 的工具按写盘效果落档（推导为 approval）；readOnly 保持只读档；
+    // 未给注解的保持 auto（用户主动接入的 server，行为由 server 自述）— 但如实声明联网。
+    const ann = t.annotations ?? {};
+    const effects: import('../tools/types.js').ToolEffects = {
+      accessesNetwork: true,
+      ...(ann.readOnlyHint ? {} : {}),
+      ...(ann.destructiveHint ? { writesFilesystem: true } : {}),
+      ...(ann.idempotentHint ? { idempotent: true } : {}),
+    };
     return {
       name: fullName,
       description: `[${server.name}] ${t.description ?? t.name}`,
@@ -217,7 +231,8 @@ export class McpClientService {
         ? t.inputSchema
         : { type: 'object' },
       source: 'mcp' as any,
-      permission: 'auto',
+      permission: ann.destructiveHint ? 'approval' : 'auto',
+      effects,
       async invoke(input: any, ctx?: any): Promise<ToolResult> {
         // 终审 P3：计时器/监听器 race 结算后清理（此前每次成功调用泄漏一组）
         let timer: ReturnType<typeof setTimeout> | undefined;

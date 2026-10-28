@@ -11,5 +11,9 @@
     "sourceMap": false,
     "resolveJsonModule": true
   },
-  "include": ["src/index.ts", "src/mcp/serve.ts"]
+  "include": [
+    "src/index.ts",
+    "src/mcp/serve.ts",
+    "src/cli/doctor.ts"
+  ]
 }

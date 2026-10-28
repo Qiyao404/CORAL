@@ -27,6 +27,9 @@ export const httpFetchTool: Tool = {
   },
   source: 'builtin',
   permission: 'auto',
+  effects: { accessesNetwork: true },
+  isConcurrencySafe: true,
+  maxResultSizeChars: 30_000,
 
   async invoke(input: any, ctx: ToolContext): Promise<ToolResult> {
     const url = String(input?.url ?? '');

@@ -5,6 +5,7 @@ import { RunEventStore } from '../store/run-event-store.js';
 import { CheckpointStore } from '../store/checkpoint-store.js';
 import { eventBus } from '../event/event-bus.js';
 import { createAbortController, abortTask, releaseAbortController } from './task-abort-registry.js';
+import { isEstopped, estopReason } from './estop.js';
 import type { SkillExecutor } from '../skill-runtime/skill-executor.js';
 import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-registry.js';
 import { WorkspaceService, type Workspace } from './workspace-service.js';
@@ -95,6 +96,10 @@ export class GraphRunService {
   // ─── 启动 / 恢复 ─────────────────────────────────────────
 
   startGraphRun(input: StartGraphRunInput): { runId: string; sessionId?: string } {
+    // ESTOP 哨兵：拉闸期间拒绝一切新工作（在跑的不杀）
+    if (isEstopped()) {
+      throw new Error(`平台已暂停（ESTOP）：${estopReason()}。解除：coral resume 或删除 data/ESTOP 文件。`);
+    }
     const goal = String(input.goal ?? '').trim();
     if (!goal) throw new Error('缺少 goal');
     const v = validateGraph(input.graph);

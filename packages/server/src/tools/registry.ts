@@ -1,5 +1,5 @@
 import type { Tool, ToolContext, ToolResult } from './types.js';
-import { TOOL_NAME_REGEX } from './types.js';
+import { TOOL_NAME_REGEX, derivePermission } from './types.js';
 import { makeSkillTool } from './skill-tool.js';
 import { httpFetchTool } from './builtin/http.js';
 import { fsTools } from './builtin/fs.js';
@@ -13,6 +13,9 @@ import type { SkillExecutor } from '../skill-runtime/skill-executor.js';
  * agent loop（M1-3）从这里取 listDefinitions() 喂给 provider 的 function calling，
  * 模型回包后经 invoke() 执行。审批（approval 权限位）由 loop 层接管，registry 本身
  * 只做纯执行 — 保持可测试性。
+ *
+ * 效果契约：注册期强制"声明只严不松" — permission 声明为 auto 但效果组合推导
+ * 出 approval 的工具，一律按 approval 落档（fail-closed，防手滑标注）。
  */
 export class ToolRegistry {
   private tools = new Map<string, Tool>();
@@ -24,7 +27,7 @@ export class ToolRegistry {
     if (this.tools.has(tool.name)) {
       throw new Error(`工具名冲突: ${tool.name} 已注册`);
     }
-    this.tools.set(tool.name, tool);
+    this.tools.set(tool.name, sealPermission(tool));
   }
 
   /** 替换同名工具（skill 热重载用） */
@@ -32,7 +35,7 @@ export class ToolRegistry {
     if (!TOOL_NAME_REGEX.test(tool.name)) {
       throw new Error(`非法工具名: ${tool.name}`);
     }
-    this.tools.set(tool.name, tool);
+    this.tools.set(tool.name, sealPermission(tool));
   }
 
   unregister(name: string): boolean {
@@ -110,4 +113,13 @@ export function createDefaultToolRegistry(options: DefaultRegistryOptions): Tool
   }
   registry.syncSkillTools(options.skillRegistry, options.skillExecutor);
   return registry;
+}
+
+/** 效果契约封缄：声明档位松于效果推导下限时，按推导下限收紧 */
+function sealPermission(tool: Tool): Tool {
+  const derived = derivePermission(tool.effects);
+  if (derived === 'approval' && tool.permission === 'auto') {
+    return { ...tool, permission: 'approval' };
+  }
+  return tool;
 }

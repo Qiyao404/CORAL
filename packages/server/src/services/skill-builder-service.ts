@@ -8,6 +8,7 @@ import {
   validateSkillName,
   SkillExistsError,
 } from '../skill-runtime/skill-writer.js';
+import { validateSkillDraft } from './skill-quality.js';
 import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-registry.js';
 import type { SkillBuilderSession, ParsedSkillManifest } from '../types/index.js';
 import { PROJECT_ROOT } from './config.js';
@@ -284,6 +285,24 @@ export class SkillBuilderService {
 
     validateSkillName(draft.name);
 
+    // 质量门（提交闸）：确定性校验命名/描述/范围/查重 —
+    // 低质技能会长期污染模型的工具选型，宁可在提交时拦下
+    const quality = validateSkillDraft(
+      {
+        name: draft.name,
+        description: draft.description,
+        executionMode: draft.executionMode,
+        promptContent: draft.promptContent,
+        inputSchema: (draft as any).inputSchema,
+      },
+      this.registry.listAvailable().map(s => ({ name: s.name, description: s.description }))
+    );
+    if (quality.errors.length > 0) {
+      const err = new Error(`技能质量门未通过：\n${quality.errors.map(e => `- ${e}`).join('\n')}${quality.warnings.length ? `\n\n提醒（不阻断）：\n${quality.warnings.map(w => `- ${w}`).join('\n')}` : ''}`);
+      eventBus.emit('skill_builder.failed', { sessionId, error: err.message });
+      throw err;
+    }
+
     if (this.registry.has(draft.name) && !opts.overwrite) {
       throw new SkillExistsError(`Skill "${draft.name}" 已存在`);
     }
@@ -310,6 +329,7 @@ export class SkillBuilderService {
       eventBus.emit('skill_builder.committed', {
         sessionId,
         skillName: draft.name,
+        ...(quality.warnings.length > 0 ? { qualityWarnings: quality.warnings } : {}),
       });
 
       const manifest = this.registry.getByName(draft.name);
@@ -418,6 +438,9 @@ ${filled.length > 0 ? filled.join(', ') : '（暂无）'}
 \`\`\`yaml
 ${draftSummary}
 \`\`\`
+
+# 现有技能清单（查重 — 功能相近时优先建议用户改造现有技能而不是新建）
+${this.registry.listAvailable().map(s => `- ${s.name}: ${String(s.description ?? '').slice(0, 60)}`).join('\n') || '（暂无）'}
 
 # 还需要澄清的字段
 ${fieldHints || '（已基本完整，可询问用户是否继续完善 prompt 或直接预览）'}

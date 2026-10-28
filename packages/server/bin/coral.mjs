@@ -16,6 +16,44 @@ const distIndex = join(serverRoot, 'dist', 'index.js');
 const log = (icon, msg) => console.log(`${icon} ${msg}`);
 const fail = (msg) => { console.error(`✗ ${msg}`); process.exit(1); };
 
+// ── 子命令：coral doctor（健康自检，不启动服务）──
+if (process.argv[2] === 'doctor') {
+  try {
+    const doctorPath = join(serverRoot, 'dist', 'cli', 'doctor.js');
+    if (!existsSync(doctorPath)) {
+      fail(`doctor 模块缺失: ${doctorPath}\n  请先运行: npm run build -w packages/server`);
+    }
+    const { runDoctor, formatDoctorReport } = await import(`file:///${doctorPath.replace(/\\/g, '/')}`);
+    const report = await runDoctor(serverRoot);
+    console.log(formatDoctorReport(report));
+    process.exit(report.ok ? 0 : 1);
+  } catch (err) {
+    fail(`doctor 执行失败: ${err?.message ?? err}`);
+  }
+}
+
+// ── 子命令：coral pause / resume（ESTOP 急停哨兵）──
+if (process.argv[2] === 'pause') {
+  const reason = process.argv.slice(3).join(' ').trim();
+  const file = join(serverRoot, 'data', 'ESTOP');
+  const { writeFileSync, mkdirSync } = await import('node:fs');
+  mkdirSync(join(serverRoot, 'data'), { recursive: true });
+  writeFileSync(file, reason || 'paused by coral pause', 'utf-8');
+  console.log(`⏸ 已拉闸（新任务将被拒绝，运行中的不受影响）: ${file}`);
+  process.exit(0);
+}
+if (process.argv[2] === 'resume') {
+  const file = join(serverRoot, 'data', 'ESTOP');
+  const { rmSync, existsSync: exists2 } = await import('node:fs');
+  if (exists2(file)) {
+    rmSync(file, { force: true });
+    console.log('▶ 已解除急停，新任务恢复接收');
+  } else {
+    console.log('· 当前并未处于急停状态');
+  }
+  process.exit(0);
+}
+
 // ── 自检 1：构建产物 ──
 if (!existsSync(distIndex)) {
   fail(`server 构建产物缺失: ${distIndex}\n  请先运行: npm run build -w packages/server`);

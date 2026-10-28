@@ -31,6 +31,9 @@ export function makeShellTool(): Tool {
     },
     source: 'builtin',
     permission: 'approval',
+    // shell 既能起进程也能借命令写盘 — 效果按最坏情况声明
+    effects: { launchesProcess: true, writesFilesystem: true },
+    maxResultSizeChars: 24_000,
 
     async invoke(input: any, ctx): Promise<ToolResult> {
       const command = String(input?.command ?? '');

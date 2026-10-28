@@ -333,17 +333,24 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
     return { success: true, deleted };
   });
 
-  // M1-10：审批流 — 解决一个待审批（diff 卡片的 通过/拒绝）
+  // M1-10：审批流 — 解决一个待审批（diff 卡片的 通过/拒绝；
+  // scope='session' = 本服务会话内同工作区同工具总是允许）
   app.post('/api/runs/:runId/approvals/:approvalId', async (request, reply) => {
     const { runId, approvalId } = request.params as any;
-    const body = (request.body || {}) as { approved?: boolean; input?: Record<string, any> };
+    const body = (request.body || {}) as { approved?: boolean; input?: Record<string, any>; scope?: 'once' | 'session' };
     const run = engine.store.get(runId);
     // M2-4：graph 节点审批支持改参数后继续（input 覆盖节点输入）
     const ok = run?.mode === 'graph' && graphSvc
       ? graphSvc.resolveApproval(runId, approvalId, Boolean(body.approved), body.input)
-      : engine.resolveApproval(runId, approvalId, Boolean(body.approved));
+      : engine.resolveApproval(runId, approvalId, Boolean(body.approved), body.scope === 'session' ? 'session' : 'once');
     if (!ok) return reply.status(404).send({ error: '审批不存在或已处理' });
-    return { success: true, approved: Boolean(body.approved) };
+    return { success: true, approved: Boolean(body.approved), ...(body.scope ? { scope: body.scope } : {}) };
+  });
+
+  // 清空"会话内总是允许"记忆（用户反悔通道）
+  app.delete('/api/approvals/session-rules', async () => {
+    const cleared = engine.clearSessionApprovalRules();
+    return { success: true, cleared };
   });
 
   // 待审批列表（刷新页面后重取）

@@ -71,6 +71,12 @@ function describeAction(card: ToolCardItem): { icon: typeof FileText; text: stri
       return { icon: Search, text: `查找历史运行` };
     case 'shell_run':
       return { icon: Zap, text: `执行命令` };
+    case 'evidence_read':
+      return { icon: FileText, text: `调取证据记录` };
+    case 'dual_review':
+      return { icon: Users, text: `双盲会审` };
+    case 'memory_review':
+      return { icon: Brain, text: `标记记忆已确认` };
     default:
       if (card.tool.startsWith('skill_')) {
         return { icon: Wrench, text: `执行技能 ${card.tool.replace('skill_', '')}` };

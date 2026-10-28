@@ -217,3 +217,70 @@ describe('M1-10：工作区 + 审批流（run-engine）', () => {
     expect(existsSync(join(askDir, 'never.md'))).toBe(false);
   });
 });
+
+describe('ESTOP 急停哨兵 + 审批选择记忆（E5/E6）', () => {
+  it('ESTOP 拉闸 → startRun 拒绝；解除 → 恢复', async () => {
+    const { engageEstop, releaseEstop } = await import('../../services/estop.js');
+    engageEstop('测试拉闸');
+    try {
+      expect(() => engine.startRun({ goal: 'g' })).toThrow(/ESTOP/);
+      expect(() => engine.startRun({ goal: 'g' })).toThrow(/测试拉闸/);
+    } finally {
+      releaseEstop();
+    }
+    // 解除后正常起跑
+    script = [{ stopReason: 'end', content: 'ok' }];
+    (engine.deps.llm as any).calls = 0;
+    const { runId } = engine.startRun({ goal: '解除后正常' });
+    await waitTerminal(runId);
+    expect(runStore.get(runId)!.status).toBe('completed');
+  });
+
+  it('审批选择记忆：scope=session 后，同工作区同工具后续自动放行（tool.approval_auto）', async () => {
+    engine.clearSessionApprovalRules();
+    // 第一次：正常走人工审批，批的时候带 scope=session
+    script = [fsWriteRound('memo-1.md', '第一次写入'), { stopReason: 'end', content: 'done' }];
+    (engine.deps.llm as any).calls = 0;
+    const first = engine.startRun({ goal: '写入备忘', workspaceId: wsAsk });
+    await waitStatus(first.runId, 'waiting_human');
+    const [req1] = eventStore.listByRun(first.runId).filter(e => e.type === 'tool.approval_required').slice(-1);
+    expect(engine.resolveApproval(first.runId, req1.payload.approvalId, true, 'session')).toBe(true);
+    await waitTerminal(first.runId);
+    expect(readFileSync(join(askDir, 'memo-1.md'), 'utf-8')).toContain('第一次写入');
+
+    // 第二次：同工具同工作区 → 不再进人工（approval_auto 事件）
+    script = [fsWriteRound('memo-2.md', '第二次写入'), { stopReason: 'end', content: 'done' }];
+    (engine.deps.llm as any).calls = 0;
+    const second = engine.startRun({ goal: '再写一条', workspaceId: wsAsk });
+    await waitTerminal(second.runId);
+    const types = eventStore.listByRun(second.runId).map(e => e.type);
+    expect(types).not.toContain('tool.approval_required');
+    expect(types).toContain('tool.approval_auto');
+    expect(readFileSync(join(askDir, 'memo-2.md'), 'utf-8')).toContain('第二次写入');
+
+    // 反悔通道：清空记忆后恢复人工
+    expect(engine.clearSessionApprovalRules()).toBe(1);
+    script = [fsWriteRound('memo-3.md', '第三次写入'), { stopReason: 'end', content: 'done' }];
+    (engine.deps.llm as any).calls = 0;
+    const third = engine.startRun({ goal: '第三条', workspaceId: wsAsk });
+    await waitStatus(third.runId, 'waiting_human');
+    const [req3] = eventStore.listByRun(third.runId).filter(e => e.type === 'tool.approval_required').slice(-1);
+    engine.resolveApproval(third.runId, req3.payload.approvalId, false);
+    await waitTerminal(third.runId);
+    expect(existsSync(join(askDir, 'memo-3.md'))).toBe(false);
+  });
+
+  it('斜杠命令：/cmd 在 startRun 内展开（事件带 expandedFrom）', async () => {
+    const { seedSlashCommands } = await import('../../services/slash-commands.js');
+    const dataDir = (await import('path')).dirname(process.env.DATABASE_PATH as string);
+    seedSlashCommands(dataDir);
+    script = [{ stopReason: 'end', content: 'ok' }];
+    (engine.deps.llm as any).calls = 0;
+    const { runId } = engine.startRun({ goal: '/research 智能体安全' });
+    await waitTerminal(runId);
+    const created = eventStore.listByRun(runId).find(e => e.type === 'run.created')!;
+    expect(created.payload.expandedFrom).toContain('research');
+    expect(created.payload.goal).toContain('智能体安全');
+    expect(String(created.payload.goal).startsWith('/research')).toBe(false);
+  });
+});

@@ -32,6 +32,8 @@ export const fsListTool: Tool = {
   },
   source: 'builtin',
   permission: 'auto',
+  effects: { idempotent: true },
+  isConcurrencySafe: true,
 
   async invoke(input: any, ctx): Promise<ToolResult> {
     const r = resolveWorkspacePath(ctx.workspaceDir, String(input?.path ?? '.'));
@@ -78,6 +80,9 @@ export const fsReadTool: Tool = {
   },
   source: 'builtin',
   permission: 'auto',
+  effects: { idempotent: true },
+  isConcurrencySafe: true,
+  maxResultSizeChars: 200_000,
 
   async invoke(input: any, ctx): Promise<ToolResult> {
     // 健壮性：模型偶用 file 误作键名 — 接受别名
@@ -122,6 +127,7 @@ export const fsWriteTool: Tool = {
   },
   source: 'builtin',
   permission: 'approval',
+  effects: { writesFilesystem: true },
 
   async invoke(input: any, ctx): Promise<ToolResult> {
     if (typeof input?.content !== 'string') {
@@ -164,6 +170,7 @@ export const fsEditTool: Tool = {
   },
   source: 'builtin',
   permission: 'approval',
+  effects: { writesFilesystem: true },
 
   async invoke(input: any, ctx): Promise<ToolResult> {
     if (typeof input?.old_text !== 'string' || typeof input?.new_text !== 'string') {

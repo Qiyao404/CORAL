@@ -149,7 +149,11 @@ CORAL/
   │   ├── audit_logs.json           # 审计事件（不含高频 progress/log）
   │   ├── llm_configs.json          # LLM 配置档案
   │   ├── company_profile.json      # 公司业务画像
-  │   └── skill_builder_sessions.json  # 创建会话
+  │   ├── skill_builder_sessions.json  # 创建会话
+  │   ├── memory/                   # 长期记忆（Markdown，可直接编辑）
+  │   ├── sessions/                 # 会话上下文（文件摘要/决策/接力记录）
+  │   ├── evidence/                 # 证据记录（超大工具结果的不可变存档，按 run 分目录）
+  │   └── habits/                   # 习惯学习（observations.jsonl + habits.json）
   ├── skills/                       # 所有技能
   │   ├── _lib/coral_progress.py    # 进度协议 helper
   │   ├── policy-scraper/           # 政策采集（v1.1.0：流式 + MD/CSV 双产物）
@@ -170,7 +174,81 @@ CORAL/
 
 ---
 
-## 9. 常见问题
+## 9. 运行时纪律与运维（v2.1）
+
+### 9.1 健康自检：`coral doctor`
+
+启动前或排障时跑一条命令，自动分诊七类高频故障（每项带修复建议）：
+
+```powershell
+node packages/server/bin/coral.mjs doctor
+```
+
+检查项：构建产物新鲜度（源码比 dist 新 = 你跑的还是旧代码）、端口占用（占用者是否 CORAL 实例）、数据目录可写、磁盘水位（50/30/15GB 三级）、数据库完整性、模型配置、技能损坏清单、MCP 连接态。
+
+> 经验法则：改完代码务必 `npm run build` 后**先确认旧进程已退出再启动**，否则测的是旧版本。doctor 的 `[build]` 项会直接告诉你产物是否过期。
+
+### 9.2 运行时纪律（自动生效，无需配置）
+
+- **事实门**：Agent 改/覆盖已有文件前必须先读过它（盲改直接拒绝，读后重试放行）。
+- **收工门**：复杂任务的最终回答含"测试先跳过/后续再修"式话术会被打回重写。
+- **证据记录**：超大工具结果自动落盘（`data/evidence/<runId>/`），上下文只留摘要，`evidence_read` 工具可取回。
+- **三层压缩 + 熔断**：上下文 60%/85%/100% 三档水位先收纳旧结果、再全量摘要；摘要连败 3 次自动熔断。
+- **工具效果契约**：审批档位由工具效果声明推导，声明只能更严不能更松。
+
+### 9.3 习惯学习（越用越懂你）
+
+Agent 的工具调用被自动观察（`data/habits/observations.jsonl`），攒够量自动蒸馏出协作习惯（`data/habits/habits.json`）。置信度 ≥0.7 的习惯自动注入系统提示；`POST /api/habits` 查看全部，`POST /api/habits/:id/promote` 把 ≥0.8 且跨 ≥2 会话的习惯一键晋升为技能。
+
+### 9.4 外部命令守卫（hooks）— 把纪律层变成开放接口
+
+`data/hooks.json` 声明外部命令守卫，在 8 个生命周期点被调用，可以**否决 / 改写 / 补充**（修改后自动热加载）：
+
+```jsonc
+{
+  "hooks": {
+    "pre_tool_use": [
+      { "matcher": "fs_write|fs_edit", "command": "node D:/guards/protect-env.mjs", "timeout": 30 }
+    ],
+    "stop": [
+      { "command": "node D:/guards/final-check.mjs" }
+    ]
+  }
+}
+```
+
+- **事件**：`pre_tool_use`（可 deny/ask/改写入参）、`post_tool_use`（观察结果）、`stop`（可打回最终回答）、`user_prompt_submit`（可拦任务/注入上下文）、`session_start`（注入上下文）、`session_end`（观察）、`pre_compact`（可拦压缩）、`notification`（审批通知）
+- **契约**：stdin 收 JSON（事件+上下文）；stdout 可解析 JSON 时取 `{decision, reason, updatedInput, additionalContext}`；退出码 2 = 拒绝（stderr 为原因）
+- **安全方向**：pre_tool_use 的守卫自身故障/超时 = 拒绝执行（fail-closed）；观察类事件故障 = 放行
+- `matcher` 是工具名正则，仅工具类事件生效
+
+### 9.5 斜杠命令（用户快捷指令）
+
+`data/commands/*.md`（首启自动播种 `/research` `/plan` `/review` `/brief` 四条）。聊天输入 `/research 量子计算` 会把命令模板展开成完整任务再执行（事件流 `run.created` 带 `expandedFrom` 留痕）。模板支持 `$ARGUMENTS`（全部参数）与 `$1..$9`（按词取参）。`GET /api/commands` 列出全部命令。
+
+### 9.6 具名子代理（data/agents/*.md）
+
+首启播种 4 个预置专员：`research-analyst`（调研）、`detail-reviewer`（评审）、`data-wrangler`(数据整理)、`doc-writer`(成文)。Agent 会通过 `agent_spawn` 的 `agent` 参数按名委派——预设的描述与触发例示注入主提示（教主模型何时委派），正文只进子代理。自定义：在 `data/agents/` 放一个 frontmatter 为 `name/description/when_to_use/tools` 的 Markdown，正文即子代理系统提示。`GET /api/agents` 列出。
+
+### 9.7 ESTOP 急停与审批记忆
+
+- **`coral pause [原因]`** 拉闸：所有新任务（含触发器/cron）被拒，运行中的不受影响；**`coral resume`** 解除。doctor 会提示当前是否拉闸中。
+- 审批时传 `scope: "session"`（`POST /api/runs/:id/approvals/:aid` body `{approved:true, scope:"session"}`）= 本服务会话内同工作区同工具自动放行（事件 `tool.approval_auto` 留痕）；`DELETE /api/approvals/session-rules` 清空记忆。
+
+### 9.8 运维 API
+
+```
+GET  /api/system/gc                 # 配置自清理扫描（过期证据/孤儿会话/损坏技能/回收站膨胀）
+POST /api/system/gc                 # 逐项确认清理（body: {"ids": [...]}，软删除+日志可撤销）
+GET  /api/runs/:id/evidence         # 该 run 的证据记录清单
+POST /api/runs/:id/self-eval        # 五轴自评（准确/完整/清晰/可执行/简洁，低分必须给证据）
+GET  /api/habits                    # 习惯列表
+POST /api/habits/distill            # 手动触发蒸馏
+```
+
+---
+
+## 10. 常见问题
 
 ### Q1：政府网页打不开（代理污染）？
 

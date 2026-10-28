@@ -74,6 +74,8 @@ export const docxReadTool: Tool = {
   },
   source: 'builtin',
   permission: 'auto',
+  effects: { idempotent: true },
+  maxResultSizeChars: 24_000,
 
   async invoke(input: any, ctx): Promise<ToolResult> {
     const path = String(input?.path ?? '');
@@ -111,6 +113,7 @@ export const docxWriteTool: Tool = {
   },
   source: 'builtin',
   permission: 'approval', // 落盘写操作 — 与 fs_write 同策略
+  effects: { writesFilesystem: true },
 
   async invoke(input: any, ctx): Promise<ToolResult> {
     const path = String(input?.path ?? '');

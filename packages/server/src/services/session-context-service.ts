@@ -15,17 +15,38 @@ export interface SessionFileSummary {
   addedAt: string;
 }
 
+/** 会话内决策（what + why — 原因是决策能指导后续会话的关键） */
+export interface SessionDecision {
+  what: string;
+  why: string;
+  at: string;
+}
+
+/** 接力记录：下次续接会话的开场简报（中断处/下一步/阻塞） */
+export interface SessionHandoff {
+  goal: string;
+  leftOff: string;
+  nextSteps: string[];
+  blockers: string[];
+  updatedAt: string;
+}
+
 export interface SessionContext {
   sessionId: string;
   /** 本会话讨论过的文件摘要 */
   fileSummaries: SessionFileSummary[];
   /** 会话要点（每轮 run 结束后可选追加） */
   keyPoints: string[];
+  /** 本会话累积的关键决策 */
+  decisions: SessionDecision[];
+  /** 上次 run 结束时的接力记录（有未竟工作才有） */
+  handoff?: SessionHandoff;
   updatedAt: string;
 }
 
 const MAX_FILE_SUMMARIES = 20;
 const MAX_KEY_POINTS = 30;
+const MAX_DECISIONS = 20;
 const MAX_SUMMARY_CHARS = 2000;
 const MAX_TOTAL_CHARS = 64 * 1024;
 
@@ -44,11 +65,11 @@ export class SessionContextService {
     return join(this.sessionDir(sessionId), 'context.json');
   }
 
-  /** 读取会话上下文（不存在返回空结构） */
+  /** 读取会话上下文（不存在返回空结构；旧版文件自动补默认字段） */
   get(sessionId: string): SessionContext {
     const path = this.contextPath(sessionId);
     if (!existsSync(path)) {
-      return { sessionId, fileSummaries: [], keyPoints: [], updatedAt: new Date().toISOString() };
+      return { sessionId, fileSummaries: [], keyPoints: [], decisions: [], updatedAt: new Date().toISOString() };
     }
     try {
       const raw = readFileSync(path, 'utf-8');
@@ -57,10 +78,12 @@ export class SessionContextService {
         sessionId,
         fileSummaries: Array.isArray(parsed.fileSummaries) ? parsed.fileSummaries : [],
         keyPoints: Array.isArray(parsed.keyPoints) ? parsed.keyPoints : [],
+        decisions: Array.isArray(parsed.decisions) ? parsed.decisions : [],
+        ...(parsed.handoff && typeof parsed.handoff === 'object' ? { handoff: parsed.handoff } : {}),
         updatedAt: parsed.updatedAt ?? new Date().toISOString(),
       };
     } catch {
-      return { sessionId, fileSummaries: [], keyPoints: [], updatedAt: new Date().toISOString() };
+      return { sessionId, fileSummaries: [], keyPoints: [], decisions: [], updatedAt: new Date().toISOString() };
     }
   }
 
@@ -91,16 +114,76 @@ export class SessionContextService {
     this.save(sessionId, ctx);
   }
 
+  /** 追加一条决策（what + why） */
+  addDecision(sessionId: string, what: string, why: string): void {
+    const ctx = this.get(sessionId);
+    ctx.decisions.push({
+      what: what.slice(0, 300),
+      why: why.slice(0, 500),
+      at: new Date().toISOString(),
+    });
+    if (ctx.decisions.length > MAX_DECISIONS) {
+      ctx.decisions = ctx.decisions.slice(-MAX_DECISIONS);
+    }
+    this.save(sessionId, ctx);
+  }
+
+  /** 更新接力记录（每轮 run 结束时覆盖 — 永远反映最新中断点） */
+  setHandoff(sessionId: string, handoff: { leftOff: string; nextSteps: string[]; blockers: string[] }): void {
+    const ctx = this.get(sessionId);
+    ctx.handoff = {
+      goal: (ctx.handoff?.goal ?? '').slice(0, 300),
+      leftOff: handoff.leftOff.slice(0, 300),
+      nextSteps: handoff.nextSteps.map(s => String(s).slice(0, 200)).slice(0, 6),
+      blockers: handoff.blockers.map(s => String(s).slice(0, 200)).slice(0, 6),
+      updatedAt: new Date().toISOString(),
+    };
+    this.save(sessionId, ctx);
+  }
+
+  /** 记录会话总目标（首个 run 创建时） */
+  setGoal(sessionId: string, goal: string): void {
+    const ctx = this.get(sessionId);
+    if (!ctx.handoff) {
+      ctx.handoff = {
+        goal: goal.slice(0, 300),
+        leftOff: '',
+        nextSteps: [],
+        blockers: [],
+        updatedAt: new Date().toISOString(),
+      };
+    } else if (!ctx.handoff.goal) {
+      ctx.handoff.goal = goal.slice(0, 300);
+    }
+    this.save(sessionId, ctx);
+  }
+
   /** 生成注入系统提示的上下文文本 */
   toPromptText(sessionId: string): string {
     const ctx = this.get(sessionId);
-    if (ctx.fileSummaries.length === 0 && ctx.keyPoints.length === 0) return '';
+    if (ctx.fileSummaries.length === 0 && ctx.keyPoints.length === 0 && ctx.decisions.length === 0 && !ctx.handoff?.leftOff) return '';
 
     const parts: string[] = [];
+    // 接力简报放最前 — 续接会话第一眼要看到"上次到哪了"
+    if (ctx.handoff?.leftOff) {
+      const h = ctx.handoff;
+      parts.push(
+        `## 上次中断处（本会话续接简报）\n` +
+        `- 中断点: ${h.leftOff}` +
+        (h.nextSteps.length ? `\n- 下一步: ${h.nextSteps.join('；')}` : '') +
+        (h.blockers.length ? `\n- 阻塞: ${h.blockers.join('；')}` : '')
+      );
+    }
     if (ctx.fileSummaries.length > 0) {
       parts.push('## 本会话已分析的文件（摘要）');
       for (const f of ctx.fileSummaries) {
         parts.push(`### ${f.filename}\n${f.summary}`);
+      }
+    }
+    if (ctx.decisions.length > 0) {
+      parts.push('## 本会话关键决策');
+      for (const d of ctx.decisions.slice(-8)) {
+        parts.push(`- ${d.what}（原因: ${d.why}）`);
       }
     }
     if (ctx.keyPoints.length > 0) {
@@ -116,12 +199,15 @@ export class SessionContextService {
     return this.toPromptText(sessionId).length;
   }
 
-  /** 压缩：合并旧要点+文件摘要为精简版 */
+  /** 压缩：合并旧要点+文件摘要为精简版（决策与接力记录保留） */
   compress(sessionId: string, summary: string): void {
+    const prev = this.get(sessionId);
     const ctx: SessionContext = {
       sessionId,
       fileSummaries: [],
       keyPoints: [summary.slice(0, MAX_SUMMARY_CHARS)],
+      decisions: prev.decisions,
+      ...(prev.handoff ? { handoff: prev.handoff } : {}),
       updatedAt: new Date().toISOString(),
     };
     this.save(sessionId, ctx);
