@@ -33,17 +33,20 @@ if (process.argv[2] === 'doctor') {
 }
 
 // ── 子命令：coral pause / resume（ESTOP 急停哨兵）──
+// 注意：数据目录 = 仓库根 data/（与 server 的 PROJECT_ROOT 解析一致 —
+// 此前写到 packages/server/data 曾导致拉闸不生效）
+const dataRoot = join(serverRoot, '..', '..', 'data');
 if (process.argv[2] === 'pause') {
   const reason = process.argv.slice(3).join(' ').trim();
-  const file = join(serverRoot, 'data', 'ESTOP');
+  const file = join(dataRoot, 'ESTOP');
   const { writeFileSync, mkdirSync } = await import('node:fs');
-  mkdirSync(join(serverRoot, 'data'), { recursive: true });
+  mkdirSync(dataRoot, { recursive: true });
   writeFileSync(file, reason || 'paused by coral pause', 'utf-8');
   console.log(`⏸ 已拉闸（新任务将被拒绝，运行中的不受影响）: ${file}`);
   process.exit(0);
 }
 if (process.argv[2] === 'resume') {
-  const file = join(serverRoot, 'data', 'ESTOP');
+  const file = join(dataRoot, 'ESTOP');
   const { rmSync, existsSync: exists2 } = await import('node:fs');
   if (exists2(file)) {
     rmSync(file, { force: true });

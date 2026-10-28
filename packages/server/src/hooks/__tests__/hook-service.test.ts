@@ -123,3 +123,32 @@ describe('HookService — 命令守卫契约', () => {
     expect(r.matched).toBe(0);
   });
 });
+
+describe('HookService — 热加载（用户实测：启动后才创建的配置曾被永久忽略）', () => {
+  it('服务构造时配置不存在 → 之后创建 hooks.json → 下一次 run() 自动生效', async () => {
+    const denyCmd = writeHelper('late-deny.mjs', `process.exit(2);`);
+    const svc = new HookService(dir); // 此时 hooks.json 不存在
+    expect(svc.has('pre_tool_use')).toBe(false);
+    const before = await svc.run('pre_tool_use', { tool: 'fs_write', toolInput: {} });
+    expect(before.decision).toBe('allow');
+
+    // 用户在此之后创建了配置（服务不重启）
+    writeFileSync(join(dir, 'hooks.json'), JSON.stringify({
+      hooks: { pre_tool_use: [{ matcher: 'fs_write', command: denyCmd, timeout: 15 }] },
+    }), 'utf-8');
+
+    const after = await svc.run('pre_tool_use', { tool: 'fs_write', toolInput: {} });
+    expect(after.decision).toBe('deny');
+    expect(after.matched).toBe(1);
+  });
+
+  it('配置删除后自动失效（回到空配置）', async () => {
+    const svc = svcWith({ stop: [{ command: writeHelper('noop.mjs', `process.stdout.write('{"decision":"allow"}');`), timeout: 10 }] });
+    expect(svc.has('stop')).toBe(true);
+    const { rmSync } = await import('fs');
+    rmSync(join(dir, 'hooks.json'), { force: true });
+    const r = await svc.run('stop', {});
+    expect(r.decision).toBe('allow');
+    expect(r.matched).toBe(0);
+  });
+});

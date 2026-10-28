@@ -459,3 +459,13 @@ GET  /ws/events                               # WebSocket（双工）
 ---
 
 **祝你使用愉快！如有问题请提 Issue 或在「设置 → LLM 配置管理」中调整。**
+
+### 9.9 产物预览（回复底部）
+
+每次回复的最下方自动列出本轮生成/修改的文件（点击预览，右侧面板打开）：
+- Markdown / 文本 / JSON / CSV / 代码 → 直接渲染
+- Word (.docx) → 自动提取全文文本
+- PDF / 图片 → 浏览器原生渲染（iframe / img）
+- 其他格式 → 一键下载
+
+数据来自事件流（fs_write / fs_edit / docx_write 统一发产物事件）；`GET /api/runs/:id/artifacts` 与 `GET /api/sessions/:id/artifacts` 可编程获取。运行预算（Token/步数上限）在设置页"运行预算"卡片调整，范围 10 万 ~ 1000 万 token，对新任务即时生效。

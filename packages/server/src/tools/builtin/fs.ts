@@ -143,6 +143,12 @@ export const fsWriteTool: Tool = {
     if (!existsDir(parent)) mkdirSync(parent, { recursive: true });
     writeFileSync(r.absPath, input.content, 'utf-8');
 
+    // 产物事件：UI 在回复底部展示"本次生成了什么文件"（可点击预览）
+    ctx.emit({
+      type: 'artifact',
+      payload: { name: String(input?.path).split(/[\\/]/).pop(), rel: String(input?.path), path: r.absPath, type: 'file', action: existed ? 'modify' : 'create' },
+    });
+
     const diff = existed ? unifiedDiff(before, input.content, String(input.path)) : '';
     return toolOk({
       path: String(input?.path),
@@ -196,6 +202,12 @@ export const fsEditTool: Tool = {
       ? before.split(input.old_text).join(input.new_text)
       : before.replace(input.old_text, input.new_text);
     writeFileSync(r.absPath, after, 'utf-8');
+
+    // 产物事件（修改也计入 — UI 的"本次产出文件"清单含改动）
+    ctx.emit({
+      type: 'artifact',
+      payload: { name: String(input?.path).split(/[\\/]/).pop(), rel: String(input?.path), path: r.absPath, type: 'file', action: 'modify' },
+    });
 
     return toolOk({
       path: String(input?.path),

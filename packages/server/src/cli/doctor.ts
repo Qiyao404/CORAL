@@ -122,7 +122,7 @@ function checkDatabase(dbPath: string): DoctorCheck {
       (db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as Array<{ name: string }>).map(r => r.name)
     );
     db.close();
-    const required = ['runs', 'run_events', 'checkpoints'];
+    const required = ['runs', 'events', 'checkpoints'];
     const missing = required.filter(t => !tables.has(t));
     if (missing.length > 0) {
       return { id: 'database', status: 'fail', summary: `数据库缺表: ${missing.join(', ')}`, fix: '库文件可能损坏 — 备份 data/ 后删除 coral.db 重建，或换 DATABASE_PATH 试试' };
@@ -143,8 +143,8 @@ function checkLlmConfig(paths: DoctorPaths, dbPath: string): DoctorCheck {
       const Database = require('better-sqlite3');
       const db = new Database(dbPath, { readonly: true });
       const tables = (db.prepare(`SELECT name FROM sqlite_master WHERE type='table'`).all() as Array<{ name: string }>).map(r => r.name);
-      if (tables.includes('llm_configs')) {
-        const rows = db.prepare(`SELECT name, model, base_url, api_key, is_active FROM llm_configs`).all() as any[];
+      if (tables.includes('llm_profiles')) {
+        const rows = db.prepare(`SELECT name, model, base_url, api_key, is_active FROM llm_profiles`).all() as any[];
         active = rows.find(r => Number(r.is_active) === 1) ?? null;
         if (!active && rows.length > 0) active = rows[rows.length - 1];
       }
@@ -233,10 +233,12 @@ export async function runDoctor(serverRootInput?: string): Promise<DoctorReport>
   const serverRoot = resolve(serverRootInput ?? process.cwd());
   // serverRoot = packages/server → 仓库根 = 上两级（.env 与 skills/ 都在仓库根）
   const repoRoot = dirname(dirname(serverRoot));
+  // 1.5 数据目录统一：server 的 PROJECT_ROOT = 仓库根 → 真实数据目录是仓库根 data/
+  //（此前误用 packages/server/data，曾导致 ESTOP/技能检查看错目录）
   const paths: DoctorPaths = {
     serverRoot,
     repoRoot,
-    dataDir: join(serverRoot, 'data'),
+    dataDir: join(repoRoot, 'data'),
     skillsDir: resolve(repoRoot, 'skills'),
     port: Number(process.env.PORT || 3001),
   };

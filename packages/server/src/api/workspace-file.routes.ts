@@ -1,8 +1,9 @@
 import type { FastifyInstance } from 'fastify';
-import { writeFileSync, mkdirSync, readdirSync, statSync } from 'fs';
+import { writeFileSync, mkdirSync, readdirSync, statSync, existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { WorkspaceService } from '../services/workspace-service.js';
 import { resolveWorkspacePath } from '../tools/workspace-path.js';
+import { extractDocxText } from '../tools/builtin/docx.js';
 
 /**
  * 创新点②：文件上传到工作区 — 用户拖文件给 agent 处理的入口。
@@ -86,4 +87,82 @@ export function registerWorkspaceFileRoutes(
       return reply.status(500).send({ error: err?.message ?? '读取失败' });
     }
   });
+
+// ── 文件预览（回复底部产物 chips 的右侧面板数据源）──────────────────────
+
+const TEXT_EXTS = new Set(['md', 'txt', 'json', 'csv', 'js', 'ts', 'py', 'html', 'htm', 'xml', 'log', 'yml', 'yaml', 'ini', 'toml', 'sql', 'sh', 'css']);
+const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']);
+const MAX_PREVIEW_TEXT = 200 * 1024;
+
+const MIME: Record<string, string> = {
+  pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+  gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', bmp: 'image/bmp',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  zip: 'application/zip',
+};
+
+function extOf(p: string): string {
+  return p.split('.').pop()?.toLowerCase() ?? '';
+}
+
+app.get('/api/workspaces/:id/preview', async (request, reply) => {
+  const { id } = request.params as any;
+  const ws = workspaceService.get(id);
+  if (!ws) return reply.status(404).send({ error: '工作区不存在' });
+  const relPath = String((request.query as any).path ?? '');
+  const r = resolveWorkspacePath(ws.dir, relPath);
+  if (!r.ok) return reply.status(400).send({ error: r.message });
+  if (!existsSync(r.absPath) || !statSync(r.absPath).isFile()) {
+    return reply.status(404).send({ error: `文件不存在: ${relPath}` });
+  }
+
+  const ext = extOf(relPath);
+  const size = statSync(r.absPath).size;
+
+  // 文本类：直接回内容（docx 走 python 提取全文文本）
+  if (TEXT_EXTS.has(ext)) {
+    const text = readFileSync(r.absPath, 'utf-8');
+    return {
+      kind: 'text', name: relPath.split(/[\/]/).pop(), size,
+      content: text.length > MAX_PREVIEW_TEXT ? text.slice(0, MAX_PREVIEW_TEXT) + '\n\n[...预览截断，全文请下载]' : text,
+    };
+  }
+  if (ext === 'docx') {
+    const text = extractDocxText(r.absPath);
+    if (text === null) {
+      return { kind: 'binary', name: relPath.split(/[\/]/).pop(), size, note: 'docx 文本提取不可用（需要 Python）— 可下载后用 Word 打开' };
+    }
+    return {
+      kind: 'text', name: relPath.split(/[\/]/).pop(), size,
+      content: text.length > MAX_PREVIEW_TEXT ? text.slice(0, MAX_PREVIEW_TEXT) + '\n\n[...预览截断]' : text,
+    };
+  }
+  if (ext === 'pdf' || IMAGE_EXTS.has(ext)) {
+    // 浏览器原生渲染：前端拿 raw URL 塞 iframe/img
+    return { kind: ext === 'pdf' ? 'pdf' : 'image', name: relPath.split(/[\/]/).pop(), size, rawUrl: `/api/workspaces/${id}/raw?path=${encodeURIComponent(relPath)}` };
+  }
+  return { kind: 'binary', name: relPath.split(/[\/]/).pop(), size, rawUrl: `/api/workspaces/${id}/raw?path=${encodeURIComponent(relPath)}&download=1` };
+});
+
+app.get('/api/workspaces/:id/raw', async (request, reply) => {
+  const { id } = request.params as any;
+  const ws = workspaceService.get(id);
+  if (!ws) return reply.status(404).send({ error: '工作区不存在' });
+  const q = request.query as any;
+  const relPath = String(q.path ?? '');
+  const r = resolveWorkspacePath(ws.dir, relPath);
+  if (!r.ok) return reply.status(400).send({ error: r.message });
+  if (!existsSync(r.absPath) || !statSync(r.absPath).isFile()) {
+    return reply.status(404).send({ error: `文件不存在: ${relPath}` });
+  }
+  const ext = extOf(relPath);
+  const buf = readFileSync(r.absPath);
+  reply.header('Content-Type', MIME[ext] ?? 'application/octet-stream');
+  reply.header('Cache-Control', 'no-cache');
+  if (q.download) {
+    reply.header('Content-Disposition', `attachment; filename="${encodeURIComponent(relPath.split(/[\/]/).pop() ?? 'file')}"`);
+  }
+  return reply.send(buf);
+});
 }

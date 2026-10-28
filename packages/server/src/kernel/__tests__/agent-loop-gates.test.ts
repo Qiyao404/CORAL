@@ -315,3 +315,95 @@ describe('AgentLoop × 压缩冷却阶梯 — 失败分级降级', () => {
     expect(finalCall.messages.some(m => m.content.includes('deterministic fallback compression'))).toBe(true);
   });
 });
+
+describe('AgentLoop × 空回答守卫 — 假终答绝不静默交付', () => {
+  const echoStub = (): Tool => ({
+    name: 'echo', description: '', inputSchema: { type: 'object' }, source: 'builtin', permission: 'auto',
+    invoke: async (input: any) => ({ ok: true, data: { got: input } }),
+  });
+
+  it('模型回空 content → 重询一次后给出真答案；事件留痕', async () => {
+    const llm = new ScriptedLLM([
+      { stopReason: 'tool_use', toolCalls: [toolCall('c1', 'echo')], content: '' },
+      { stopReason: 'end', content: '' },            // 假终答（用户实测的 bug）
+      { stopReason: 'end', content: '这是真正的最终回答' },
+    ]);
+    const { loop, events } = harness({ llm, tools: [echoStub()] });
+    const r = await loop.run();
+    expect(r.status).toBe('completed');
+    expect(r.finalContent).toBe('这是真正的最终回答');
+    expect(events.some(e => e.type === 'loop.empty_answer_rejected')).toBe(true);
+    // 重询指令进入了下一轮上下文
+    expect(llm.calls[2].messages.some(m => m.content?.includes('EMPTY'))).toBe(true);
+  });
+
+  it('连续空回答 → 强制无工具收尾；仍空则回退最近非空 assistant 内容', async () => {
+    const llm = new ScriptedLLM([
+      { stopReason: 'tool_use', toolCalls: [toolCall('c1', 'echo')], content: '中间我写过一段有内容的说明' },
+      { stopReason: 'end', content: '' },
+      { stopReason: 'end', content: '' },
+      { stopReason: 'end', content: '' },            // 两次重询仍空
+      { stopReason: 'end', content: '' },            // 强制收尾调用也回空 → 历史回退
+    ]);
+    const { loop, events } = harness({ llm, tools: [echoStub()] });
+    const r = await loop.run();
+    expect(r.status).toBe('completed');
+    // 空回答守卫重询 2 次后走强制收尾；收尾也空 → 回退历史非空内容
+    expect(r.finalContent.length).toBeGreaterThan(0);
+    expect(events.some(e => e.type === 'loop.empty_answer_rejected')).toBe(true);
+  });
+});
+
+describe('AgentLoop × 未竟任务守卫 — 承诺式假终答（用户实测 bug）', () => {
+  const todoTool = (): Tool => ({
+    name: 'todo_write', description: '', inputSchema: { type: 'object' }, source: 'builtin', permission: 'auto',
+    invoke: async (input: any, ctx: any) => {
+      ctx?.emit({ type: 'todo.updated', payload: { todos: input.todos ?? [] } });
+      return { ok: true, data: { todos: input.todos ?? [] } };
+    },
+  });
+  const writeStub = (): Tool => ({
+    name: 'fs_write', description: '', inputSchema: { type: 'object' }, source: 'builtin', permission: 'auto',
+    effects: { writesFilesystem: true },
+    invoke: async (input: any) => ({ ok: true, data: { path: input.path } }),
+  });
+
+  it('清单有未完成项 + 回答以"现在我会撰写最终报告"收尾 → 打回，模型补完交付', async () => {
+    const todos = [
+      { content: '多源检索', status: 'completed' },
+      { content: '撰写带引用的调研报告并落盘 research/', status: 'pending' },
+      { content: '交付前自检', status: 'pending' },
+    ];
+    const llm = new ScriptedLLM([
+      { stopReason: 'tool_use', toolCalls: [toolCall('t', 'todo_write', { todos })], content: '' },
+      // 用户实测的假终答：先陈述核验结果、再承诺写报告，不带工具调用
+      { stopReason: 'end', content: 'Logseq 最新正式版为 2.0.2，已核实。关键事实核验完毕，现在我会撰写最终报告。' },
+      { stopReason: 'tool_use', toolCalls: [toolCall('w', 'fs_write', { path: 'research/report.md', content: '# 报告' })], content: '' },
+      { stopReason: 'tool_use', toolCalls: [toolCall('t2', 'todo_write', { todos: todos.map(t => ({ ...t, status: 'completed' })) })], content: '' },
+      { stopReason: 'end', content: '## 调研完成\n报告已落盘 research/report.md，附引用清单与置信度标注。' },
+    ]);
+    const { loop, events } = harness({ llm, tools: [todoTool(), writeStub()], workspaceDir: tmpDir });
+    const r = await loop.run();
+
+    expect(r.status).toBe('completed');
+    expect(r.finalContent).toContain('报告已落盘');
+    expect(events.some(e => e.type === 'loop.todo_gate_rejected')).toBe(true);
+    // 打回指令带上了欠账清单
+    const pushback = llm.calls[2].messages.find(m => m.content?.includes('PREMATURE FINAL ANSWER REJECTED'));
+    expect(pushback?.content).toContain('撰写带引用的调研报告并落盘');
+  });
+
+  it('清单未完成但回答是正常交付（无未来承诺收尾）→ 不打回（保护收口语义）', async () => {
+    const llm = new ScriptedLLM([
+      { stopReason: 'tool_use', toolCalls: [toolCall('t', 'todo_write', { todos: [
+        { content: 'a', status: 'completed' }, { content: 'b', status: 'in_progress' },
+      ] })], content: '' },
+      { stopReason: 'end', content: 'SUMMARY' },
+    ]);
+    const { loop, events } = harness({ llm, tools: [todoTool(), writeStub()], workspaceDir: tmpDir });
+    const r = await loop.run();
+    expect(r.status).toBe('completed');
+    expect(r.finalContent).toBe('SUMMARY');
+    expect(events.some(e => e.type === 'loop.todo_gate_rejected')).toBe(false);
+  });
+});

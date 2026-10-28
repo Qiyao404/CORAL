@@ -4,6 +4,7 @@ import type { RunEngine } from '../kernel/run-engine.js';
 import type { LLMClient } from '../services/llm-client.js';
 import { platformConfig } from '../services/config.js';
 import { ConfigGcService } from '../services/config-gc-service.js';
+import { RunBudgetSettingsService } from '../services/run-budget-settings.js';
 import { writeSkillAtomic } from '../skill-runtime/skill-writer.js';
 import { evaluateDeterministic, evaluateWithLlm } from '../kernel/self-eval.js';
 
@@ -85,6 +86,20 @@ export function registerOpsRoutes(app: FastifyInstance, runEngine: RunEngine, ll
     if (body.withLlm === false) return base;
     const result = await evaluateWithLlm(llm, run.goal, run.final_content, base);
     return result;
+  });
+
+  // ─── 运行预算（用户设置 — 设置页数据源，新 run 立即生效）────────────────
+
+  app.get('/api/settings/run-budget', async () => {
+    const svc = new RunBudgetSettingsService(dataDir);
+    return { ...svc.get(), effective: svc.effective() };
+  });
+
+  app.put('/api/settings/run-budget', async (request, reply) => {
+    const body = (request.body || {}) as { maxTokens?: number | null; maxSteps?: number | null };
+    const svc = new RunBudgetSettingsService(dataDir);
+    const saved = svc.set(body);
+    return { ...saved, effective: svc.effective() };
   });
 
   // ─── 斜杠命令 / 具名子代理（用户快捷面）────────────────────────────────

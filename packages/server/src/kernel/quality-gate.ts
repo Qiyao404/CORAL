@@ -79,3 +79,35 @@ export function gatePushback(hits: RationalizationHit[], remaining: number): str
     `Do not repeat the rationalization phrasing. Do not apologize without choosing (a) or (b).`
   );
 }
+
+// ─── 未竟任务守卫（与收工门互补的另一类"假终答"）──────────────────────────
+
+/**
+ * 结尾承诺检测：回答以"接下来我会去写 X/现在开始生成 Y"式**未来工作承诺**收尾。
+ * 用户实测：模型先陈述核验结果再宣布"现在我会撰写最终报告"，不带工具调用、
+ * 不以任何既有叙述变体开头 — 叙述检测接不住，但 todo 清单还挂着未完成项。
+ * （只看末尾 ~120 字符：开头/中段提到计划是正常的，收尾还在承诺=活没干完）
+ */
+const FUTURE_PROMISE_RE =
+  /(我会|我将|我要|将要|准备|I'll|I will|I am going to)[^。！?！]{0,40}(撰写|编写|写作|生成|创建|写出|整理|落盘|保存|归档|自检|核对|验证|检查|总结|汇报|提交|补上|补全|报告|开始|继续)|((现在|接下来|接着|然后|随后|马上|即将)[^。！?！]{0,12}(撰写|编写|生成|创建|写出|整理|落盘|自检|核对|验证|总结|报告|开始))|now I('ll| will| am going to)|I('ll| will) now|next,? I('ll| will)/i;
+
+export function endsWithFutureWorkPromise(text: string): boolean {
+  const tail = String(text ?? '').trim().slice(-120);
+  return FUTURE_PROMISE_RE.test(tail);
+}
+
+/** 清单里未完成的条目（pending / in_progress） */
+export function pendingTodoItems(todos: Array<{ content: string; status: string }>): Array<{ content: string; status: string }> {
+  return (todos ?? []).filter(t => t.status === 'pending' || t.status === 'in_progress');
+}
+
+/** 未竟任务守卫的打回指令（列出未完成清单 — 模型需要确切知道还欠什么） */
+export function todoGatePushback(undone: Array<{ content: string; status: string }>, remaining: number): string {
+  const list = undone.map(t => `- [${t.status}] ${t.content}`).join('\n');
+  return (
+    `[system] PREMATURE FINAL ANSWER REJECTED. Your todo list still has ${undone.length} unfinished item(s):\n${list}\n` +
+    `Your message ended by PROMISING to do this work ("I will now write...") instead of doing it.\n` +
+    `You have ${remaining} chance(s): actually DO the remaining work now (call the tools — write the files, run the checks), ` +
+    `then write the real final answer. Only if truly blocked, finish with a "## 未完成事项" section naming what remains and why.`
+  );
+}

@@ -27,6 +27,9 @@ export function makeEvidenceReadTool(store: EvidenceStore): Tool {
     permission: 'auto',
     effects: { idempotent: true },
     isConcurrencySafe: true,
+    // 分页取回本身就是按需读取（limit 钳制 ≤60k）— 结果不再转存证据
+    //（曾出现"证据的证据"循环归档：12k 的取回页又被归档成新证据）
+    maxResultSizeChars: 70_000,
 
     async invoke(input: any, ctx): Promise<ToolResult> {
       const id = String(input?.evidence_id ?? '').trim();
