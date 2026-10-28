@@ -68,20 +68,33 @@ export function registerWorkspaceFileRoutes(
     }
   });
 
-  // 列出某工作区根目录的顶层文件（供前端「附加文件」选择器）
+  // 递归列出工作区文件（@引用选择器数据源 — 覆盖子目录如 research/xx.md）
   app.get('/api/workspaces/:id/files', async (request, reply) => {
     const { id } = request.params as any;
     const ws = workspaceService.get(id);
     if (!ws) return reply.status(404).send({ error: '工作区不存在' });
 
     try {
-      const items = readdirSync(ws.dir, { withFileTypes: true })
-        .filter(e => e.isFile() && !e.name.startsWith('.'))
-        .map(e => {
-          let size = 0;
-          try { size = statSync(join(ws.dir, e.name)).size; } catch { /* 竞态 */ }
-          return { name: e.name, size };
-        });
+      const SKIP_DIRS = new Set(['node_modules', '.git', '__pycache__', 'dist', '.trash']);
+      const items: Array<{ name: string; rel: string; size: number }> = [];
+      const walk = (dir: string, prefix: string, depth: number) => {
+        if (depth > 4 || items.length >= 300) return;
+        for (const e of readdirSync(dir, { withFileTypes: true })) {
+          if (items.length >= 300) return;
+          if (e.name.startsWith('.')) continue;
+          const rel = prefix ? `${prefix}/${e.name}` : e.name;
+          if (e.isDirectory()) {
+            if (SKIP_DIRS.has(e.name)) continue;
+            walk(join(dir, e.name), rel, depth + 1);
+          } else if (e.isFile()) {
+            let size = 0;
+            try { size = statSync(join(dir, e.name)).size; } catch { /* 竞态 */ }
+            items.push({ name: e.name, rel, size });
+          }
+        }
+      };
+      walk(ws.dir, '', 0);
+      items.sort((a, b) => a.rel.localeCompare(b.rel));
       return { items };
     } catch (err: any) {
       return reply.status(500).send({ error: err?.message ?? '读取失败' });

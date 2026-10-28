@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Bot, Send, FolderOpen, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight,
   Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type, Trash2, MessageSquare,
-  FolderPlus, Activity, ChevronDown as ChevronDownIcon, GitBranch, Database, Coins, FileText, Download,
+  FolderPlus, Activity, ChevronDown as ChevronDownIcon, GitBranch, Database, Coins, FileText, Download, Wand2,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState, Modal, Input } from '../components/ui';
@@ -77,6 +77,54 @@ export default function ChatPage() {
       const el = document.querySelector('textarea') as HTMLTextAreaElement | null;
       el?.focus();
     });
+  };
+
+  // @ 文件引用：输入出现 "@词"（未空格）时弹工作区文件选择器
+  const [wsFiles, setWsFiles] = useState<Array<{ name: string; rel: string; size: number }>>([]);
+  const [atIndex, setAtIndex] = useState(0);
+  const [atDismissed, setAtDismissed] = useState(false);
+  useEffect(() => {
+    if (!workspaceId) { setWsFiles([]); return; }
+    let cancelled = false;
+    api.workspaceFiles(workspaceId).then(d => { if (!cancelled) setWsFiles(d.items ?? []); }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [workspaceId]);
+  // 光标前最后一个 @ 触发词（@ 之后到光标/空格为止）
+  const atQuery = useMemo(() => {
+    if (atDismissed || wsFiles.length === 0 || !workspaceId) return null;
+    const m = goal.match(/@([^\s@]{0,60})$/);
+    return m ? m[1].toLowerCase() : null;
+  }, [goal, wsFiles, atDismissed, workspaceId]);
+  const atMatches = useMemo(() => {
+    if (atQuery === null) return [];
+    const q = atQuery;
+    return wsFiles
+      .filter(f => !q || f.rel.toLowerCase().includes(q) || f.name.toLowerCase().includes(q))
+      .slice(0, 7);
+  }, [atQuery, wsFiles]);
+  const atOpen = atMatches.length > 0 && atQuery !== null;
+  useEffect(() => { setAtIndex(0); }, [atQuery]);
+  const pickAt = (rel: string) => {
+    setGoal(g => g.replace(/@([^\s@]*)$/, `@${rel} `));
+    setAtDismissed(false);
+    requestAnimationFrame(() => {
+      const el = document.querySelector('textarea') as HTMLTextAreaElement | null;
+      el?.focus();
+    });
+  };
+
+  // 提示词优化（✨）：把草稿交给模型改写，弹层预览，采用则替换草稿
+  const [optimizer, setOptimizer] = useState<{ loading: boolean; original?: string; optimized?: string; error?: string } | null>(null);
+  const runOptimize = async () => {
+    const text = goal.trim();
+    if (!text) { setOptimizer({ loading: false, error: '先写点什么再优化～' }); return; }
+    setOptimizer({ loading: true, original: text });
+    try {
+      const d = await api.optimizePrompt(text);
+      setOptimizer({ loading: false, original: text, optimized: d.optimized });
+    } catch (err: any) {
+      setOptimizer({ loading: false, error: err?.message ?? '优化失败' });
+    }
   };
 
   const { events, connected } = useRunStream(activeRunId ?? undefined);
@@ -352,8 +400,22 @@ export default function ChatPage() {
       const uploadNote = attached.length > 0
         ? `## 用户刚上传的文件（工作区根目录）\n${attached.map(f => `- ${f}`).join('\n')}\n当用户提到"这份文件 / 我上传的文件 / 刚传的文件"时，优先指上述文件（而非工作区里的其他旧文件）。`
         : undefined;
+      // @ 引用注入：把消息里的 @文件 解析为工作区路径，指示 agent 开工前先读
+      //（若该文件在本会话已分析过，会话上下文已有摘要 — 指令同时覆盖两种情况）
+      const rawGoal = goal.trim();
+      const atRefs: string[] = [];
+      const goalWithRefs = rawGoal.replace(/@([^\s@，。,]+)/g, (whole, token: string) => {
+        const hit = wsFiles.find(f => f.rel === token || f.name === token)
+          ?? wsFiles.find(f => f.rel.toLowerCase() === token.toLowerCase() || f.name.toLowerCase() === token.toLowerCase());
+        if (!hit) return whole; // 解析不到（可能是邮箱等）— 原样保留
+        atRefs.push(hit.rel);
+        return `@${hit.rel}`;
+      });
+      const refNote = atRefs.length > 0
+        ? `\n\n## 本消息引用的文件（@ 引用）\n${atRefs.map(r => `- ${r}`).join('\n')}\n开工前先读取上述文件（.docx 用 docx_read，其余用 fs_read）；若其中某些在本会话已分析过且内容未变，可直接利用已有结论不必重读全文。`
+        : '';
       const res = await api.createRun({
-        goal: goal.trim(),
+        goal: atRefs.length > 0 ? goalWithRefs + refNote : rawGoal,
         sessionId: sid,
         workspaceId: workspaceId || undefined,
         continueSession: true, // 同会话多轮：带上此前的完整对话上下文
@@ -363,6 +425,10 @@ export default function ChatPage() {
       if (attached.length > 0) {
         setRunAttachments(prev => ({ ...prev, [res.runId]: attached }));
         setUploadedFiles(prev => prev.filter(f => !attached.includes(f)));
+      }
+      // @ 引用同样挂到消息的附件标记上（与上传附件同一视觉位 — "这条消息关联了哪些文件"）
+      if (atRefs.length > 0) {
+        setRunAttachments(prev => ({ ...prev, [res.runId]: [...(prev[res.runId] ?? []), ...atRefs] }));
       }
       setGoal('');
       setActiveRunId(res.runId);
@@ -771,17 +837,81 @@ export default function ChatPage() {
                 ))}
               </div>
             )}
+            {/* @ 文件引用弹窗（引用工作区文件作为上下文） */}
+            {atOpen && (
+              <div className="absolute bottom-full left-0 right-24 mb-2 bg-bg-panel border border-glass-border rounded-xl shadow-xl overflow-hidden z-20 expand-anim">
+                <div className="px-3 py-1.5 text-[10px] text-fg-muted border-b border-glass-border/60 bg-bg-elev/40">
+                  引用工作区文件 — ↑↓ 选择 · Tab/Enter 插入 · Esc 关闭
+                </div>
+                {atMatches.map((f, i) => (
+                  <button
+                    key={f.rel}
+                    className={`w-full text-left px-3 py-2 flex items-center gap-2 cursor-pointer transition-colors ${i === atIndex ? 'bg-brand-soft/60' : 'hover:bg-bg-elev/40'}`}
+                    onMouseEnter={() => setAtIndex(i)}
+                    onClick={() => pickAt(f.rel)}
+                  >
+                    <FileText className={`w-3.5 h-3.5 shrink-0 ${i === atIndex ? 'text-brand' : 'text-fg-muted'}`} />
+                    <span className="font-mono text-xs text-fg-primary truncate">{f.rel}</span>
+                    <span className="ml-auto text-[10px] text-fg-disabled shrink-0">{(f.size / 1024).toFixed(1)}KB</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {/* 提示词优化弹层（✨ 结果预览：采用 / 放弃） */}
+            {optimizer && (
+              <div className="absolute bottom-full left-0 right-0 mb-2 bg-bg-panel border border-brand/30 rounded-xl shadow-2xl overflow-hidden z-20 expand-anim">
+                <div className="px-3 py-1.5 text-[10px] text-fg-muted border-b border-glass-border/60 bg-bg-elev/40 flex items-center gap-2">
+                  <Wand2 className="w-3 h-3 text-brand" /> 提示词优化
+                  {optimizer.original && (
+                    <details className="ml-auto">
+                      <summary className="cursor-pointer text-fg-muted hover:text-fg-secondary">看原文</summary>
+                      <p className="mt-1 max-h-24 overflow-auto text-xs text-fg-muted whitespace-pre-wrap">{optimizer.original}</p>
+                    </details>
+                  )}
+                  <button className="ml-2 text-fg-muted hover:text-status-danger cursor-pointer" onClick={() => setOptimizer(null)} title="关闭">✕</button>
+                </div>
+                <div className="p-3">
+                  {optimizer.loading && (
+                    <p className="text-xs text-fg-muted flex items-center gap-2 py-3"><Loader2 className="w-3.5 h-3.5 animate-spin" /> 正在理解你的意图并优化…</p>
+                  )}
+                  {optimizer.error && !optimizer.loading && <p className="text-xs text-status-danger py-2">{optimizer.error}</p>}
+                  {optimizer.optimized && !optimizer.loading && (
+                    <>
+                      <textarea
+                        className="w-full min-h-24 max-h-56 resize-y bg-bg-elev/60 border border-glass-border/50 rounded-lg px-3 py-2 text-sm text-fg-primary focus:outline-none focus:ring-1 focus:ring-brand/40"
+                        value={optimizer.optimized}
+                        onChange={e => setOptimizer(o => o ? { ...o, optimized: e.target.value } : o)}
+                      />
+                      <div className="flex gap-2 mt-2 justify-end">
+                        <Button variant="ghost" onClick={() => setOptimizer(null)}>放弃</Button>
+                        <Button onClick={() => { setGoal(optimizer.optimized ?? ''); setOptimizer(null); requestAnimationFrame(() => { const el = document.querySelector('textarea') as HTMLTextAreaElement | null; el?.focus(); }); }}>
+                          采用（替换输入框）
+                        </Button>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
             <Textarea
               value={goal}
               onChange={e => {
                 setGoal(e.target.value);
                 setSlashDismissed(false);
+                setAtDismissed(false);
                 // 输入框自适应高度（2~12 行）
                 const el = e.target as HTMLTextAreaElement;
                 el.style.height = 'auto';
                 el.style.height = Math.min(el.scrollHeight, 288) + 'px';
               }}
               onKeyDown={e => {
+                // @ 文件引用弹窗（与斜杠弹窗互斥 — 触发条件不同天然互斥）
+                if (atOpen && !e.nativeEvent.isComposing) {
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setAtIndex(i => (i + 1) % atMatches.length); return; }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); setAtIndex(i => (i - 1 + atMatches.length) % atMatches.length); return; }
+                  if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); pickAt(atMatches[atIndex].rel); return; }
+                  if (e.key === 'Escape') { e.preventDefault(); setAtDismissed(true); return; }
+                }
                 // 斜杠弹窗激活时的键盘交互（IME 组合态不拦截）
                 if (slashOpen && !e.nativeEvent.isComposing) {
                   if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIndex(i => (i + 1) % slashMatches.length); return; }
@@ -803,6 +933,14 @@ export default function ChatPage() {
               <Upload className="w-4 h-4" />
               <input type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = ''; }} />
             </label>
+            <button
+              onClick={runOptimize}
+              disabled={submitting}
+              className="p-2 rounded-lg hover:bg-bg-elev/40 text-fg-muted hover:text-brand cursor-pointer disabled:opacity-50"
+              title="优化提示词 — 理解你的意图后改写，让 AI 完成得更好"
+            >
+              {optimizer?.loading ? <Loader2 className="w-4 h-4 animate-spin text-brand" /> : <Wand2 className="w-4 h-4" />}
+            </button>
             {activeRunId && !view.runStatus ? (
               <button onClick={cancel} className="w-9 h-9 rounded-full bg-status-danger text-white flex items-center justify-center cursor-pointer hover:opacity-80 btn-press shrink-0"><Square className="w-3.5 h-3.5" /></button>
             ) : (

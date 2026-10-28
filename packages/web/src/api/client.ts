@@ -56,6 +56,12 @@ export const api = {
   // 工作区文件预览（文本/docx 提取/pdf 原始流等）
   previewFile: (workspaceId: string, path: string) =>
     request<any>(`/workspaces/${workspaceId}/preview?path=${encodeURIComponent(path)}`),
+  // 递归列出工作区文件（@ 引用选择器）
+  workspaceFiles: (workspaceId: string) =>
+    request<{ items: Array<{ name: string; rel: string; size: number }> }>(`/workspaces/${workspaceId}/files`),
+  // 提示词优化（输入框 ✨ 按钮）
+  optimizePrompt: (text: string) =>
+    request<{ optimized: string }>('/prompt-optimize', { method: 'POST', body: JSON.stringify({ text }) }),
 
   // LLM 配置
   listLlmConfigs: () => request<any>('/llm/configs'),
