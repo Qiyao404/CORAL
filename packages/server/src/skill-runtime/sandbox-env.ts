@@ -21,6 +21,8 @@ const SANDBOX_ENV_WHITELIST: ReadonlySet<string> = new Set([
   'REQUESTS_CA_BUNDLE', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'CURL_CA_BUNDLE', 'NODE_EXTRA_CA_CERTS',
   // 终审 P1：M4-2 技能依赖的 CORAL_* 集成变量（白名单漏掉 = web-search 永远"未配置"）
   'CORAL_TAVILY_API_KEY', 'CORAL_SEARXNG_URL', 'CORAL_GITHUB_TOKEN',
+  // Windows 上 Python 管道输出默认 ANSI 代码页 — 中文输出直接 UnicodeEncodeError
+  'PYTHONUTF8', 'PYTHONIOENCODING',
 ]);
 
 export function buildSandboxEnv(
