@@ -24,3 +24,5 @@ docs/V2_PLAN.md
 *.log
 packages/server/public/
 *.docx
+ci-logs.zip
+.ci-logs/
