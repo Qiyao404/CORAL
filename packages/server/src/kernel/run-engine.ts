@@ -21,6 +21,7 @@ import { SlashCommandService } from '../services/slash-commands.js';
 import { isEstopped, estopReason } from '../services/estop.js';
 import { HookService, type HookEvent } from '../hooks/hook-service.js';
 import { RunBudgetSettingsService } from '../services/run-budget-settings.js';
+import { evaluateDeterministic } from './self-eval.js';
 import { WorkspaceService, type Workspace } from '../services/workspace-service.js';
 import { fsSearchTool } from '../tools/builtin/fs-search.js';
 import { docxTools } from '../tools/builtin/docx.js';
@@ -380,6 +381,20 @@ export class RunEngine {
       if (result.status === 'budget_exceeded') {
         this.emitRunEvent(runId, 'run.budget_exceeded', { steps: result.steps, tokensIn: result.tokensIn, tokensOut: result.tokensOut });
       }
+      // 自评轻闭环：完成态先跑一次确定性五轴评分并落事件（零成本、不阻断 —
+      // 外部审查指出自评原先只存在于 API 里，交付链上没有痕迹；置于 completed 之前，
+      // 让 completed 仍是事件流的终态事件）
+      if (result.status === 'completed' && result.finalContent.trim()) {
+        try {
+          const evalResult = evaluateDeterministic(input.goal, result.finalContent);
+          this.emitRunEvent(runId, 'run.self_eval', {
+            overall: Number(evalResult.overall.toFixed(2)),
+            axes: evalResult.axes.map(a => ({ axis: a.axis, score: a.score })),
+            heuristicNotes: evalResult.heuristicNotes,
+          });
+        } catch { /* 自评失败不影响 run */ }
+      }
+
       this.emitRunEvent(
         runId,
         result.status === 'failed' ? 'run.failed' : 'run.completed',
