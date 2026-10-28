@@ -41,6 +41,9 @@ function runDocxHelper(payload: { mode: 'read' | 'write'; path: string; content?
     timeout: 30_000,
     windowsHide: true,
     shell: isWin,
+    // Windows 下 Python 管道输出默认走 ANSI 代码页（cp1252）— 打印中文 JSON
+    // 直接 UnicodeEncodeError（CI 实测）；强制 UTF-8 模式跨平台归一
+    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8' },
   });
   if (r.error) {
     return {
