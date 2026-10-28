@@ -20,6 +20,7 @@ import { AgentPresetService } from '../services/agent-presets.js';
 import { SlashCommandService } from '../services/slash-commands.js';
 import { isEstopped, estopReason } from '../services/estop.js';
 import { HookService, type HookEvent } from '../hooks/hook-service.js';
+import { RunBudgetSettingsService } from '../services/run-budget-settings.js';
 import { WorkspaceService, type Workspace } from '../services/workspace-service.js';
 import { fsSearchTool } from '../tools/builtin/fs-search.js';
 import { docxTools } from '../tools/builtin/docx.js';
@@ -82,7 +83,8 @@ export interface RunEngineDeps {
 
 const GOAL_LIMIT = 10_000;
 const MAX_STEPS_CAP = 200;
-const MAX_TOKENS_CAP = 2_000_000;
+// 1000 万（用户要求：深度调研跨会话续跑实际累计消耗可达数百万 token）
+const MAX_TOKENS_CAP = 10_000_000;
 
 export class RunEngine {
   private deps: RunEngineDeps;
@@ -96,6 +98,8 @@ export class RunEngine {
   private slashCommands = new SlashCommandService(pathDirname(platformConfig.databasePath));
   /** 外部命令守卫（data/hooks.json — 8 生命周期事件，可拒/可改/可补） */
   private hookSvc = new HookService(pathDirname(platformConfig.databasePath));
+  /** 运行预算用户设置（data/run-budget.json — 设置页可改，优先于平台默认） */
+  private budgetSettings = new RunBudgetSettingsService(pathDirname(platformConfig.databasePath));
 
   /** hooks 的 loop 注入形态（结构化包装 — kernel 不 import 具体服务） */
   private loopHooks = {
@@ -159,9 +163,11 @@ export class RunEngine {
       if (!workspace) throw new Error(`工作区不存在: ${input.workspaceId}`);
     }
 
+    // 预算解析优先级：请求级 > 用户设置（设置页）> 平台默认（.env）
+    const eff = this.budgetSettings.effective();
     const budget = {
-      maxSteps: Math.min(Math.max(input.budget?.maxSteps ?? platformConfig.runMaxSteps, 1), MAX_STEPS_CAP),
-      maxTokens: Math.min(Math.max(input.budget?.maxTokens ?? platformConfig.runMaxTokens, 1000), MAX_TOKENS_CAP),
+      maxSteps: Math.min(Math.max(input.budget?.maxSteps ?? eff.maxSteps, 1), MAX_STEPS_CAP),
+      maxTokens: Math.min(Math.max(input.budget?.maxTokens ?? eff.maxTokens, 1000), MAX_TOKENS_CAP),
       ...(input.budget?.maxCostUsd !== undefined ? { maxCostUsd: input.budget.maxCostUsd } : {}),
     };
 

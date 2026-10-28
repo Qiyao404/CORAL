@@ -3,7 +3,7 @@ import type { Tool, ToolResult } from '../tools/types.js';
 import { makeToolContext } from '../tools/types.js';
 import { clipToolResults, compressIfNeeded, shelveOldToolResults, usageLevel, deterministicCompress, cooldownFor } from './context-window.js';
 import { EvidenceStore, summarizeForEvidence, evidenceThreshold } from './evidence.js';
-import { detectRationalization, shouldGate, gatePushback } from './quality-gate.js';
+import { detectRationalization, shouldGate, gatePushback, endsWithFutureWorkPromise, pendingTodoItems, todoGatePushback } from './quality-gate.js';
 import { FactGate, factsRequiredError } from './fact-gate.js';
 import { platformConfig } from '../services/config.js';
 import { resolveToolName } from '../tools/alias.js';
@@ -205,6 +205,12 @@ export class AgentLoop {
     let writeOps = 0;
     // stop 钩子打回计数（与收工门各自独立，同上限防死循环）
     let hookStopContinues = 0;
+    // 空回答守卫：模型偶发返回空 content + 无工具调用的"假终答"（用户实测：
+    // run 显示 completed 但 final 为空）。空回答重询最多 2 次，仍空则强制收尾调用
+    let emptyFinalContinues = 0;
+    // 未竟任务守卫打回计数：清单未完成 + 回答以未来承诺收尾（用户实测：
+    // "现在我会撰写最终报告"后直接结束 — 1.9M token 的工作被一句空话收尾）
+    let todoGateContinues = 0;
     // 压缩失败冷却阶梯：60s→300s→900s 递进冷却（替代一次性熔断 —
     // 失败是分级降级的事，不是永久关停的事；冷却期间由确定性摘要兜底）
     let compactFailures = 0;
@@ -303,6 +309,8 @@ export class AgentLoop {
           contextChars,
           contextMax: maxChars,
           usageLevel: usageLevel(contextChars, maxChars),
+          // token 预算消耗（UI 实时指示器：X / budget）
+          tokenBudget: budget.maxTokens,
           messageCount: messages.length,
         });
 
@@ -333,6 +341,57 @@ export class AgentLoop {
 
         // 模型给出最终回答 — narration 续跑例外
         if (response.stopReason !== 'tool_use' || response.toolCalls.length === 0) {
+          // 空回答守卫：模型偶发返回空 content 的"假终答"（用户实测：run 显示
+          // completed 但什么都没输出）。空回答绝不静默交付 — 重询 ≤2 次，
+          // 仍空则强制一次无工具收尾，再不行回退最近一条非空 assistant 内容
+          if (!response.content.trim()) {
+            const budgetLeft = steps < budget.maxSteps - 1 && tokensIn + tokensOut < budget.maxTokens;
+            if (emptyFinalContinues < 2 && budgetLeft) {
+              emptyFinalContinues++;
+              this.emit('loop.empty_answer_rejected', { step: steps, continues: emptyFinalContinues });
+              messages.push({ role: 'assistant', content: response.content });
+              messages.push({
+                role: 'user',
+                content: '[system] Your final answer was EMPTY. Based on the work completed so far, write the actual final answer for the user now.',
+              });
+              this.checkpoint(steps, messages);
+              continue;
+            }
+            let forced = '';
+            try {
+              const wrap = await this.llm.chat({
+                system: this.buildSystemPrompt(),
+                messages: [...messages, {
+                  role: 'user',
+                  content: '[system] The previous final answer was empty. Write the complete final answer now based on everything accomplished above.',
+                }],
+                signal: this.options.signal,
+                maxTokens: 8192,
+              });
+              forced = wrap.content;
+              tokensIn += wrap.usage.inputTokens;
+              tokensOut += wrap.usage.outputTokens;
+            } catch { /* 强制收尾失败 → 历史回退 */ }
+            const finalContent =
+              forced.trim() ||
+              [...messages].reverse().find(m => m.role === 'assistant' && m.content.trim())?.content.trim() ||
+              '[模型未返回最终回答 — 请查看执行过程，或发送"继续"接力完成]';
+            messages.push({ role: 'assistant', content: finalContent });
+            this.closeTodos('completed');
+            this.checkpoint(steps, messages);
+            this.emit('loop.step_completed', { step: steps, final: true });
+            this.emit('loop.empty_answer_fallback', { step: steps, source: forced.trim() ? 'forced' : 'history' });
+            return {
+              status: 'completed',
+              finalContent,
+              messages,
+              steps,
+              toolCalls: toolCallCount,
+              tokensIn,
+              tokensOut,
+            };
+          }
+
           if (
             narrationContinues < NARRATION_MAX &&
             steps < budget.maxSteps - 1 &&
@@ -344,6 +403,33 @@ export class AgentLoop {
             messages.push({ role: 'assistant', content: response.content });
             this.checkpoint(steps, messages);
             continue; // 过渡话不是答案 — 带着它继续下一轮
+          }
+
+          // 未竟任务守卫：todo 清单还有未完成项，且回答以"现在我会去写 X"式
+          // 未来承诺收尾 = 活没干完就宣布收工 → 打回（列出欠账清单）；
+          // 预算耗尽跳过（模型已无行动能力）；最多 2 次，第 3 次放行并告警
+          if (
+            this.options.qualityGate !== false &&
+            this.lastTodos &&
+            steps < budget.maxSteps - 1 &&
+            tokensIn + tokensOut < budget.maxTokens
+          ) {
+            const undone = pendingTodoItems(this.lastTodos);
+            if (undone.length > 0 && endsWithFutureWorkPromise(response.content)) {
+              if (todoGateContinues < 2) {
+                todoGateContinues++;
+                this.emit('loop.todo_gate_rejected', {
+                  step: steps,
+                  undone: undone.map(t => t.content),
+                  continues: todoGateContinues,
+                });
+                messages.push({ role: 'assistant', content: response.content });
+                messages.push({ role: 'user', content: todoGatePushback(undone, 2 - todoGateContinues + 1) });
+                this.checkpoint(steps, messages);
+                continue;
+              }
+              this.emit('loop.todo_gate_forced_pass', { step: steps, undone: undone.map(t => t.content) });
+            }
           }
 
           // 收工门：复杂任务的最终回答含合理化话术 → 打回重写（最多 2 次）
@@ -792,5 +878,5 @@ function isPlanningNarration(content: string): boolean {
   const t = (content ?? '').trim();
   if (!t || t.length > 300) return false; // 长文是正经回答
   if (/^#|\|---|\n- |\n\n/.test(t)) return false; // 标题/表格/列表/多段 = 交付物
-  return /^(I'll|I will|Let me|Now I|Next I|First,? I|I'm going to|Now,? let|我来|我将|接下来|让我|现在我来)/i.test(t);
+  return /^(I'll|I will|Let me|Now I|Next I|First,? I|I'm going to|Now,? let|我来|我将|我会|接下来|让我|现在我来|现在我会|现在我将|现在要|接下来我|马上我|我先)/i.test(t);
 }

@@ -65,7 +65,7 @@ process.stdin.on('data', c => (d += c)).on('end', () => {
     process.stderr.write('该路径受外部守卫保护');
     process.exit(2); // 退出码 2 = 拒绝，stderr 是给模型的原因
   }
-  process.stdout.write(JSON.stringify({ decision: 'allow' })));
+  process.stdout.write(JSON.stringify({ decision: 'allow' }));
 });
 ```
 

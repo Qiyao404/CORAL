@@ -9,9 +9,10 @@ const tmp = mkdtempSync(join(tmpdir(), 'coral-fssearch-'));
 const ws = join(tmp, 'ws');
 beforeAll(() => {
   mkdirSync(join(ws, 'src'), { recursive: true });
+  mkdirSync(join(ws, 'docs'), { recursive: true });
   mkdirSync(join(ws, 'node_modules', 'pkg'), { recursive: true });
   writeFileSync(join(ws, 'src', 'app.ts'), 'const greeting = "hello world";\nexport { greeting };\n', 'utf-8');
-  writeFileSync(join(ws, 'docs', 'note.md').replace('docs\\note.md', 'note.md'), 'find the secret here\n', 'utf-8');
+  writeFileSync(join(ws, 'docs', 'note.md'), 'find the secret here\n', 'utf-8');
   writeFileSync(join(ws, 'node_modules', 'pkg', 'x.js'), 'hello world in node_modules\n', 'utf-8');
   writeFileSync(join(ws, 'logo.png'), Buffer.from([0x00, 0x01]), 'utf-8');
 });

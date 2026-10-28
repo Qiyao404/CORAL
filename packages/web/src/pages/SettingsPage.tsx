@@ -63,6 +63,30 @@ export default function SettingsPage() {
     return 1;
   });
   const [saving, setSaving] = useState(false);
+  // 运行预算（用户可调 — data/run-budget.json，对新 run 生效）
+  const [runBudget, setRunBudget] = useState<{
+    draftTokens: string; draftSteps: string;
+    effectiveTokens: number; effectiveSteps: number;
+    saving: boolean; saved: boolean; error: string;
+  }>({ draftTokens: '', draftSteps: '', effectiveTokens: 1_000_000, effectiveSteps: 40, saving: false, saved: false, error: '' });
+  const wan = (n: number) => (n >= 10000 ? `${(n / 10000).toFixed(0)}万` : String(n));
+  const saveRunBudget = async () => {
+    setRunBudget(b => ({ ...b, saving: true, saved: false, error: '' }));
+    try {
+      const r = await api.saveRunBudget({
+        maxTokens: runBudget.draftTokens.trim() === '' ? null : Number(runBudget.draftTokens),
+        maxSteps: runBudget.draftSteps.trim() === '' ? null : Number(runBudget.draftSteps),
+      });
+      setRunBudget(b => ({
+        ...b, saving: false, saved: true, error: '',
+        effectiveTokens: r.effective?.maxTokens ?? b.effectiveTokens,
+        effectiveSteps: r.effective?.maxSteps ?? b.effectiveSteps,
+      }));
+      setTimeout(() => setRunBudget(b => ({ ...b, saved: false })), 2500);
+    } catch (err: any) {
+      setRunBudget(b => ({ ...b, saving: false, error: err?.message ?? '保存失败' }));
+    }
+  };
   // M1-10：工作区管理
   const [workspaces, setWorkspaces] = useState<Array<{ id: string; name: string; dir: string; permission: string }>>([]);
   const [activeWsId, setActiveWsId] = useState<string | null>(null);
@@ -146,6 +170,16 @@ export default function SettingsPage() {
     loadAll().catch(() => {}).finally(() => setLoading(false));
     loadMemory();
     loadWorkspaces();
+    // 运行预算初值（草稿框留空 = 显示占位的"默认"）
+    api.getRunBudget().then(r => {
+      setRunBudget(b => ({
+        ...b,
+        draftTokens: r.maxTokens != null ? String(r.maxTokens) : '',
+        draftSteps: r.maxSteps != null ? String(r.maxSteps) : '',
+        effectiveTokens: r.effective?.maxTokens ?? b.effectiveTokens,
+        effectiveSteps: r.effective?.maxSteps ?? b.effectiveSteps,
+      }));
+    }).catch(() => {});
   }, []);
 
   const fillFormFromProfile = (p: LlmProfile) => {
@@ -282,6 +316,48 @@ export default function SettingsPage() {
           </span>
         </div>
         <p className="text-xs text-fg-muted mt-2">调整全局字体大小（85% ~ 130%），立即生效并保存</p>
+      </Card>
+
+      {/* 运行预算（用户可调 — 每个 run 的 token/步数上限） */}
+      <Card className="mb-6">
+        <h2 className="font-heading font-semibold text-fg-primary mb-4 flex items-center gap-2">
+          <Cpu className="w-5 h-5" /> 运行预算
+        </h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="text-xs text-fg-muted mb-1 block">Token 上限（每次 run 累计输入+输出）</label>
+            <Input
+              type="number"
+              value={runBudget.draftTokens}
+              disabled={runBudget.saving}
+              onChange={e => setRunBudget(b => ({ ...b, draftTokens: e.target.value }))}
+              placeholder={`默认 ${wan(runBudget.effectiveTokens)}`}
+            />
+            <p className="text-[11px] text-fg-muted mt-1">范围 10万 ~ 1000万。深度调研类任务建议 ≥ 200万。留空 = 用平台默认</p>
+          </div>
+          <div>
+            <label className="text-xs text-fg-muted mb-1 block">步数上限（LLM 调用轮数）</label>
+            <Input
+              type="number"
+              value={runBudget.draftSteps}
+              disabled={runBudget.saving}
+              onChange={e => setRunBudget(b => ({ ...b, draftSteps: e.target.value }))}
+              placeholder={`默认 ${runBudget.effectiveSteps}`}
+            />
+            <p className="text-[11px] text-fg-muted mt-1">范围 5 ~ 200。留空 = 用平台默认</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 mt-3">
+          <Button onClick={saveRunBudget} disabled={runBudget.saving}>
+            {runBudget.saving ? '保存中…' : '保存预算设置'}
+          </Button>
+          {runBudget.saved && <span className="text-xs text-status-success">已保存 — 对新发起的任务立即生效</span>}
+          {runBudget.error && <span className="text-xs text-status-danger">{runBudget.error}</span>}
+          <span className="text-xs text-fg-muted ml-auto">
+            当前生效：Token {wan(runBudget.effectiveTokens)} · 步数 {runBudget.effectiveSteps}
+          </span>
+        </div>
+        <p className="text-xs text-fg-muted mt-2">运行中任务的实时消耗显示在「会话」页标题栏（🪙 图标）；预算耗尽会优雅收尾，发送"继续"可从断点接力</p>
       </Card>
 
       <ThemeSettingsCard />

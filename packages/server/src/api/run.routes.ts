@@ -403,4 +403,39 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
       eventBus.off('*', handler);
     });
   });
+
+  // ── 产物清单（回复底部的"本次生成文件"chips 数据源）──────────────────
+
+  /** 从 run 事件流提取产物（去重，保序） */
+  const artifactsOfRun = (runId: string): Array<{ name: string; rel: string; action?: string }> => {
+    const seen = new Set<string>();
+  const out: Array<{ name: string; rel: string; action?: string }> = [];
+  for (const e of engine.events.listByRun(runId, 0, 3000)) {
+    if (e.type !== 'artifact') continue;
+    const p = e.payload as any;
+    const rel = String(p?.rel ?? p?.path ?? '').split('\\').join('/');
+    if (!rel || seen.has(rel)) continue;
+    seen.add(rel);
+    out.push({ name: String(p?.name ?? rel.split('/').pop()), rel, ...(p?.action ? { action: String(p.action) } : {}) });
+    }
+    return out;
+  };
+
+  app.get('/api/runs/:runId/artifacts', async (request, reply) => {
+    const { runId } = request.params as any;
+    if (!engine.store.get(runId)) return reply.status(404).send({ error: 'run 不存在' });
+    return { items: artifactsOfRun(runId) };
+  });
+
+  app.get('/api/sessions/:sessionId/artifacts', async (request) => {
+    const { sessionId } = request.params as any;
+    const { items } = engine.store.list({ sessionId, limit: 100 });
+    const out: Record<string, Array<{ name: string; rel: string; action?: string }>> = {};
+    for (const r of items) {
+      if (!r.id) continue;
+      const arts = artifactsOfRun(r.id);
+      if (arts.length > 0) out[r.id] = arts;
+    }
+    return { byRun: out };
+  });
 }

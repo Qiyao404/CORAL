@@ -1,7 +1,7 @@
 ---
 name: web-search
 version: "1.0.0"
-description: "联网搜索（可选技能）：Tavily 或自建 SearXNG 双后端，返回标题/链接/摘要。需用户自有 key，未配置时返回配置指引"
+description: "联网搜索：返回标题/链接/摘要。三级后端链 — 已配置时用 Tavily/SearXNG（质量最好），未配置自动降级到免 key 通道（Bing RSS / DuckDuckGo Lite），永远可用"
 domain: tools
 capabilities: []
 input_schema:

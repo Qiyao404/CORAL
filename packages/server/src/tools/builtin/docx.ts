@@ -62,6 +62,14 @@ function runDocxHelper(payload: { mode: 'read' | 'write'; path: string; content?
   }
 }
 
+/** 预览用：抽取 .docx 全文（复用读工具同一通道；失败返回 null） */
+export function extractDocxText(absPath: string): string | null {
+  const res = runDocxHelper({ mode: 'read', path: absPath });
+  if (!res.ok) return null;
+  const data = res.data as any;
+  return Array.isArray(data.paragraphs) ? data.paragraphs.join('\n\n') : null;
+}
+
 export const docxReadTool: Tool = {
   name: 'docx_read',
   description:
@@ -136,7 +144,7 @@ export const docxWriteTool: Tool = {
 
     ctx.emit({
       type: 'artifact',
-      payload: { name: path.split(/[\\/]/).pop(), path: r.absPath, type: 'file' },
+      payload: { name: path.split(/[\\/]/).pop(), rel: path, path: r.absPath, type: 'file', action: 'create' },
     });
     return toolOk({
       path: String(input?.path),

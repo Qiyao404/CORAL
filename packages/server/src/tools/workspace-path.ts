@@ -23,7 +23,10 @@ export function resolveWorkspacePath(
     return { ok: false, code: 'NO_WORKSPACE', message: '未绑定工作区（workspace）— fs 工具不可用' };
   }
 
-  const raw = String(relPath ?? '');
+  // 跨平台归一：Windows 风格反斜杠统一为 / 后再校验。
+  // 安全语义：在任意宿主上 "..\outside\x" 这类 Windows 形态的穿越意图都必须
+  // 被识别（Linux 上 \ 不是分隔符，不归一会被放行成"合法文件名"——CI 实测暴露）
+  const raw = String(relPath ?? '').replace(/\\/g, '/');
   const abs = isAbsolute(raw) ? resolve(raw) : resolve(workspaceDir, raw || '.');
 
   // 词法边界（分隔符边界，不允许恰好等于根之外的兄弟前缀）

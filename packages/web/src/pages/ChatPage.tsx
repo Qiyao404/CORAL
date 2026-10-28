@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Bot, Send, FolderOpen, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight,
   Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type, Trash2, MessageSquare,
-  FolderPlus, Activity, ChevronDown as ChevronDownIcon, GitBranch, Database,
+  FolderPlus, Activity, ChevronDown as ChevronDownIcon, GitBranch, Database, Coins, FileText, Download,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState, Modal, Input } from '../components/ui';
@@ -51,8 +51,74 @@ export default function ChatPage() {
   const [sessionRuns, setSessionRuns] = useState<Array<{ id: string; goal: string; final_content?: string | null; created_at: string; parent_run_id?: string | null; fork_from_seq?: number | null; inherited?: Array<{ goal: string; answer: string }> }>>([]);
   const bottomRef = useRef<HTMLDivElement | null>(null);
 
+  // 斜杠命令弹窗：输入以 "/" 开头（命令词阶段，未空格）时展示匹配命令，
+  // 输入即过滤；↑↓ 选择、Tab/Enter 补全、Esc 关闭（改动后重开）
+  const [slashCommands, setSlashCommands] = useState<Array<{ name: string; description: string; argumentHint?: string }>>([]);
+  const [slashIndex, setSlashIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
+  useEffect(() => {
+    api.commands().then(r => setSlashCommands(r.items ?? [])).catch(() => {});
+  }, []);
+  const slashQuery = goal.startsWith('/') && !goal.includes(' ') ? goal.slice(1).toLowerCase() : null;
+  const slashMatches = useMemo(() => {
+    if (slashQuery === null || slashDismissed) return [];
+    const q = slashQuery;
+    return slashCommands
+      .filter(c => !q || c.name.startsWith(q) || c.name.includes(q) || c.description.toLowerCase().includes(q))
+      .slice(0, 6);
+  }, [slashQuery, slashCommands, slashDismissed]);
+  const slashOpen = slashMatches.length > 0 && slashQuery !== null;
+  useEffect(() => { setSlashIndex(0); }, [slashQuery]);
+  const pickSlash = (name: string) => {
+    setGoal(`/${name} `);
+    setSlashDismissed(false);
+    // 焦点回输入框（点击选择后继续打参数）
+    requestAnimationFrame(() => {
+      const el = document.querySelector('textarea') as HTMLTextAreaElement | null;
+      el?.focus();
+    });
+  };
+
   const { events, connected } = useRunStream(activeRunId ?? undefined);
   const view = useMemo(() => deriveRunView(events), [events]);
+
+  // token 预算实时消耗（loop.step_started 携带累计值与预算；终态后保留末值）
+  const tokenUsage = useMemo(() => {
+    const steps = events.filter(e => e.type === 'loop.step_started');
+    const last = steps[steps.length - 1]?.payload as { tokensIn?: number; tokensOut?: number; tokenBudget?: number } | undefined;
+    if (!last?.tokenBudget) return null;
+    return { used: (last.tokensIn ?? 0) + (last.tokensOut ?? 0), budget: last.tokenBudget };
+  }, [events]);
+
+  // 产物清单（"本次生成文件"chips）：历史轮次走 API，活跃 run 从事件流实时派生
+  const [artifactsByRun, setArtifactsByRun] = useState<Record<string, Array<{ name: string; rel: string; action?: string }>>>({});
+  const liveArtifacts = useMemo(() => {
+    if (!activeRunId) return {};
+    const seen = new Set<string>();
+    const list: Array<{ name: string; rel: string; action?: string }> = [];
+    for (const e of events) {
+      if (e.type !== 'artifact') continue;
+      const rel = String(e.payload?.rel ?? e.payload?.path ?? '').split('\\').join('/');
+      if (!rel || seen.has(rel)) continue;
+      seen.add(rel);
+      list.push({ name: String(e.payload?.name ?? rel.split('/').pop()), rel, action: e.payload?.action });
+    }
+    return list.length > 0 ? { [activeRunId]: list } : {};
+  }, [events, activeRunId]);
+  const allArtifacts = { ...artifactsByRun, ...liveArtifacts };
+
+  // 右侧预览抽屉
+  const [preview, setPreview] = useState<{ open: boolean; loading?: boolean; name?: string; kind?: string; content?: string; rawUrl?: string; note?: string; error?: string } | null>(null);
+  const openPreview = async (rel: string) => {
+    if (!workspaceId) { setPreview({ open: true, name: rel.split('/').pop(), error: '未绑定工作区 — 请先在顶部选择工作区' }); return; }
+    setPreview({ open: true, loading: true, name: rel.split('/').pop() });
+    try {
+      const d = await api.previewFile(workspaceId, rel);
+      setPreview({ open: true, name: d.name ?? rel.split('/').pop(), kind: d.kind, content: d.content, rawUrl: d.rawUrl, note: d.note });
+    } catch (err: any) {
+      setPreview({ open: true, name: rel.split('/').pop(), error: err?.message ?? '预览失败' });
+    }
+  };
 
   // 创新①：流式直播 — 聚合 loop.delta 事件为当前流式文本
   const streamingText = useMemo(() => {
@@ -235,6 +301,16 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => { loadSessionThread(currentSessionId); }, [currentSessionId, loadSessionThread]);
+
+  // 产物清单：会话切换/线程刷新（新 run 完成）时拉取
+  useEffect(() => {
+    if (!currentSessionId) { setArtifactsByRun({}); return; }
+    let cancelled = false;
+    api.sessionArtifacts(currentSessionId).then(d => {
+      if (!cancelled) setArtifactsByRun(d.byRun ?? {});
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [currentSessionId, sessionRuns.length]);
 
   // 上下文用量：会话切换/终态后刷新
   useEffect(() => {
@@ -472,6 +548,17 @@ export default function ChatPage() {
                   </span>
                 );
               })()}
+              {tokenUsage && (() => {
+                const pct = Math.min(100, Math.round((tokenUsage.used / tokenUsage.budget) * 100));
+                const wan = (n: number) => (n >= 10000 ? `${(n / 10000).toFixed(1)}万` : String(n));
+                const color = pct > 85 ? 'text-status-danger' : pct > 60 ? 'text-status-warning' : 'text-fg-muted';
+                return (
+                  <span className={`ml-2 inline-flex items-center gap-1 ${color}`} title={`本轮 run 的 token 累计消耗（输入+输出）/ 预算上限。预算可在设置页调整`}>
+                    <Coins className="w-3 h-3" />
+                    {wan(tokenUsage.used)}/{wan(tokenUsage.budget)} ({pct}%)
+                  </span>
+                );
+              })()}
             </p>
           </div>
           {/* 工作区选择器 + 快捷新建 + 权限快改 */}
@@ -561,11 +648,92 @@ export default function ChatPage() {
                     </div>
                   </div>
                 )}
+                {(() => {
+                  const arts = allArtifacts[r.id];
+                  if (!arts?.length) return null;
+                  return (
+                    <div className="flex justify-start">
+                      <div className="flex flex-wrap gap-1.5 max-w-[85%] items-center">
+                        <span className="text-[10px] text-fg-muted">本次产出 ·</span>
+                        {arts.map(a => (
+                          <button
+                            key={a.rel}
+                            onClick={() => openPreview(a.rel)}
+                            title={`${a.rel}（点击预览）`}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-brand-soft/50 text-brand border border-brand/25 hover:bg-brand-soft cursor-pointer"
+                          >
+                            <FileText className="w-3 h-3 shrink-0" />
+                            <span className="truncate max-w-40">{a.name}</span>
+                            {a.action === 'modify' && <span className="text-[9px] opacity-70">改</span>}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             ))}
           {activeRunId && <RunLiveView goal={(() => { const g = sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? sessionRuns.find(r => r.id === activeRunId)?.goal ?? ''; const cut = g.indexOf('\n\n（本对话继承从'); return cut >= 0 ? g.slice(0, cut) : g; })()} attachments={runAttachments[activeRunId]} inherited={sessionRuns.find(r => r.id === activeRunId)?.inherited} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} onDecide={decide} onContinue={continueRun} />}
+          {/* 活跃 run 的产物 chips（实时 — 事件流派生，不等终态刷新） */}
+          {(() => {
+            const arts = activeRunId ? allArtifacts[activeRunId] : null;
+            if (!arts?.length) return null;
+            return (
+              <div className="flex justify-start">
+                <div className="flex flex-wrap gap-1.5 items-center">
+                  <span className="text-[10px] text-fg-muted">产出中 ·</span>
+                  {arts.map(a => (
+                    <button key={a.rel} onClick={() => openPreview(a.rel)} title={`${a.rel}（点击预览）`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-brand-soft/50 text-brand border border-brand/25 hover:bg-brand-soft cursor-pointer">
+                      <FileText className="w-3 h-3 shrink-0" /><span className="truncate max-w-40">{a.name}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           <div ref={bottomRef} />
         </div>
+
+        {/* 右侧产物预览抽屉（md/txt/json/csv 直读；docx 提取全文；pdf/图片浏览器原生渲染） */}
+        {preview?.open && (
+          <div className="fixed inset-y-0 right-0 w-[460px] max-w-[94vw] bg-bg-panel border-l border-glass-border shadow-2xl z-40 flex flex-col">
+            <div className="flex items-center gap-2 px-4 py-3 border-b border-glass-border shrink-0">
+              <FileText className="w-4 h-4 text-brand shrink-0" />
+              <span className="text-sm font-medium text-fg-primary truncate flex-1" title={preview.name}>{preview.name}</span>
+              {preview.rawUrl && (
+                <a href={`${preview.rawUrl}${preview.rawUrl.includes('?') ? '&' : '?'}download=1`} download className="text-xs text-fg-muted hover:text-brand flex items-center gap-1 shrink-0">
+                  <Download className="w-3.5 h-3.5" /> 下载
+                </a>
+              )}
+              <button onClick={() => setPreview(null)} className="text-fg-muted hover:text-status-danger cursor-pointer p-1 shrink-0" title="关闭预览">
+                <XCircle className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="flex-1 overflow-auto">
+              {preview.loading && (
+                <div className="flex items-center justify-center h-32 text-fg-muted text-xs gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> 加载预览…
+                </div>
+              )}
+              {preview.error && <p className="p-4 text-xs text-status-danger">{preview.error}</p>}
+              {!preview.loading && !preview.error && preview.kind === 'text' && (
+                <pre className="p-4 text-xs font-mono text-fg-secondary whitespace-pre-wrap break-words leading-5">{preview.content}</pre>
+              )}
+              {!preview.loading && !preview.error && preview.kind === 'pdf' && preview.rawUrl && (
+                <iframe src={preview.rawUrl} title="PDF 预览" className="w-full h-full border-0" />
+              )}
+              {!preview.loading && !preview.error && preview.kind === 'image' && preview.rawUrl && (
+                <div className="p-4 flex justify-center"><img src={preview.rawUrl} alt={preview.name} className="max-w-full rounded-lg border border-glass-border" /></div>
+              )}
+              {!preview.loading && !preview.error && preview.kind === 'binary' && (
+                <div className="p-6 text-center text-xs text-fg-muted space-y-2">
+                  <p>{preview.note ?? '此格式暂不支持在线预览'}</p>
+                  {preview.rawUrl && <a href={`${preview.rawUrl}&download=1`} download className="inline-flex items-center gap-1 text-brand hover:underline"><Download className="w-3 h-3" /> 下载查看</a>}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* 输入区 */}
         <div className="p-4 bg-bg-panel border-t border-glass-border input-glow">
@@ -580,18 +748,50 @@ export default function ChatPage() {
               <span className="text-[11px] text-fg-muted ml-1">将随下一条消息一并发送，发送后自动移除</span>
             </div>
           )}
-          <div className="max-w-4xl mx-auto flex gap-3 items-end">
+          <div className="max-w-4xl mx-auto flex gap-3 items-end relative">
+            {/* 斜杠命令弹窗（输入 "/" 触发；实时过滤 + 键盘选择） */}
+            {slashOpen && (
+              <div className="absolute bottom-full left-0 right-24 mb-2 bg-bg-panel border border-glass-border rounded-xl shadow-xl overflow-hidden z-20 expand-anim">
+                <div className="px-3 py-1.5 text-[10px] text-fg-muted border-b border-glass-border/60 bg-bg-elev/40">
+                  斜杠命令 — ↑↓ 选择 · Tab/Enter 补全 · Esc 关闭
+                </div>
+                {slashMatches.map((c, i) => (
+                  <button
+                    key={c.name}
+                    className={`w-full text-left px-3 py-2 flex items-start gap-2 cursor-pointer transition-colors ${i === slashIndex ? 'bg-brand-soft/60' : 'hover:bg-bg-elev/40'}`}
+                    onMouseEnter={() => setSlashIndex(i)}
+                    onClick={() => pickSlash(c.name)}
+                  >
+                    <span className={`font-mono text-xs mt-0.5 ${i === slashIndex ? 'text-brand' : 'text-fg-primary'}`}>/{c.name}</span>
+                    <span className="min-w-0">
+                      <span className="block text-xs text-fg-secondary truncate">{c.description}</span>
+                      {c.argumentHint && <span className="block text-[10px] text-fg-muted font-mono truncate">{c.argumentHint}</span>}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
             <Textarea
               value={goal}
               onChange={e => {
                 setGoal(e.target.value);
+                setSlashDismissed(false);
                 // 输入框自适应高度（2~12 行）
                 const el = e.target as HTMLTextAreaElement;
                 el.style.height = 'auto';
                 el.style.height = Math.min(el.scrollHeight, 288) + 'px';
               }}
-              onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); } }}
-              placeholder="描述你的目标…（Enter 发送，Shift+Enter 换行）"
+              onKeyDown={e => {
+                // 斜杠弹窗激活时的键盘交互（IME 组合态不拦截）
+                if (slashOpen && !e.nativeEvent.isComposing) {
+                  if (e.key === 'ArrowDown') { e.preventDefault(); setSlashIndex(i => (i + 1) % slashMatches.length); return; }
+                  if (e.key === 'ArrowUp') { e.preventDefault(); setSlashIndex(i => (i - 1 + slashMatches.length) % slashMatches.length); return; }
+                  if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) { e.preventDefault(); pickSlash(slashMatches[slashIndex].name); return; }
+                  if (e.key === 'Escape') { e.preventDefault(); setSlashDismissed(true); return; }
+                }
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); }
+              }}
+              placeholder="描述你的目标…（输入 / 唤起快捷命令；Enter 发送，Shift+Enter 换行）"
               rows={2}
               className="flex-1 resize-none"
             />

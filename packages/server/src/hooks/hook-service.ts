@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { existsSync, readFileSync, watchFile, unwatchFile } from 'fs';
+import { existsSync, readFileSync, statSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { platformConfig } from '../services/config.js';
 
@@ -70,8 +70,8 @@ type HookPartial = Omit<Partial<HookOutcome>, 'failed' | 'matched'> & { failed?:
 export class HookService {
   private hooks = new Map<HookEvent, HookDef[]>();
   private configPath: string;
-  private loadedAt = 0;
-  private watcherOn = false;
+  private configMtime = 0;
+  private configExists = false;
 
   constructor(baseDir?: string) {
     this.configPath = baseDir
@@ -87,8 +87,9 @@ export class HookService {
   /** 读取 data/hooks.json（不存在=空配置；损坏=忽略并保留空 — 观察面不伤执行面） */
   reload(): void {
     this.hooks.clear();
-    this.loadedAt = Date.now();
-    if (!existsSync(this.configPath)) return;
+    this.configExists = existsSync(this.configPath);
+    this.configMtime = this.configExists ? statSync(this.configPath).mtimeMs : 0;
+    if (!this.configExists) return;
     try {
       const parsed = JSON.parse(readFileSync(this.configPath, 'utf-8'));
       const source = parsed.hooks && typeof parsed.hooks === 'object' ? parsed.hooks : parsed;
@@ -109,17 +110,30 @@ export class HookService {
     }
   }
 
-  /** 配置文件变更监听（启动时开一次；解析失败自动回退空配置） */
-  watchConfig(): void {
-    if (this.watcherOn || !existsSync(this.configPath)) return;
-    this.watcherOn = true;
-    watchFile(this.configPath, { interval: 2000 }, () => this.reload());
+  /**
+   * 配置失效检查（热加载的可靠形态）：每次触发事件时 stat 一次，
+   * mtime 或存在性变化即重载。用户实测踩坑：配置在服务启动后才创建时，
+   * watchFile（只监听启动时已存在的文件）永远不会发现它。
+   */
+  private reloadIfStale(): void {
+    const exists = existsSync(this.configPath);
+    if (exists !== this.configExists) {
+      this.reload();
+      return;
+    }
+    if (exists) {
+      try {
+        if (statSync(this.configPath).mtimeMs !== this.configMtime) this.reload();
+      } catch { /* 竞态删除 — 下轮存在性检查处理 */ }
+    }
   }
 
-  unwatchConfig(): void {
-    if (this.watcherOn) unwatchFile(this.configPath);
-    this.watcherOn = false;
+  /** 兼容接口：热加载已内建于 run()（mtime 失效检查），此处仅确保初次加载 */
+  watchConfig(): void {
+    this.reload();
   }
+
+  unwatchConfig(): void { /* mtime 检查方案无需反注册 */ }
 
   listConfig(): Record<string, HookDef[]> {
     const out: Record<string, HookDef[]> = {};
@@ -150,6 +164,7 @@ export class HookService {
    * 无命中 → 立即 allow（零开销）。
    */
   async run(event: HookEvent, payload: Record<string, any>): Promise<HookOutcome> {
+    this.reloadIfStale(); // 热加载：mtime/存在性变化即重载（含启动后才创建的配置）
     const toolName = typeof payload.tool === 'string' ? payload.tool : undefined;
     const defs = this.matchDefs(event, toolName);
     if (defs.length === 0) return { ...ALLOW, event };

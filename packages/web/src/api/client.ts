@@ -44,6 +44,18 @@ export const api = {
   health: () => request<any>('/health'),
   config: () => request<any>('/config'),
   stats: () => request<any>('/stats'),
+  // 斜杠命令目录（输入 "/" 时的自动补全弹窗数据源）
+  commands: () => request<{ items: Array<{ name: string; description: string; argumentHint?: string }> }>('/commands'),
+  // 运行预算（设置页）
+  getRunBudget: () => request<any>('/settings/run-budget'),
+  saveRunBudget: (payload: { maxTokens?: number | null; maxSteps?: number | null }) =>
+    request<any>('/settings/run-budget', { method: 'PUT', body: JSON.stringify(payload) }),
+  // 会话产物（回复底部的"本次生成文件"chips）
+  sessionArtifacts: (sessionId: string) =>
+    request<{ byRun: Record<string, Array<{ name: string; rel: string; action?: string }>> }>(`/sessions/${sessionId}/artifacts`),
+  // 工作区文件预览（文本/docx 提取/pdf 原始流等）
+  previewFile: (workspaceId: string, path: string) =>
+    request<any>(`/workspaces/${workspaceId}/preview?path=${encodeURIComponent(path)}`),
 
   // LLM 配置
   listLlmConfigs: () => request<any>('/llm/configs'),
