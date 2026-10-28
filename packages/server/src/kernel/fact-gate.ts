@@ -60,9 +60,11 @@ export class FactGate {
       return { pass: true }; // 新建文件 — 权限档把关，不设事实门
     }
 
-    const hasRead = toolMsgs.some(
-      m => READ_TOOLS.has(m.toolName ?? '') && m.content.includes(`"${path}"`) && !m.content.includes('"error"')
-    );
+    const hasRead = toolMsgs.some(m => {
+      if (!READ_TOOLS.has(m.toolName ?? '')) return false;
+      if (m.content.includes('"error"')) return false;
+      return readTargetMatches(m.content, path);
+    });
     if (!hasRead) {
       const reader = path.toLowerCase().endsWith('.docx') ? 'docx_read' : 'fs_read';
       return this.deny(key, tool.name, path,
@@ -89,6 +91,20 @@ function normalizePath(raw: unknown): string {
     .trim()
     .replace(/\\/g, '/')
     .replace(/\/+/g, '/');
+}
+
+/**
+ * 读取结果是否命中目标路径：优先结构化判定（JSON 的 data.path/path 精确相等），
+ * 解析失败才退回字符串包含（外部审查指出裸 includes 可能被正文里的同名字符串误触发）
+ */
+function readTargetMatches(content: string, path: string): boolean {
+  const target = normalizePath(path);
+  try {
+    const parsed = JSON.parse(content);
+    const p = parsed?.data?.path ?? parsed?.path;
+    if (typeof p === 'string') return normalizePath(p) === target;
+  } catch { /* 非结构化结果 → 退回包含匹配 */ }
+  return content.includes(`"${path}"`);
 }
 
 /**

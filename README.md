@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **版本：v2.0.0-M1（持续迭代中）**
+> **版本：v2.2.0（持续迭代中）** · [10 分钟 Quick Tour（DEMO.md）](DEMO.md) · [CHANGELOG](CHANGELOG.md)
 > **定位：本地优先、单命令启动、单文件存储的个人级 Agent 运行时**
 
 ---

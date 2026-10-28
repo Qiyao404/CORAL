@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
+import { join, dirname, resolve } from 'path';
+import { fileURLToPath } from 'url';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
@@ -11,6 +12,12 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
  * → tools/call（coral_list_skills 与一个 llm_only 技能）。
  * （Claude Desktop DoD 的自动化等价物 — 同一协议栈）
  */
+
+// 从测试文件自身位置推导（不依赖 process.cwd — 从仓库根直跑 vitest 也能通过；
+// 外部审查实测：cwd 相对路径在根目录执行时挂掉全部 stdio 用例）
+const HERE = dirname(fileURLToPath(import.meta.url));
+const SERVER_ROOT = resolve(HERE, '..', '..', '..'); // packages/server
+const REPO_ROOT = resolve(SERVER_ROOT, '..', '..');   // 仓库根（server → packages → 根）
 
 const tmp = mkdtempSync(join(tmpdir(), 'coral-mcp-'));
 process.env.DATABASE_PATH = join(tmp, 'mcp.db');
@@ -44,14 +51,12 @@ source: user
 `, 'utf-8');
 
 async function withClient(fn: (client: Client) => Promise<void>): Promise<void> {
-  const { execSync } = await import('child_process');
-  // tsx 在 node_modules/.bin
-  const tsxBin = join(process.cwd(), '..', '..', 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
-  execSync(`echo`, { stdio: 'ignore' }); // warm
+  // tsx 在仓库根 node_modules/.bin（路径从文件位置推导 — cwd 无关）
+  const tsxBin = join(REPO_ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx');
   const transport = new StdioClientTransport({
     command: process.platform === 'win32' ? tsxBin.replace(/\\/g, '/') : tsxBin,
-    args: [join(process.cwd(), 'src/mcp/serve.ts')],
-    cwd: process.cwd(),
+    args: [join(SERVER_ROOT, 'src', 'mcp', 'serve.ts')],
+    cwd: SERVER_ROOT,
     env: { ...process.env, DATABASE_PATH: process.env.DATABASE_PATH, SKILLS_DIR: process.env.SKILLS_DIR } as any,
   });
   const c = new Client({ name: 'test-client', version: '1.0.0' });

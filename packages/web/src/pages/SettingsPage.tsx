@@ -625,7 +625,7 @@ export default function SettingsPage() {
           <ConfigItem label="沙箱模式" value={config?.sandboxMode} />
           <ConfigItem label="最大并发任务" value={config?.maxConcurrentTasks} />
           <ConfigItem label="单任务 Agent 并发上限" value={config?.maxConcurrentAgentsPerTask} />
-          <ConfigItem label="平台版本" value="CORAL v1.1.0" />
+          <ConfigItem label="平台版本" value="CORAL v2.2.0" />
         </div>
       </Card>
     </div>
