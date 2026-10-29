@@ -26,3 +26,6 @@ packages/server/public/
 *.docx
 ci-logs.zip
 .ci-logs/
+data/pawbench-results.json
+data/pawbench-eval-log.txt
+data/pawbench-ws/

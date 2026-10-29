@@ -17,7 +17,8 @@ export interface RunBudgetSettings {
   updatedAt?: string;
 }
 
-const LIMITS = { maxTokens: { min: 100_000, max: 10_000_000 }, maxSteps: { min: 5, max: 200 } };
+/** 0 = 无上限；其余值夹在 [min, max] */
+const LIMITS = { maxTokens: { min: 100_000, max: 1_000_000_000 }, maxSteps: { min: 5, max: 100_000 } };
 
 export class RunBudgetSettingsService {
   private path: string;
@@ -69,5 +70,6 @@ function clampOrNull(v: unknown, lim: { min: number; max: number }): number | nu
   if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
   if (!Number.isFinite(n)) return null;
+  if (n === 0) return 0; // 0 = 无上限（合法特殊值）
   return Math.min(Math.max(Math.round(n), lim.min), lim.max);
 }
