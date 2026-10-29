@@ -407,3 +407,13 @@ describe('AgentLoop × 未竟任务守卫 — 承诺式假终答（用户实测 
     expect(events.some(e => e.type === 'loop.todo_gate_rejected')).toBe(false);
   });
 });
+
+describe('承诺检测 — PawBench 实测补充（"Let me write it" 曾漏网）', () => {
+  it('中段叙述 + "Let me write it." 收尾 → 命中未来承诺', async () => {
+    const { endsWithFutureWorkPromise } = await import('../quality-gate.js');
+    expect(endsWithFutureWorkPromise('Since I cannot see the data, the script must be data-driven: discover issues at runtime, fix them, and log every fix. Let me write it.')).toBe(true);
+    expect(endsWithFutureWorkPromise('好的，让我现在写迁移脚本。')).toBe(true);
+    // 正常结论不含承诺
+    expect(endsWithFutureWorkPromise('## 结论\n已生成 output/triage.json，共分类 8 封邮件。')).toBe(false);
+  });
+});

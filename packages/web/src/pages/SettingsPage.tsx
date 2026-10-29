@@ -333,7 +333,7 @@ export default function SettingsPage() {
               onChange={e => setRunBudget(b => ({ ...b, draftTokens: e.target.value }))}
               placeholder={`默认 ${wan(runBudget.effectiveTokens)}`}
             />
-            <p className="text-[11px] text-fg-muted mt-1">范围 10万 ~ 1000万。深度调研类任务建议 ≥ 200万。留空 = 用平台默认</p>
+            <p className="text-[11px] text-fg-muted mt-1">填 0 = 无上限（默认 1000 万 token）</p>
           </div>
           <div>
             <label className="text-xs text-fg-muted mb-1 block">步数上限（LLM 调用轮数）</label>
@@ -344,7 +344,7 @@ export default function SettingsPage() {
               onChange={e => setRunBudget(b => ({ ...b, draftSteps: e.target.value }))}
               placeholder={`默认 ${runBudget.effectiveSteps}`}
             />
-            <p className="text-[11px] text-fg-muted mt-1">范围 5 ~ 200。留空 = 用平台默认</p>
+            <p className="text-[11px] text-fg-muted mt-1">填 0 = 无上限（默认 200 步）</p>
           </div>
         </div>
         <div className="flex items-center gap-3 mt-3">

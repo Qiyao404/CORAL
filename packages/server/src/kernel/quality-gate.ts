@@ -89,7 +89,7 @@ export function gatePushback(hits: RationalizationHit[], remaining: number): str
  * （只看末尾 ~120 字符：开头/中段提到计划是正常的，收尾还在承诺=活没干完）
  */
 const FUTURE_PROMISE_RE =
-  /(我会|我将|我要|将要|准备|I'll|I will|I am going to)[^。！?！]{0,40}(撰写|编写|写作|生成|创建|写出|整理|落盘|保存|归档|自检|核对|验证|检查|总结|汇报|提交|补上|补全|报告|开始|继续)|((现在|接下来|接着|然后|随后|马上|即将)[^。！?！]{0,12}(撰写|编写|生成|创建|写出|整理|落盘|自检|核对|验证|总结|报告|开始))|now I('ll| will| am going to)|I('ll| will) now|next,? I('ll| will)/i;
+  /(我会|我将|我要|将要|准备|I'll|I will|I am going to|Let me|让我)[^。！?！]{0,40}(撰写|编写|写作|写|生成|创建|写出|整理|落盘|保存|归档|自检|核对|验证|检查|总结|汇报|提交|补上|补全|修复|执行|跑|报告|开始|继续|fix|write|create|run|build|generate|implement)|((现在|接下来|接着|然后|随后|马上|即将)[^。！?！]{0,12}(撰写|编写|生成|创建|写出|整理|落盘|自检|核对|验证|总结|报告|开始))|now I('ll| will| am going to)|I('ll| will) now|next,? I('ll| will)/i;
 
 export function endsWithFutureWorkPromise(text: string): boolean {
   const tail = String(text ?? '').trim().slice(-120);

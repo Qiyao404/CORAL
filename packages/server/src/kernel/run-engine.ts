@@ -83,9 +83,15 @@ export interface RunEngineDeps {
 }
 
 const GOAL_LIMIT = 10_000;
-const MAX_STEPS_CAP = 200;
-// 1000 万（用户要求：深度调研跨会话续跑实际累计消耗可达数百万 token）
-const MAX_TOKENS_CAP = 10_000_000;
+const MAX_STEPS_CAP = 100_000;
+// 无上限语义：数值 ≤0 视为无上限（存储仍存原值，进入循环前翻译为 Infinity）
+const MAX_TOKENS_CAP = 1_000_000_000;
+
+/** 数值预算 → 循环预算：≤0 视为无上限 */
+function loopBudgetValue(v: number | undefined, fallback: number): number {
+  const n = v ?? fallback;
+  return n <= 0 ? Infinity : n;
+}
 
 export class RunEngine {
   private deps: RunEngineDeps;
@@ -167,8 +173,9 @@ export class RunEngine {
     // 预算解析优先级：请求级 > 用户设置（设置页）> 平台默认（.env）
     const eff = this.budgetSettings.effective();
     const budget = {
-      maxSteps: Math.min(Math.max(input.budget?.maxSteps ?? eff.maxSteps, 1), MAX_STEPS_CAP),
-      maxTokens: Math.min(Math.max(input.budget?.maxTokens ?? eff.maxTokens, 1000), MAX_TOKENS_CAP),
+      // 0 = 无上限（clamp 允许 0；>0 时夹在 [1, CAP]）
+      maxSteps: Math.min(Math.max(input.budget?.maxSteps ?? eff.maxSteps, 0), MAX_STEPS_CAP),
+      maxTokens: Math.min(Math.max(input.budget?.maxTokens ?? eff.maxTokens, 0), MAX_TOKENS_CAP),
       ...(input.budget?.maxCostUsd !== undefined ? { maxCostUsd: input.budget.maxCostUsd } : {}),
     };
 
@@ -332,8 +339,8 @@ export class RunEngine {
         goal: input.goal,
         tools,
         budget: {
-          maxSteps: budget.maxSteps ?? platformConfig.runMaxSteps,
-          maxTokens: budget.maxTokens ?? platformConfig.runMaxTokens,
+          maxSteps: loopBudgetValue(budget.maxSteps, platformConfig.runMaxSteps),
+          maxTokens: loopBudgetValue(budget.maxTokens, platformConfig.runMaxTokens),
         },
         signal,
         workspaceDir: workspace?.dir,
