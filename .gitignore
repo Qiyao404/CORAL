@@ -29,3 +29,6 @@ ci-logs.zip
 data/pawbench-results.json
 data/pawbench-eval-log.txt
 data/pawbench-ws/
+data/gaia-results.json
+data/gaia-eval-log.txt
+data/gaia-ws/
