@@ -1,6 +1,5 @@
 import type { Tool, ToolContext, ToolResult } from '../types.js';
 import { toolOk, toolError } from '../types.js';
-import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
 
 /**
  * M1-2：内置 http_fetch 工具 — agent 自主抓取网页/接口。
@@ -10,10 +9,19 @@ import { ProxyAgent, EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
  * 代理支持（GAIA 评测实测发现）：Node.js 原生 fetch 不读系统代理设置，
  * 中国网络环境下维基百科等境外源全部 fetch failed——浏览器走代理能打开
  * 但 CORAL 直连出境。修复：设置 HTTP(S)_PROXY / CORAL_HTTP_PROXY 时走代理。
+ *
+ * 注意：undici 的 zstd 依赖在 Node 20 上不可用（CI 实测 ubuntu-node20 崩），
+ * 用 createRequire + try/catch 延迟加载（仅 Node 22+ 且配了代理时才生效）。
  */
 const PROXY_URL = process.env.CORAL_HTTP_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
-if (PROXY_URL) {
-  try { setGlobalDispatcher(new ProxyAgent(PROXY_URL)); } catch { /* 代理 URL 无效时静默退回直连 */ }
+if (PROXY_URL && parseInt(process.versions.node.split('.')[0]) >= 22) {
+  try {
+    // 延迟 require：undici 在 Node 20 上 import 即崩（zstd 缺失），Node 22+ 才加载
+    const { createRequire } = await import('node:module');
+    const req = createRequire(import.meta.url);
+    const { ProxyAgent, setGlobalDispatcher } = req('undici');
+    setGlobalDispatcher(new ProxyAgent(PROXY_URL));
+  } catch { /* undici 不可用或代理 URL 无效 — 静默退回直连 */ }
 }
 
 const MAX_BODY_BYTES = 2 * 1024 * 1024;
