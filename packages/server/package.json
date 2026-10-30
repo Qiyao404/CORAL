@@ -26,6 +26,7 @@
     "js-yaml": "^5.4.2",
     "nanoid": "^5.0.0",
     "openai": "^4.80.0",
+    "undici": "^8.12.3",
     "zod": "^3.25.76"
   },
   "devDependencies": {

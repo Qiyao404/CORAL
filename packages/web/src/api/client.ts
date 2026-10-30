@@ -186,11 +186,12 @@ export const api = {
   // ─── M1-8：v2 Runs（Free 模式 agent 会话）────────────────
   createRun: (payload: { goal: string; sessionId?: string; workspaceId?: string; continueSession?: boolean; extraSystem?: string; budget?: { maxSteps?: number; maxTokens?: number } }) =>
     request<any>('/runs', { method: 'POST', body: JSON.stringify(payload) }),
-  listRuns: (params?: { sessionId?: string; status?: string; limit?: number }) => {
+  listRuns: (params?: { sessionId?: string; status?: string; limit?: number; hasSession?: boolean }) => {
     const qs = new URLSearchParams();
     if (params?.sessionId) qs.set('sessionId', params.sessionId);
     if (params?.status) qs.set('status', params.status);
     if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.hasSession) qs.set('hasSession', 'true');
     return request<any>(`/runs?${qs}`);
   },
   getRun: (runId: string) => request<any>(`/runs/${runId}`),
