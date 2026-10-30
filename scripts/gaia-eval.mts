@@ -170,7 +170,8 @@ async function main() {
     try {
       const { runId } = await api('/api/runs', {
         method: 'POST',
-        body: JSON.stringify({ goal: PROMPT(q.question), workspaceId: wsId, budget: { maxSteps: 0, maxTokens: 0 } }),
+        // sessionId：让评测 run 作为一个对话出现在 ChatPage 侧栏——用户可实时看到正在跑的题
+        body: JSON.stringify({ goal: PROMPT(q.question), workspaceId: wsId, sessionId: 'gaia-eval-session', budget: { maxSteps: 0, maxTokens: 0 } }),
       });
       const started = Date.now();
       let result: any = null;

@@ -347,6 +347,13 @@ export default function ChatPage() {
         const old = prev.find(p => p.id === item.id);
         return old?.inherited?.length ? { ...item, inherited: old.inherited } : item;
       }));
+
+      // 自动订阅正在运行的 run（评测等外部创建的 run 不经 submit 流程，没有 activeRunId——
+      // 用户点开会话后应自动看到实时过程，不需要手动刷新）
+      const running = (res.items ?? []).find((r: any) => r.status === 'running' || r.status === 'waiting_human');
+      if (running && !activeRunId) {
+        setActiveRunId(running.id);
+      }
     } catch { setSessionRuns([]); }
   }, []);
 
