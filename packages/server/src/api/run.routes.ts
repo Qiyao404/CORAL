@@ -78,14 +78,18 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
   });
 
   app.get('/api/runs', async (request) => {
-    const { sessionId, status, mode, limit, offset } = request.query as any;
-    return engine.store.list({
+    const { sessionId, status, mode, limit, offset, hasSession } = request.query as any;
+    // hasSession=true：只返回有 session_id 的 run（评测等一次性 run 排除——
+    // 不加此过滤时 100 条评测 run 会把用户对话挤出前端 limit 窗口）
+    const base = engine.store.list({
       sessionId: sessionId || undefined,
       status: status || undefined,
       mode: mode || undefined,
-      limit: parseInt(limit) || 50,
+      limit: hasSession ? 500 : (parseInt(limit) || 50),
       offset: parseInt(offset) || 0,
     });
+    if (hasSession !== 'true') return base;
+    return { ...base, items: (base.items ?? []).filter((r: any) => r.session_id) };
   });
 
   app.get('/api/runs/:runId', async (request, reply) => {

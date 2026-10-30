@@ -32,8 +32,6 @@ data/pawbench-ws/
 data/gaia-results.json
 data/gaia-eval-log.txt
 data/gaia-ws/
-docs/GAIA.md
-docs/PAWBENCH.md
-scripts/gaia-eval.mts
+scripts/pawbench-eval.mjs
 scripts/pawbench-eval.mts
 scripts/pawbench-grade.py

@@ -328,9 +328,11 @@ export class AgentLoop {
 
         let response: ChatResponse;
         try {
+          // 推理模型（GLM-5.3 等）的 reasoning 计入 maxTokens——4096 时推理花 3900
+          // 只剩不到 200 给正文（GAIA 实测 4 题空回答的根因）。提到 16384。
           response = this.llm.chatStream
-            ? await this.llm.chatStream({ system, messages, tools: toolDefs, signal, maxTokens: 4096 }, onDelta)
-            : await this.llm.chat({ system, messages, tools: toolDefs, signal, maxTokens: 4096 });
+            ? await this.llm.chatStream({ system, messages, tools: toolDefs, signal, maxTokens: 16384 }, onDelta)
+            : await this.llm.chat({ system, messages, tools: toolDefs, signal, maxTokens: 16384 });
         } finally {
           if (flushTimer) clearInterval(flushTimer);
         }

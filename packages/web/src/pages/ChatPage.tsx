@@ -242,8 +242,10 @@ export default function ChatPage() {
   const [expandedSets, setExpandedSets] = useState<Set<string>>(new Set()); // 对话集折叠状态
   const loadSessions = useCallback(async (): Promise<SessionItem[]> => {
     try {
-      const res = await api.listRuns({ limit: 100 });
-      const allRuns = (res.items ?? []).filter((r: any) => r.mode !== 'graph');
+      // 只拉有 session_id 的 run（评测等一次性 run 不属于任何会话，不该挤占对话列表——
+      // 用户实测：GAIA 评测 107 条 run 把用户全部对话挤出 limit=100 窗口）
+      const res = await api.listRuns({ limit: 100, hasSession: true });
+      const allRuns = (res.items ?? []).filter((r: any) => r.mode !== 'graph' && r.session_id);
       const bySession = new Map<string, SessionItem>();
       const runSession = new Map<string, string | null>(allRuns.map((r: any) => [r.id, r.session_id]));
       for (const run of allRuns) {
