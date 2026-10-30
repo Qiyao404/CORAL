@@ -141,8 +141,9 @@ export default function TimeTravelPage() {
 
   const loadRuns = useCallback(async () => {
     try {
-      const d = await api.listRuns({ limit: 50 });
-      setRuns((d.items ?? []).filter((r: any) => r.mode !== 'graph'));
+      // hasSession 过滤：TimeTravel 只看用户对话的 run（评测等一次性 run 不属于任何会话）
+      const d = await api.listRuns({ limit: 50, hasSession: true });
+      setRuns((d.items ?? []).filter((r: any) => r.mode !== 'graph' && r.session_id));
     } catch { /* ignore */ }
   }, []);
 
