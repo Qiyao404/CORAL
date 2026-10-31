@@ -191,8 +191,31 @@ npm run dev            # 后端 3001 + 前端 5173
 ## 测试与基准
 
 - **测试**：404 个用例（Vitest），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
-- **GAIA 基准**：[docs/GAIA.md](./docs/GAIA.md) —— 官方 GAIA benchmark validation split，**82.0%**（50 题，确定性 exact match）。L1 86.4% / L2 **88.9%** / L3 60.0%。L2 超过 GPT-4+插件参考区间上限。
+- **GAIA 基准**：[docs/GAIA.md](./docs/GAIA.md) —— 官方 GAIA benchmark validation split，**82.0%**（50 题，确定性 exact match）。L1 86.4% / L2 88.9% / L3 60.0%。
 - **性能基准**：[docs/BENCHMARK.md](./docs/BENCHMARK.md) —— 上下文压缩收益（1.2MB 历史 → 169KB，-86%）、SQLite WAL 与 JSONL 持久化吞吐。脚本：`npx tsx scripts/benchmark.mts`。
+
+---
+
+## 模型路由
+
+`POST /api/runs` 支持 `modelProfileId` 参数——每个 run 可独立指定 LLM 配置档案，适用于"简单任务用轻量模型、复杂任务用强模型"的场景。路由在 run 级别生效，不影响全局 active 配置。
+
+---
+
+## 个性化服务
+
+6 个维度的"越用越懂你"能力，**默认全部关闭**，用户在设置页按需开启：
+
+| 维度 | 功能 |
+|---|---|
+| 动态兴趣标签 | 从提问中自动提取兴趣领域，回答时适当关联 |
+| 交互风格自适应 | 从纠正中学到偏好（长度/格式/语气），下次自动调整 |
+| 工作节奏感知 | 记录活跃时段，按时段调整响应策略 |
+| 跨会话知识图谱 | 关联不同对话中讨论过的概念 |
+| 主动推荐 | 基于当前上下文和历史兴趣建议下一步操作 |
+| 隐式偏好推断 | 从拒绝/纠正行为中推断偏好，不需要用户主动配置 |
+
+数据仅存本地（`data/personalization/`），支持一键清零。
 
 ---
 
@@ -216,29 +239,63 @@ npm run dev            # 后端 3001 + 前端 5173
 
 ## 技能生态
 
-### 内置 Skill 清单
+### 内置 Skill 清单（34 个）
 
+#### 文档与写作
 | Skill | 模式 | 说明 |
 |-------|:--:|------|
 | `summarize-document` | llm_only | 文档摘要 |
-| `data-transform` | llm_only | 数据格式转换与结构化 |
-| `policy-scraper` | script | 政策采集（流式 + MD/CSV 双产物）——场景包技能，见 examples/policy-analysis |
-| `policy-to-post` | script | 政策转推文——场景包技能 |
-| `information-filter` | script | 多源信息筛选 |
-| `web-reader` | script | 网页正文抽取（零依赖 readability，article 策略 + 全文回退） |
-| `web-search` | script | 联网搜索（三级后端：Tavily / SearXNG / 免 key 降级通道） |
 | `official-doc-writer` | llm_only | 公文文本生成（通知 / 纪要等规范文种） |
 | `official-doc-expander` | hybrid | 要点扩写为符合 GB/T 9704-2012 的党政机关公文 |
 | `official-document-generator` | hybrid | 要点 → AI 辅助扩写 → 生成公文 docx |
-| `deep-research` | llm_only | 深度调研：子问题分解 → 多源检索 → 交叉验证 → 带引用与置信分级的报告 |
-| `goal-blueprint` | llm_only | 蓝图规划：目标 → 自包含步骤的施工计划（含依赖 / 并行组 / 对抗评审，可产出 Graph DAG） |
-| `council-review` | llm_only | 多方议事：四个独立上下文的视角评审 + 分歧仲裁 + 异议存档 |
-| `site-sentinel` | llm_only | 站点健康检查：八类信号的发布后冒烟测试，支持环境对比 |
-| `story-board` | llm_only | 文件式项目推进：epic → story → sprint 的 Markdown 看板与状态流转 |
-| `intel-collector` | llm_only | 情报采集：采集 → 提炼 → 增量归档，配合触发器做周期任务 |
-| `prompt-doctor` | llm_only | 提示词审查：五维检查（触发 / 边界 / 输出契约 / 歧义 / 注入防护）与修订 |
-| `decision-ledger` | llm_only | 决策账本：追加式多轮比较记录 + 一致性检查 + 晋升门槛 |
-| `skill-authoring` | llm_only | 技能创作规范：查重 / 命名 / 触发式描述 / 质量自检 |
+| `email-draft` | llm_only | 邮件起草（正式/非正式/商务/感谢/跟进，含主题行） |
+| `meeting-notes` | llm_only | 会议纪要（参会人/议题/决议/行动项） |
+
+#### 数据与计算
+| Skill | 模式 | 说明 |
+|-------|:--:|------|
+| `data-transform` | llm_only | 数据格式转换与结构化 |
+| `csv-insight` | llm_only | CSV 数据分析 |
+| `code-exec` | script | 安全 Python 代码执行沙箱（计算/换算/数据分析） |
+| `chart-maker` | llm_only | 数据可视化（SVG 柱状图/折线图/饼图） |
+| `excel-writer` | llm_only | Excel 生成（openpyxl 或 CSV） |
+
+#### 搜索与研究
+| Skill | 模式 | 说明 |
+|-------|:--:|------|
+| `deep-research` | llm_only | 深度调研：子问题分解 → 多源检索 → 交叉验证 → 带引用报告 |
+| `web-reader` | script | 网页正文抽取（零依赖 readability） |
+| `web-search` | script | 联网搜索（Tavily / SearXNG / 免 key 降级通道） |
+| `web-digest` | script | 网页摘要归档 |
+| `api-finder` | llm_only | API 优先策略（PubChem/Wikipedia/GitHub 等 API 速查表） |
+| `archive-search` | llm_only | 档案检索（政府文件/历史文档数据库入口） |
+| `legal-search` | llm_only | 法律法规检索（中国法律/判例/司法解释） |
+| `pdf-reader` | llm_only | PDF 文本提取 |
+| `intel-collector` | llm_only | 情报采集：采集 → 提炼 → 增量归档 |
+| `arxiv-daily` | script | arXiv 论文速览 |
+| `github-repo-report` | script | GitHub 仓库报告 |
+| `information-filter` | script | 多源信息筛选 |
+| `policy-scraper` | script | 政策采集（流式 + MD/CSV 双产物） |
+| `policy-to-post` | script | 政策转推文 |
+
+#### 决策与质量
+| Skill | 模式 | 说明 |
+|-------|:--:|------|
+| `goal-blueprint` | llm_only | 蓝图规划：目标 → 自包含施工计划（含依赖 / 并行组 / 对抗评审） |
+| `council-review` | llm_only | 多方议事：四个独立视角评审 + 分歧仲裁 + 异议存档 |
+| `decision-ledger` | llm_only | 决策账本：追加式多轮比较 + 一致性检查 + 晋升门槛 |
+| `answer-check` | llm_only | 答案自检（单位/数量级/格式/常识校验） |
+| `prompt-doctor` | llm_only | 提示词审查：五维检查与修订 |
+
+#### 领域与效率
+| Skill | 模式 | 说明 |
+|-------|:--:|------|
+| `geo-calc` | llm_only | 地理计算（首都坐标 + Haversine 距离） |
+| `chem-db` | llm_only | 化学数据库查询（PubChem API + EC/CAS 区分） |
+| `site-sentinel` | llm_only | 站点健康检查（八类信号冒烟测试） |
+| `story-board` | llm_only | 文件式项目推进：epic → story → sprint |
+| `schedule-plan` | llm_only | 日程规划（优先级矩阵 + 时间块分配） |
+| `skill-authoring` | llm_only | 技能创作规范：查重 / 命名 / 质量自检 |
 
 ### 创建自定义 Skill
 
