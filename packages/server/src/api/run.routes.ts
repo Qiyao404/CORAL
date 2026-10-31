@@ -27,6 +27,8 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
       extraSystem?: string;
       continueSession?: boolean;
       mode?: 'free' | 'graph';
+      /** 模型路由：指定本 run 使用的 LLM 配置档案 ID（llm_profiles 表） */
+      modelProfileId?: string;
       /** mode=graph：graph DSL 的 YAML 文本（前端编辑器直传） */
       graph?: string;
       /** mode=graph：运行时输入（覆盖 graph.input 默认值） */
@@ -70,6 +72,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
         workspaceId: body.workspaceId,
         extraSystem: body.extraSystem,
         continueSession: body.continueSession,
+        modelProfileId: body.modelProfileId,
       });
       return reply.status(201).send({ runId, sessionId, status: 'running' });
     } catch (err: any) {
