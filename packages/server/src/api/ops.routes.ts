@@ -5,6 +5,7 @@ import type { LLMClient } from '../services/llm-client.js';
 import { platformConfig } from '../services/config.js';
 import { ConfigGcService } from '../services/config-gc-service.js';
 import { RunBudgetSettingsService } from '../services/run-budget-settings.js';
+import { PersonalizationService } from '../services/personalization-service.js';
 import { writeSkillAtomic } from '../skill-runtime/skill-writer.js';
 import { evaluateDeterministic, evaluateWithLlm } from '../kernel/self-eval.js';
 
@@ -100,6 +101,37 @@ export function registerOpsRoutes(app: FastifyInstance, runEngine: RunEngine, ll
     const svc = new RunBudgetSettingsService(dataDir);
     const saved = svc.set(body);
     return { ...saved, effective: svc.effective() };
+  });
+
+  // ─── 个性化（6 维度"越用越懂你"，默认全关，设置页开关）──────────────────
+
+  const pSvc = () => runEngine.personalizationService;
+
+  app.get('/api/personalization', async () => {
+    const svc = pSvc();
+    return {
+      settings: svc.getSettings(),
+      interestTags: svc.getTopTags(10),
+      styleProfile: svc.getSettings().styleAdaptive ? svc.stylePrompt() : null,
+      rhythm: svc.getSettings().rhythmAware ? svc.rhythmPrompt() : null,
+      knowledgeNodes: svc.getSettings().knowledgeGraph ? svc.getTopTags(5) : [],
+      implicitPrefs: svc.getSettings().implicitPrefs ? svc.implicitPrompt() : null,
+    };
+  });
+
+  app.put('/api/personalization', async (request) => {
+    const body = (request.body || {}) as Record<string, boolean>;
+    const svc = pSvc();
+    const patch: Record<string, boolean> = {};
+    for (const k of ['interestTags', 'styleAdaptive', 'rhythmAware', 'knowledgeGraph', 'proactive', 'implicitPrefs']) {
+      if (typeof body[k] === 'boolean') patch[k] = body[k];
+    }
+    return { settings: svc.updateSettings(patch) };
+  });
+
+  app.post('/api/personalization/reset', async () => {
+    pSvc().resetAll();
+    return { success: true };
   });
 
   // ─── 提示词优化（输入框的 ✨ 按钮）────────────────────────────────────

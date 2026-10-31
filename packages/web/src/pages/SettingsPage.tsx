@@ -63,6 +63,10 @@ export default function SettingsPage() {
     return 1;
   });
   const [saving, setSaving] = useState(false);
+  // 个性化（6 维度，默认全关）
+  const [personalization, setPersonalization] = useState<{
+    settings: { interestTags: boolean; styleAdaptive: boolean; rhythmAware: boolean; knowledgeGraph: boolean; proactive: boolean; implicitPrefs: boolean };
+  }>({ settings: { interestTags: false, styleAdaptive: false, rhythmAware: false, knowledgeGraph: false, proactive: false, implicitPrefs: false } });
   // 运行预算（用户可调 — data/run-budget.json，对新 run 生效）
   const [runBudget, setRunBudget] = useState<{
     draftTokens: string; draftSteps: string;
@@ -179,6 +183,10 @@ export default function SettingsPage() {
         effectiveTokens: r.effective?.maxTokens ?? b.effectiveTokens,
         effectiveSteps: r.effective?.maxSteps ?? b.effectiveSteps,
       }));
+    }).catch(() => {});
+    // 个性化设置初值
+    api.getPersonalization().then(r => {
+      if (r?.settings) setPersonalization(p => ({ ...p, settings: r.settings }));
     }).catch(() => {});
   }, []);
 
@@ -316,6 +324,45 @@ export default function SettingsPage() {
           </span>
         </div>
         <p className="text-xs text-fg-muted mt-2">调整全局字体大小（85% ~ 130%），立即生效并保存</p>
+      </Card>
+
+      {/* 个性化（6 维度"越用越懂你"，默认全关） */}
+      <Card className="mb-6">
+        <h2 className="font-heading font-semibold text-fg-primary mb-4 flex items-center gap-2">
+          <Brain className="w-5 h-5" /> 个性化（越用越懂你）
+        </h2>
+        <p className="text-xs text-fg-muted mb-4">以下功能默认关闭。开启后，CORAL 会从你的使用习惯中学习，让回答更贴合你。所有数据仅存本地（data/personalization/），可随时清零。</p>
+        <div className="space-y-3">
+          {[
+            { key: 'interestTags', label: '动态兴趣标签', desc: '从你的提问中自动提取兴趣标签（如"机器人""SLAM"），回答时适当关联相关领域' },
+            { key: 'styleAdaptive', label: '交互风格自适应', desc: '从你的纠正（"太长了""用表格"）中学到偏好，下次回答自动调整长度和格式' },
+            { key: 'rhythmAware', label: '工作节奏感知', desc: '记录你的活跃时段，在不同时段调整响应策略（白天简洁、周末深入）' },
+            { key: 'knowledgeGraph', label: '跨会话知识图谱', desc: '关联不同对话中讨论过的概念，下次提及时能关联之前的内容' },
+            { key: 'proactive', label: '主动推荐', desc: '基于当前上下文和历史兴趣，主动建议下一步操作（如"需要做成 PPT 吗？"）' },
+            { key: 'implicitPrefs', label: '隐式偏好推断', desc: '从你的拒绝/纠正行为中推断偏好（如"偏好轻量格式""重视证据"），不需要你主动配置' },
+          ].map(item => (
+            <div key={item.key} className="flex items-start justify-between gap-4 p-3 rounded-lg border border-glass-border/50 hover:border-brand/20 transition-colors">
+              <div className="flex-1 min-w-0">
+                <p className="text-sm text-fg-primary font-medium">{item.label}</p>
+                <p className="text-xs text-fg-muted mt-0.5">{item.desc}</p>
+              </div>
+              <button
+                onClick={() => {
+                  const next = !personalization.settings[item.key as keyof typeof personalization.settings];
+                  setPersonalization(p => ({ ...p, settings: { ...p.settings, [item.key]: next } }));
+                  api.savePersonalization({ [item.key]: next }).catch(() => {});
+                }}
+                className={`shrink-0 w-10 h-5 rounded-full transition-colors relative ${personalization.settings[item.key as keyof typeof personalization.settings] ? 'bg-brand' : 'bg-fg-disabled/30'}`}
+              >
+                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${personalization.settings[item.key as keyof typeof personalization.settings] ? 'left-5' : 'left-0.5'}`} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-3 mt-4">
+          <Button variant="ghost" onClick={() => { api.resetPersonalization().catch(() => {}); }}>清零全部个性化数据</Button>
+          <span className="text-xs text-fg-muted">删除所有观察记录，不影响功能开关状态</span>
+        </div>
       </Card>
 
       {/* 运行预算（用户可调 — 每个 run 的 token/步数上限） */}

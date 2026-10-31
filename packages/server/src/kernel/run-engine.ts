@@ -22,6 +22,7 @@ import { isEstopped, estopReason } from '../services/estop.js';
 import { HookService, type HookEvent } from '../hooks/hook-service.js';
 import { RunBudgetSettingsService } from '../services/run-budget-settings.js';
 import { evaluateDeterministic } from './self-eval.js';
+import { PersonalizationService } from '../services/personalization-service.js';
 import { WorkspaceService, type Workspace } from '../services/workspace-service.js';
 import { fsSearchTool } from '../tools/builtin/fs-search.js';
 import { docxTools } from '../tools/builtin/docx.js';
@@ -64,6 +65,11 @@ export interface StartRunInput {
   /** 多轮对话：从本会话最近 run 的末次 checkpoint 续接历史（含上一轮工具结果与最终回答） */
   continueSession?: boolean;
   extraSystem?: string;
+  /**
+   * 模型路由：指定本 run 使用的 LLM 配置档案 ID（llm_profiles 表）。
+   * 未指定 = 使用当前 active 配置。适用于"图像题切视觉模型 / 简单题切便宜模型"场景。
+   */
+  modelProfileId?: string;
 }
 
 export interface RunEngineDeps {
@@ -107,6 +113,8 @@ export class RunEngine {
   private hookSvc = new HookService(pathDirname(platformConfig.databasePath));
   /** 运行预算用户设置（data/run-budget.json — 设置页可改，优先于平台默认） */
   private budgetSettings = new RunBudgetSettingsService(pathDirname(platformConfig.databasePath));
+  /** 个性化服务（6 维度"越用越懂你"，全部默认关，设置页开关控制） */
+  private personalization = new PersonalizationService(pathDirname(platformConfig.databasePath));
 
   /** hooks 的 loop 注入形态（结构化包装 — kernel 不 import 具体服务） */
   private loopHooks = {
@@ -131,6 +139,11 @@ export class RunEngine {
 
   get checkpoints(): CheckpointStore {
     return this.deps.checkpointStore;
+  }
+
+  /** 个性化服务（设置页开关控制 — API 路由与 run-engine 注入用） */
+  get personalizationService(): PersonalizationService {
+    return this.personalization;
   }
 
   /** 习惯学习管线（API 路由用：列表/蒸馏/晋升/纠偏） */
@@ -332,8 +345,35 @@ export class RunEngine {
       const run = this.deps.runStore.get(runId)!;
       const budget = (run.budget ?? {}) as { maxSteps?: number; maxTokens?: number };
 
-      const tools = this.buildTools(runId, workspace);
-      const loop = new AgentLoop(this.deps.llm, {
+      // 模型路由：指定 modelProfileId 时为本 run 创建独立 LLM 客户端
+      //（不影响全局 active 配置 — 评测/自动化场景按题切模型的基础）
+      let runLlm = this.deps.llm;
+      let routedModel: string | undefined;
+      if (input.modelProfileId) {
+        try {
+          const profile = (await import('../services/llm-config-service.js')).getLlmConfigForRouting(input.modelProfileId);
+          if (profile) {
+            const { LLMClient } = await import('../services/llm-client.js');
+            const tempClient = new LLMClient();
+            tempClient.reconfigure({
+              baseUrl: profile.baseUrl,
+              apiKey: profile.apiKey,
+              model: profile.model,
+              provider: profile.provider,
+            });
+            runLlm = tempClient;
+            routedModel = profile.model;
+            this.emitRunEvent(runId, 'run.model_routed', { model: profile.model, profileId: profile.profileId });
+          } else {
+            this.emitRunEvent(runId, 'run.model_route_failed', { error: `profile ${input.modelProfileId} 不存在，使用默认模型` });
+          }
+        } catch (err: any) {
+          this.emitRunEvent(runId, 'run.model_route_failed', { error: err?.message ?? String(err) });
+        }
+      }
+
+      const tools = this.buildTools(runId, workspace, runLlm);
+      const loop = new AgentLoop(runLlm, {
         runId,
         agentId: 'main',
         goal: input.goal,
@@ -346,7 +386,7 @@ export class RunEngine {
         workspaceDir: workspace?.dir,
         initialHistory,
         // D18：记忆使用指引常驻系统提示；调用方的 extraSystem 追加在后
-        // D18 记忆指引 + 个人画像（越聊越懂用户）+ 协作习惯 + 具名子代理目录 + 调用方 extraSystem
+        // D18 记忆指引 + 个人画像（越聊越懂用户）+ 协作习惯 + 具名子代理目录 + 个性化（6维度，默认关）+ 调用方 extraSystem
         extraSystem: [
           MEMORY_GUIDE,
           (await import('../services/user-profile-service.js')).userProfileToPrompt(
@@ -354,6 +394,7 @@ export class RunEngine {
           ),
           this.habits.toPromptText(),
           this.agentPresets.toPromptText(),
+          this.personalization.buildInjection(input.goal),
           input.extraSystem,
         ].filter(Boolean).join('\n\n'),
         onEvent: e => this.onLoopEvent(runId, e),
@@ -569,7 +610,7 @@ export class RunEngine {
    *  · ask（默认） → fs 全量（写改 approval）+ shell（如启用，approval）
    *  · auto        → fs 权限位提为 auto；shell 保持 approval（D13）
    *  注意：todo_write 的 emit 是构造时注入的闭包（不走 ctx.emit），必须显式路由到本 run 的事件流 */
-  private buildTools(runId: string, workspace: Workspace | null): Tool[] {
+  private buildTools(runId: string, workspace: Workspace | null, llmOverride?: any): Tool[] {
     const registry = createDefaultToolRegistry({
       skillRegistry: this.deps.skillRegistry,
       skillExecutor: this.deps.skillExecutor,
@@ -606,7 +647,7 @@ export class RunEngine {
     tools.push(makePastRunsTool(taskStore as any));
     tools.push(...makeMemoryTools(new MemoryService(platformConfig.memoryDir)));
     tools.push(makeEvidenceReadTool(this.evidence));
-    tools.push(makeDualReviewTool({ llm: this.deps.llm }));
+    tools.push(makeDualReviewTool({ llm: llmOverride ?? this.deps.llm }));;
 
     // M1-4：spawn 工具 — 子预算上限为平台默认的 1/2 量级，spawn 限额 run 级共享
     const spawn = makeSpawnTool({

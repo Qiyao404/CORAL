@@ -126,6 +126,15 @@ export function listLlmConfigs(): Array<Omit<LLMConfigProfile, 'apiKey'> & { api
     }));
 }
 
+/**
+ * 模型路由用：按 profileId 取完整配置（含真实 apiKey — 仅服务端内部使用，不暴露给 API）。
+ * listLlmConfigs 会脱敏 apiKey，模型路由需要真实 key 才能创建临时 LLM 客户端。
+ */
+export function getLlmConfigForRouting(profileId: string): LLMConfigProfile | null {
+  ensureLlmConfigsInitialized();
+  return llmConfigStore.getAll().find(p => p.profileId === profileId) ?? null;
+}
+
 export function saveLlmConfig(input: SaveLlmConfigInput): LLMConfigProfile {
   ensureLlmConfigsInitialized();
   const now = nowIso();

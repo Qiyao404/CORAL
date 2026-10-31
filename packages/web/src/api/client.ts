@@ -62,6 +62,11 @@ export const api = {
   // 提示词优化（输入框 ✨ 按钮）
   optimizePrompt: (text: string) =>
     request<{ optimized: string }>('/prompt-optimize', { method: 'POST', body: JSON.stringify({ text }) }),
+  // 个性化（6 维度"越用越懂你"，默认全关）
+  getPersonalization: () => request<any>('/personalization'),
+  savePersonalization: (settings: Record<string, boolean>) =>
+    request<any>('/personalization', { method: 'PUT', body: JSON.stringify(settings) }),
+  resetPersonalization: () => request<any>('/personalization/reset', { method: 'POST' }),
 
   // LLM 配置
   listLlmConfigs: () => request<any>('/llm/configs'),
