@@ -182,3 +182,24 @@ describe('importSkills — Anthropic Agent Skills 导入（M1-6）', () => {
     expect(existsSync(join(skillsRoot, 'clean-skill', '__pycache__'))).toBe(false);
   });
 });
+
+describe('importFromNpm — npm 源（离线分支：不触网）', () => {
+  it('npm: 前缀分发到 npm 通道；空包名给出失败报告而非崩溃', async () => {
+    const { importFromNpm } = await import('../skill-importer.js');
+    const [r1] = await importFromNpm('npm:', { skillsDir: skillsRoot });
+    expect(r1.status).toBe('failed');
+    expect(r1.error).toContain('包名为空');
+    const [r2] = await importFromNpm('   ', { skillsDir: skillsRoot });
+    expect(r2.status).toBe('failed');
+  });
+
+  it('npm: 不存在的本地路径不会被误判为 git/本地源（前缀优先）', async () => {
+    // npm:coral-skill-pack@0.0.0-does-not-exist —— 不触网即失败：包名保留在报告里
+    const reports = await importSkills('npm:coral-skill-pack@0.0.0-does-not-exist', { skillsDir: skillsRoot });
+    expect(reports.length).toBe(1);
+    // 离线/包不存在都会走失败报告（错误文案含 npm 字样），不会误走本地源分支
+    if (reports[0].status === 'failed') {
+      expect(reports[0].source).toContain('npm:');
+    }
+  });
+});

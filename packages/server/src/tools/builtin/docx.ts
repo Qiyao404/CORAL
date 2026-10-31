@@ -104,7 +104,7 @@ export const docxReadTool: Tool = {
       title: (data.paragraphs?.[0] ?? '').slice(0, 200),
       count: data.count,
       text: (data.paragraphs as string[]).join('\n\n'),
-    });
+    }, `读取 Word 文档 ${String(input?.path)}（${data.count} 段）`);
   },
 };
 
@@ -153,7 +153,7 @@ export const docxWriteTool: Tool = {
       path: String(input?.path),
       paragraphs: data.paragraphs,
       note: '已生成真实 Word 文档（OOXML），可用 Word/WPS 直接打开',
-    });
+    }, `生成 Word 文档 ${String(input?.path)}（${data.paragraphs} 段）`);
   },
 };
 

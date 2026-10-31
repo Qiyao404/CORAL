@@ -68,6 +68,22 @@ export const api = {
     request<any>('/personalization', { method: 'PUT', body: JSON.stringify(settings) }),
   resetPersonalization: () => request<any>('/personalization/reset', { method: 'POST' }),
 
+  // 钩子（外部命令守卫）管理页
+  getHooks: () => request<{
+    configPath: string;
+    events: string[];
+    hooks: Record<string, Array<{ matcher?: string; command: string; timeout?: number; enabled?: boolean }>>;
+    recent: Array<{ ts: number; event: string; tool?: string; durationMs: number; decision: string; reason?: string; matched: number; failed: number }>;
+  }>('/hooks'),
+  saveHooks: (hooks: Record<string, Array<{ matcher?: string; command: string; timeout?: number; enabled?: boolean }>>) =>
+    request<{ saved: boolean }>('/hooks', { method: 'PUT', body: JSON.stringify({ hooks }) }),
+  testHook: (payload: { event: string; command: string; timeout?: number }) =>
+    request<{ exitCode: number | null; durationMs: number; decision: string; reason?: string; stdoutTail: string; stderrTail: string; timedOut: boolean }>('/hooks/test', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+      timeoutMs: 60_000,
+    }),
+
   // LLM 配置
   listLlmConfigs: () => request<any>('/llm/configs'),
   saveLlmConfig: (payload: {

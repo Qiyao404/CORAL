@@ -5,19 +5,20 @@ import {
   FileCode2, AlertTriangle, Sparkles, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { api } from '../api/client';
+import { useI18n } from '../i18n';
 import { Card, Button, Tag, Textarea, Modal, EmptyState } from '../components/ui';
 
 const REQUIRED_LABEL: Record<string, string> = {
-  name: '名称',
-  description: '描述',
-  execution_mode: '执行模式',
-  input_schema: '输入参数',
-  output_schema: '输出参数',
-  tags: '标签',
+  name: 'skillbuilder.fieldName',
+  description: 'skillbuilder.fieldDescription',
+  execution_mode: 'skillbuilder.fieldExecutionMode',
+  input_schema: 'skillbuilder.fieldInputSchema',
+  output_schema: 'skillbuilder.fieldOutputSchema',
+  tags: 'skillbuilder.fieldTags',
 };
 
 const OPTIONAL_LABEL: Record<string, string> = {
-  script_content: '脚本代码',
+  script_content: 'skillbuilder.fieldScriptContent',
 };
 
 interface ConversationMsg {
@@ -27,6 +28,7 @@ interface ConversationMsg {
 }
 
 export default function SkillBuilderPage() {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const { sessionId: urlSessionId } = useParams<{ sessionId: string }>();
   const [sessionId, setSessionId] = useState<string | undefined>(urlSessionId);
@@ -79,10 +81,10 @@ export default function SkillBuilderPage() {
         navigate(`/skill-builder/${s.sessionId}`, { replace: true });
         setConversation([{
           role: 'assistant',
-          content: '你好！我是 CORAL 的技能创建助手。请用一句话告诉我你想创建什么技能（例如：「采集小红书帖子并导出 Excel」）。\n\n小贴士：如果你的技能涉及数据采集 / 文件转换 / 计算 / 网页交互，我会帮你生成完整的 Python 脚本；如果只需要 LLM 文本生成，则只生成 prompt 即可。',
+          content: t('skillbuilder.welcomeMessage'),
           timestamp: new Date().toISOString(),
         }]);
-      }).catch((err) => setError('创建会话失败：' + err.message));
+      }).catch((err) => setError(t('skillbuilder.createSessionFailed', { msg: err.message })));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -107,7 +109,7 @@ export default function SkillBuilderPage() {
       setPending(res.pendingFields || []);
       setReadyToPreview(Boolean(res.readyToPreview));
     } catch (err: any) {
-      setError(err.message || '发送失败');
+      setError(err.message || t('skillbuilder.sendFailed'));
     } finally {
       setSending(false);
     }
@@ -155,12 +157,12 @@ export default function SkillBuilderPage() {
       navigate('/skills');
     } catch (err: any) {
       if (err.status === 409) {
-        if (confirm(`Skill "${draft.name}" 已存在，是否覆盖？`)) {
+        if (confirm(t('skillbuilder.overwriteConfirm', { name: draft.name }))) {
           await commit(true);
           return;
         }
       } else {
-        setError(err.message || '提交失败');
+        setError(err.message || t('skillbuilder.commitFailed'));
       }
     } finally {
       setCommitting(false);
@@ -182,10 +184,10 @@ export default function SkillBuilderPage() {
             onClick={() => navigate('/skills')}
             className="text-sm text-fg-muted hover:text-fg-primary flex items-center gap-1 mb-1 cursor-pointer"
           >
-            <ArrowLeft className="w-4 h-4" /> 返回技能列表
+            <ArrowLeft className="w-4 h-4" /> {t('skillbuilder.backToSkills')}
           </button>
-          <h1 className="text-xl font-heading font-bold text-fg-primary">技能创建</h1>
-          <p className="text-fg-muted text-xs mt-0.5">通过多轮对话生成 SKILL.md（必要时带 Python 脚本），提交后自动注册到平台</p>
+          <h1 className="text-xl font-heading font-bold text-fg-primary">{t('skillbuilder.title')}</h1>
+          <p className="text-fg-muted text-xs mt-0.5">{t('skillbuilder.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button
@@ -195,7 +197,7 @@ export default function SkillBuilderPage() {
             onClick={openPreview}
             disabled={!draft.name}
           >
-            预览
+            {t('skillbuilder.preview')}
           </Button>
           <Button
             disabled={!canCommit}
@@ -204,7 +206,7 @@ export default function SkillBuilderPage() {
             icon={<CheckCircle2 className="w-4 h-4" />}
             onClick={() => commit(false)}
           >
-            提交{canCommit ? '' : `（还差 ${remainingFieldsLabel.length} 项）`}
+            {canCommit ? t('skillbuilder.submit') : t('skillbuilder.submitRemaining', { n: remainingFieldsLabel.length })}
           </Button>
         </div>
       </div>
@@ -215,15 +217,15 @@ export default function SkillBuilderPage() {
           <Sparkles className="w-6 h-6 text-status-success" />
           <div className="flex-1">
             <p className="text-sm font-semibold text-status-success">
-              全部信息已收集完毕，可以提交成为 Skill 啦！
+              {t('skillbuilder.readyTitle')}
             </p>
             <p className="text-xs text-fg-secondary mt-0.5">
-              建议先点击「预览」查看完整 SKILL.md{needsScript ? ' + scripts/main.py' : ''}，确认无误后点击「提交」即可注册到平台并立即可用。
+              {t('skillbuilder.readyDesc', { script: needsScript ? ' + scripts/main.py' : '' })}
             </p>
           </div>
-          <Button size="sm" variant="ghost" onClick={openPreview} icon={<Eye className="w-4 h-4" />}>预览</Button>
+          <Button size="sm" variant="ghost" onClick={openPreview} icon={<Eye className="w-4 h-4" />}>{t('skillbuilder.preview')}</Button>
           <Button size="sm" loading={committing} onClick={() => commit(false)} icon={<CheckCircle2 className="w-4 h-4" />}>
-            立即提交
+            {t('skillbuilder.submitNow')}
           </Button>
         </div>
       )}
@@ -231,26 +233,25 @@ export default function SkillBuilderPage() {
       {/* 字段进度 */}
       <Card className="!p-3 mb-4">
         <div className="flex flex-wrap gap-2 items-center text-xs">
-          <span className="text-fg-muted shrink-0">必填字段（{filled.length}/{Object.keys(REQUIRED_LABEL).length}）：</span>
+          <span className="text-fg-muted shrink-0">{t('skillbuilder.requiredFields', { filled: filled.length, total: Object.keys(REQUIRED_LABEL).length })}</span>
           {Object.keys(REQUIRED_LABEL).map(f => (
             <Tag key={f} variant={filled.includes(f) ? 'success' : 'warn'}>
-              {filled.includes(f) ? '✓' : '○'} {REQUIRED_LABEL[f]}
+              {filled.includes(f) ? '✓' : '○'} {t(REQUIRED_LABEL[f])}
             </Tag>
           ))}
           {needsScript && (
             <>
               <span className="text-fg-muted shrink-0 ml-2">|</span>
               <Tag variant={hasScript ? 'success' : 'danger'}>
-                {hasScript ? '✓' : '○'} {OPTIONAL_LABEL.script_content}
+                {hasScript ? '✓' : '○'} {t(OPTIONAL_LABEL.script_content)}
               </Tag>
             </>
           )}
-          {canCommit && <Tag variant="brand">✓ 准备就绪</Tag>}
+          {canCommit && <Tag variant="brand">{t('skillbuilder.readyBadge')}</Tag>}
         </div>
         {!canCommit && remainingFieldsLabel.length > 0 && (
           <p className="text-xs text-fg-muted mt-2">
-            还需要：
-            {remainingFieldsLabel.map(f => REQUIRED_LABEL[f] || OPTIONAL_LABEL[f] || f).join('、')}
+            {t('skillbuilder.stillNeeded')}{remainingFieldsLabel.map(f => t(REQUIRED_LABEL[f] || OPTIONAL_LABEL[f] || f)).join(t('skillbuilder.fieldSeparator'))}
           </p>
         )}
       </Card>
@@ -259,12 +260,12 @@ export default function SkillBuilderPage() {
         {/* 左：对话区 */}
         <Card className="!p-0 flex flex-col min-h-0">
           <div className="px-4 py-3 border-b border-glass-border text-sm font-semibold text-fg-primary flex items-center justify-between">
-            <span>对话区</span>
-            <span className="text-xs font-normal text-fg-muted">{conversation.length} 条消息</span>
+            <span>{t('skillbuilder.conversationArea')}</span>
+            <span className="text-xs font-normal text-fg-muted">{t('skillbuilder.messageCount', { n: conversation.length })}</span>
           </div>
           <div className="flex-1 overflow-auto p-4 space-y-3 min-h-0">
             {conversation.length === 0 ? (
-              <EmptyState title="开始对话" description="描述你想要的技能能力" />
+              <EmptyState title={t('skillbuilder.conversationEmptyTitle')} description={t('skillbuilder.conversationEmptyDesc')} />
             ) : conversation.map((m, i) => (
               <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-md rounded-2xl px-4 py-2 text-sm ${
@@ -279,7 +280,7 @@ export default function SkillBuilderPage() {
             {sending && (
               <div className="flex justify-start">
                 <div className="glass rounded-2xl px-4 py-2 text-sm flex items-center gap-2">
-                  <Loader2 className="w-3 h-3 animate-spin" /> AI 思考中...
+                  <Loader2 className="w-3 h-3 animate-spin" /> {t('skillbuilder.thinking')}
                 </div>
               </div>
             )}
@@ -288,10 +289,10 @@ export default function SkillBuilderPage() {
               <div className="flex justify-start">
                 <div className="rounded-2xl px-4 py-2 text-sm bg-status-success/10 border border-status-success/30 text-status-success max-w-md">
                   <div className="flex items-center gap-2 font-semibold mb-0.5">
-                    <CheckCircle2 className="w-4 h-4" /> 已收集完毕
+                    <CheckCircle2 className="w-4 h-4" /> {t('skillbuilder.collectedDone')}
                   </div>
                   <div className="text-xs text-fg-secondary">
-                    所有必填信息齐全{needsScript ? '（含 Python 脚本）' : ''}，可点击右上角「提交」生成技能。
+                    {t('skillbuilder.readyChatHint', { withScript: needsScript ? t('skillbuilder.withPythonScript') : '' })}
                   </div>
                 </div>
               </div>
@@ -309,7 +310,7 @@ export default function SkillBuilderPage() {
                   send();
                 }
               }}
-              placeholder="描述你的技能能力，回车发送（Shift+Enter 换行）"
+              placeholder={t('skillbuilder.inputPlaceholder')}
               className="!h-auto"
             />
             {speechSupported && (
@@ -319,10 +320,10 @@ export default function SkillBuilderPage() {
                 onClick={listening ? stopVoice : startVoice}
                 icon={listening ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
               >
-                {listening ? '停止' : '语音'}
+                {listening ? t('skillbuilder.stopVoice') : t('skillbuilder.voice')}
               </Button>
             )}
-            <Button onClick={send} loading={sending} icon={<Send className="w-4 h-4" />}>发送</Button>
+            <Button onClick={send} loading={sending} icon={<Send className="w-4 h-4" />}>{t('skillbuilder.send')}</Button>
           </div>
         </Card>
 
@@ -330,7 +331,7 @@ export default function SkillBuilderPage() {
         <Card className="!p-0 flex flex-col min-h-0">
           <div className="px-4 py-3 border-b border-glass-border text-sm font-semibold text-fg-primary flex items-center justify-between">
             <span className="flex items-center gap-2">
-              <Code2 className="w-4 h-4" /> SKILL.md 实时草稿
+              <Code2 className="w-4 h-4" /> {t('skillbuilder.liveDraft')}
             </span>
             {draft.executionMode && (
               <Tag variant={needsScript ? 'info' : 'default'}>
@@ -357,10 +358,10 @@ export default function SkillBuilderPage() {
                     scripts/main.py
                     {hasScript ? (
                       <Tag variant="success">
-                        {String(draft.scriptContent).split('\n').length} 行
+                        {t('skillbuilder.lineCount', { n: String(draft.scriptContent).split('\n').length })}
                       </Tag>
                     ) : (
-                      <Tag variant="danger">缺失</Tag>
+                      <Tag variant="danger">{t('skillbuilder.missing')}</Tag>
                     )}
                   </span>
                 </button>
@@ -370,21 +371,20 @@ export default function SkillBuilderPage() {
                       <div className="p-3 rounded-lg bg-status-danger/10 border border-status-danger/30 text-status-danger text-xs flex items-start gap-2">
                         <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                         <div className="flex-1 min-w-0">
-                          <p className="font-semibold mb-1">脚本代码缺失</p>
+                          <p className="font-semibold mb-1">{t('skillbuilder.scriptMissingTitle')}</p>
                           <p className="text-fg-secondary mb-2">
-                            执行模式为 <span className="font-mono">{draft.executionMode}</span>，需要 Python 脚本才能运行。
-                            请在左侧对话框告诉 AI <span className="font-mono">"请把完整脚本写在 &lt;SCRIPT&gt; 块的 ```python``` 代码块里"</span>，让它重新生成。
+                            {t('skillbuilder.scriptMissingMode')} <span className="font-mono">{draft.executionMode}</span>{t('skillbuilder.scriptMissingNeed')}{' '}
+                            {t('skillbuilder.scriptMissingTell')} <span className="font-mono">{t('skillbuilder.scriptQuote1')}</span>{t('skillbuilder.scriptMissingRegen')}
                           </p>
                           <p className="text-fg-muted">
-                            或：直接告诉 AI <span className="italic">"请重发上一条回复，把脚本放在 &lt;SCRIPT&gt; 标签内的 ```python``` 围栏中"</span>。
-                            CORAL 会自动从代码块抽取脚本，无需 JSON 转义。
+                            {t('skillbuilder.scriptAltPre')} <span className="italic">{t('skillbuilder.scriptQuote2')}</span>{t('skillbuilder.scriptAltPost')}
                           </p>
                         </div>
                       </div>
                     ) : (
                       <pre className="text-xs font-mono bg-bg-panel/60 border border-glass-border rounded-lg p-3 overflow-auto max-h-64 text-fg-primary">
                         {String(draft.scriptContent || '').slice(0, 5000)}
-                        {String(draft.scriptContent || '').length > 5000 ? '\n\n... (脚本过长，已截断)' : ''}
+                        {String(draft.scriptContent || '').length > 5000 ? '\n\n' + t('skillbuilder.scriptTruncated') : ''}
                       </pre>
                     )}
                   </div>
@@ -404,16 +404,16 @@ export default function SkillBuilderPage() {
       <Modal
         open={showPreview}
         onClose={() => setShowPreview(false)}
-        title="SKILL.md 预览"
+        title={t('skillbuilder.previewTitle')}
         width="max-w-3xl"
       >
         <pre className="bg-bg-panel/60 rounded-lg p-4 text-xs text-fg-secondary overflow-auto max-h-[60vh] font-mono whitespace-pre-wrap">
-          {preview || '（暂无预览）'}
+          {preview || t('skillbuilder.noPreview')}
         </pre>
         {hasScript && (
           <div className="mt-3">
             <p className="text-xs text-fg-muted mb-2 flex items-center gap-1">
-              <FileCode2 className="w-3 h-3" /> scripts/main.py（落盘后真实路径）
+              <FileCode2 className="w-3 h-3" /> {t('skillbuilder.scriptRealPath')}
             </p>
             <pre className="bg-bg-panel/60 rounded-lg p-4 text-xs text-fg-secondary overflow-auto max-h-[40vh] font-mono whitespace-pre-wrap">
               {String(draft.scriptContent || '')}
@@ -426,8 +426,9 @@ export default function SkillBuilderPage() {
 }
 
 function DraftPreview({ draft, filled }: { draft: any; filled: string[] }) {
+  const { t } = useI18n();
   if (!draft || Object.keys(draft).length === 0) {
-    return <span className="text-fg-disabled">（草稿尚未填充任何字段）</span>;
+    return <span className="text-fg-disabled">{t('skillbuilder.draftEmpty')}</span>;
   }
 
   const lines: Array<{ key: string; text: string }> = [{ key: '_open', text: '---' }];
@@ -448,7 +449,7 @@ function DraftPreview({ draft, filled }: { draft: any; filled: string[] }) {
   }
   lines.push({ key: '_close', text: '---' });
   lines.push({ key: '_gap', text: '' });
-  lines.push({ key: 'promptContent', text: draft.promptContent || '(prompt 待生成)' });
+  lines.push({ key: 'promptContent', text: draft.promptContent || t('skillbuilder.promptPending') });
 
   return (
     <>

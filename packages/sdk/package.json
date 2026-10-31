@@ -1,0 +1,14 @@
+{
+  "name": "@coral/sdk",
+  "version": "2.2.0",
+  "description": "CORAL Agent SDK — embed the agent runtime as a library (no HTTP server required)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@coral/server": "*"
+  }
+}

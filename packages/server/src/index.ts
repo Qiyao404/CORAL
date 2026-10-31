@@ -37,6 +37,7 @@ import { registerSkillImportRoutes } from './api/skill-import.routes.js';
 import { registerCompanyProfileRoutes } from './api/company-profile.routes.js';
 import { registerUserProfileRoutes } from './api/company-profile.routes.js';
 import { registerOpsRoutes } from './api/ops.routes.js';
+import { registerHooksRoutes } from './api/hooks.routes.js';
 import { seedAgentPresets } from './services/agent-presets.js';
 import { seedSlashCommands } from './services/slash-commands.js';
 import { closeDb } from './store/db.js';
@@ -207,6 +208,7 @@ async function main() {
   registerUserProfileRoutes(app);
   registerRunRoutes(app, runEngine, graphRunService);
   registerOpsRoutes(app, runEngine, llmClient);
+  registerHooksRoutes(app, runEngine.hooks);
   registerMcpRoutes(app, mcpClient);
 
   // M3-5：触发器 — fire 即创建 run（free/graph 均可），60s 调度循环

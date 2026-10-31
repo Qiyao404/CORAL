@@ -127,6 +127,17 @@ LLM_MODEL=kimi-k2.5
 5. 字段进度条全绿后点「预览」检查 → 「提交」
 6. 技能列表立即出现新 Skill，可直接调用
 
+另一种方式是**安装现成的技能包**（npm / git / 本地目录三源）：
+
+```bash
+coral install npm:coral-skill-pack       # npm 技能包（--ignore-scripts 隔离安装）
+coral install https://github.com/u/repo  # git 仓库（支持 tree 子路径）
+coral install ./my-skill-dir             # 本地目录
+coral install npm:coral-skill-pack --overwrite   # 同名覆盖（旧版备份进 skills/.history/）
+```
+
+多技能包约定把各技能放在包内 `skills/` 一级子目录，单技能包在包根放 `SKILL.md`；安装落盘即热加载，无需重启。
+
 ---
 
 ## 7. 编辑 / 删除技能
@@ -221,6 +232,8 @@ Agent 的工具调用被自动观察（`data/habits/observations.jsonl`），攒
 - **契约**：stdin 收 JSON（事件+上下文）；stdout 可解析 JSON 时取 `{decision, reason, updatedInput, additionalContext}`；退出码 2 = 拒绝（stderr 为原因）
 - **安全方向**：pre_tool_use 的守卫自身故障/超时 = 拒绝执行（fail-closed）；观察类事件故障 = 放行
 - `matcher` 是工具名正则，仅工具类事件生效
+
+**可视化管理的另一条路**：左侧「**钩子**」页可以完全替代手编 JSON——按事件分组添加/编辑/删除守卫、填写工具名正则与超时、逐条启停（停用保留配置不触发）、**测试按钮**用样例载荷真实执行一条命令（返回裁决解析 + 原始 stdout/stderr），页面底部是最近 100 条命中裁决流（事件 / 工具 / 决策 / 耗时）。两种方式等价（同一份 `hooks.json`），改动均自动热加载。
 
 ### 9.5 斜杠命令（用户快捷指令）
 

@@ -35,5 +35,13 @@
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^5.0.3"
+  },
+  "main": "./dist/embedded.js",
+  "types": "./dist/embedded.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/embedded.d.ts",
+      "default": "./dist/embedded.js"
+    }
   }
 }

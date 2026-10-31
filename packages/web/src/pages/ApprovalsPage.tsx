@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { ShieldAlert, CheckCircle2, XCircle, Loader2, RefreshCw } from 'lucide-react';
 import { api } from '../api/client';
 import { Tag } from '../components/ui';
+import { useI18n } from '../i18n';
 
 /**
  * M2-4：审批中心 — 跨 run 汇聚全部待审批（Free 模式工具审批 + Graph 模式节点审批）。
@@ -19,6 +20,7 @@ interface PendingItem {
 }
 
 export default function ApprovalsPage() {
+  const { t } = useI18n();
   const [items, setItems] = useState<PendingItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [edits, setEdits] = useState<Record<string, string>>({});
@@ -42,13 +44,13 @@ export default function ApprovalsPage() {
     let input: any;
     const draft = edits[approvalId];
     if (approved && draft && draft.trim()) {
-      try { input = JSON.parse(draft); } catch { alert('参数 JSON 不合法'); return; }
+      try { input = JSON.parse(draft); } catch { alert(t('approvals.invalidJson')); return; }
     }
     try {
       await api.resolveApproval(runId, approvalId, approved, input);
       await refresh();
     } catch (err: any) {
-      alert('审批失败: ' + err.message);
+      alert(t('approvals.failed', { msg: err.message }));
     }
   };
 
@@ -59,44 +61,44 @@ export default function ApprovalsPage() {
           <ShieldAlert className="w-5 h-5 text-brand" />
         </div>
         <div className="flex-1">
-          <h1 className="text-xl font-heading font-medium text-fg-primary">审批中心</h1>
-          <p className="text-xs text-fg-muted">跨 run 待审批（工具级 + 节点级）· 4 秒自动刷新</p>
+          <h1 className="text-xl font-heading font-medium text-fg-primary">{t('approvals.title')}</h1>
+          <p className="text-xs text-fg-muted">{t('approvals.subtitle')}</p>
         </div>
         <button onClick={refresh} className="p-2 glass border border-glass-border rounded-lg cursor-pointer hover:border-brand/40">
           {loading ? <Loader2 className="w-4 h-4 animate-spin text-fg-muted" /> : <RefreshCw className="w-4 h-4 text-fg-muted" />}
         </button>
       </div>
       <div className="glass rounded-xl border border-glass-border p-3 text-xs text-fg-secondary leading-6">
-        <p><b>这里汇聚什么？</b>两类需要你点头才能继续的操作：① <b>工具审批</b>（对话模式里 Agent 要改工作区文件、跑命令时弹的 diff 卡片）；② <b>节点审批</b>（Workflow 里标了 <code className="text-brand">permission: approval</code> 的节点，执行前挂起）。</p>
-        <p className="mt-1"><b>三个选择</b>：<b>通过</b>＝按原参数放行；<b>拒绝</b>＝该操作/节点失败（Graph 里其后代节点会级联跳过）；<b>改参数后通过</b>＝只在节点审批出现 — 编辑参数 JSON 再点通过，改后的参数就是节点实际使用的输入（比如改采集的站点、摘要的字数）。</p>
+        <p><b>{t('approvals.whatTitle')}</b>{t('approvals.whatLead')}<b>{t('approvals.toolApproval')}</b>{t('approvals.whatTool')}<b>{t('approvals.nodeApproval')}</b>{t('approvals.whatNode')}<code className="text-brand">permission: approval</code>{t('approvals.whatNodeEnd')}</p>
+        <p className="mt-1"><b>{t('approvals.choicesTitle')}</b>{t('approvals.choicesColon')}<b>{t('approvals.approve')}</b>{t('approvals.choicesApprove')}<b>{t('approvals.deny')}</b>{t('approvals.choicesDeny')}<b>{t('approvals.approveEdited')}</b>{t('approvals.choicesApproveEdited')}</p>
       </div>
 
       {items.length === 0 && (
         <div className="glass rounded-xl border border-glass-border p-8 text-center">
           <CheckCircle2 className="w-8 h-8 text-status-success mx-auto mb-2" />
-          <p className="text-sm text-fg-secondary">没有待审批的请求</p>
+          <p className="text-sm text-fg-secondary">{t('approvals.empty')}</p>
         </div>
       )}
 
       {items.map(item => (
         <div key={item.approvalId} className="glass rounded-xl border border-status-warning/30 p-4 space-y-2">
           <div className="flex items-center gap-2 text-xs">
-            <Tag variant={item.kind === 'node' ? 'brand' : 'info'}>{item.kind === 'node' ? 'Graph 节点' : '工具'}</Tag>
+            <Tag variant={item.kind === 'node' ? 'brand' : 'info'}>{item.kind === 'node' ? t('approvals.graphNode') : t('approvals.tool')}</Tag>
             <span className="text-fg-primary font-medium">{item.node ?? item.tool}</span>
             {item.skill && <span className="text-fg-muted">{item.skill}</span>}
             <span className="flex-1" />
             <span className="text-fg-muted font-mono">{item.runId}</span>
           </div>
           {item.goal && (
-            <p className="text-xs text-fg-muted">所属任务：{item.goal}</p>
+            <p className="text-xs text-fg-muted">{t('approvals.belongTask', { goal: item.goal })}</p>
           )}
           {item.kind === 'node' && (
             <>
-              <pre className="text-xs text-fg-muted glass border border-glass-border rounded-lg p-2 max-h-24 overflow-y-auto whitespace-pre-wrap break-words">当前参数：{JSON.stringify(item.input ?? {}, null, 2)}</pre>
+              <pre className="text-xs text-fg-muted glass border border-glass-border rounded-lg p-2 max-h-24 overflow-y-auto whitespace-pre-wrap break-words">{t('approvals.currentParams')}{JSON.stringify(item.input ?? {}, null, 2)}</pre>
               <textarea
                 value={edits[item.approvalId] ?? ''}
                 onChange={e => setEdits(prev => ({ ...prev, [item.approvalId]: e.target.value }))}
-                placeholder='（可选）修改参数 JSON — 留空则按上面显示的原参数执行'
+                placeholder={t('approvals.editParamsPlaceholder')}
                 spellCheck={false}
                 className="w-full h-20 glass border border-glass-border rounded-lg p-2 font-mono text-xs text-fg-primary outline-none focus:border-brand/40 resize-none"
               />
@@ -105,11 +107,11 @@ export default function ApprovalsPage() {
           <div className="flex gap-2">
             <button onClick={() => decide(item.runId, item.approvalId, true)}
               className="px-3 py-1.5 rounded-lg bg-status-success/90 text-white text-xs cursor-pointer hover:bg-status-success flex items-center gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5" /> 通过{item.kind === 'node' ? '并继续' : ''}
+              <CheckCircle2 className="w-3.5 h-3.5" /> {t('approvals.approve')}{item.kind === 'node' ? t('approvals.andContinue') : ''}
             </button>
             <button onClick={() => decide(item.runId, item.approvalId, false)}
               className="px-3 py-1.5 rounded-lg bg-status-danger/90 text-white text-xs cursor-pointer hover:bg-status-danger flex items-center gap-1">
-              <XCircle className="w-3.5 h-3.5" /> 拒绝
+              <XCircle className="w-3.5 h-3.5" /> {t('approvals.deny')}
             </button>
           </div>
         </div>

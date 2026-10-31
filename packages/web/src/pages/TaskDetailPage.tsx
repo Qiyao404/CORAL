@@ -5,11 +5,12 @@ import { api } from '../api/client';
 import { useTaskStream, type ArtifactItem, type ProgressState } from '../hooks/useTaskStream';
 import { Card, Tag, Button, ProgressBar, EmptyState, Skeleton, ConnectionDot } from '../components/ui';
 import { AgentDag, type AgentNodeData } from '../components/dag/AgentDag';
+import { useI18n } from '../i18n';
 
 const taskStatusLabels: Record<string, string> = {
-  created: '已创建', planning: '规划中', executing: '执行中',
-  completed: '已完成', failed: '已失败', cancelled: '已取消',
-  waiting_human: '等待审批',
+  created: 'taskdetail.statusCreated', planning: 'taskdetail.statusPlanning', executing: 'taskdetail.statusExecuting',
+  completed: 'taskdetail.statusCompleted', failed: 'taskdetail.statusFailed', cancelled: 'taskdetail.statusCancelled',
+  waiting_human: 'taskdetail.statusWaitingHuman',
 };
 
 const taskStatusVariant: Record<string, 'default' | 'success' | 'warn' | 'danger' | 'info'> = {
@@ -40,6 +41,7 @@ function formatBytes(bytes?: number): string {
 export default function TaskDetailPage() {
   const { taskId } = useParams<{ taskId: string }>();
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [taskData, setTaskData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [logsOpen, setLogsOpen] = useState(true);
@@ -86,7 +88,7 @@ export default function TaskDetailPage() {
 
   const handleCancel = async () => {
     if (!taskId) return;
-    try { await api.cancelTask(taskId); } catch (err: any) { alert('取消失败: ' + (err.message || err)); }
+    try { await api.cancelTask(taskId); } catch (err: any) { alert(t('taskdetail.cancelFailed', { msg: err.message || err })); }
     refresh();
   };
 
@@ -180,7 +182,7 @@ export default function TaskDetailPage() {
           step: existing?.step,
           total: existing?.total,
           percent: 100,
-          message: existing?.message || '已完成',
+          message: existing?.message || t('taskdetail.statusCompleted'),
           updatedAt: ag.completedAt || existing?.updatedAt || new Date().toISOString(),
         };
       } else if (ag.status === 'failed' && !existing) {
@@ -189,13 +191,13 @@ export default function TaskDetailPage() {
           skillName: ag.assignedSkills?.[0] || '',
           phase: 'failed',
           percent: 0,
-          message: ag.error?.message || '执行失败',
+          message: ag.error?.message || t('taskdetail.execFailed'),
           updatedAt: ag.completedAt || new Date().toISOString(),
         };
       }
     }
     return out;
-  }, [progressByAgent, taskData]);
+  }, [progressByAgent, taskData, t]);
 
   if (loading) {
     return (
@@ -206,7 +208,7 @@ export default function TaskDetailPage() {
       </div>
     );
   }
-  if (!taskData) return <div className="p-8 text-fg-muted">任务不存在</div>;
+  if (!taskData) return <div className="p-8 text-fg-muted">{t('taskdetail.notFound')}</div>;
 
   const { task, plan } = taskData;
   const agents = plan?.agents || [];
@@ -218,7 +220,7 @@ export default function TaskDetailPage() {
         onClick={() => navigate('/tasks')}
         className="text-sm text-fg-muted hover:text-fg-primary mb-4 inline-flex items-center gap-1 cursor-pointer"
       >
-        <ArrowLeft className="w-4 h-4" /> 返回任务列表
+        <ArrowLeft className="w-4 h-4" /> {t('taskdetail.backToList')}
       </button>
 
       <div className="flex items-start justify-between mb-6 gap-4">
@@ -235,22 +237,22 @@ export default function TaskDetailPage() {
             <span>·</span>
             <ConnectionDot
               state={transport === 'both' ? 'connected' : transport === 'none' ? 'disconnected' : 'partial'}
-              label={`传输：${transport.toUpperCase()}`}
+              label={t('taskdetail.transport', { transport: transport.toUpperCase() })}
             />
             <span>WS {wsConnected ? '✓' : '✗'} · SSE {sseConnected ? '✓' : '✗'}</span>
           </div>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <Tag variant={taskStatusVariant[task.status] || 'default'}>
-            {taskStatusLabels[task.status] || task.status}
+            {t(taskStatusLabels[task.status] || task.status)}
           </Tag>
           {['planning', 'executing'].includes(task.status) && (
-            <Button variant="danger" size="sm" icon={<X className="w-4 h-4" />} onClick={handleCancel}>取消任务</Button>
+            <Button variant="danger" size="sm" icon={<X className="w-4 h-4" />} onClick={handleCancel}>{t('taskdetail.cancelTask')}</Button>
           )}
           {task.metadata?.kind === 'run' && ['completed', 'failed'].includes(task.status) && (
             <a href={`/api/runs/${taskId}/export.md`} download
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold glass border border-glass-borderStrong text-fg-primary hover:bg-bg-elev/60 cursor-pointer">
-              <FileDown className="w-4 h-4" /> 导出报告
+              <FileDown className="w-4 h-4" /> {t('taskdetail.exportReport')}
             </a>
           )}
         </div>
@@ -258,7 +260,7 @@ export default function TaskDetailPage() {
 
       {agents.length > 0 && (
         <Card className="mb-6">
-          <h2 className="font-heading font-semibold text-fg-primary mb-2">执行计划 DAG</h2>
+          <h2 className="font-heading font-semibold text-fg-primary mb-2">{t('taskdetail.planDag')}</h2>
           {plan?.plannerReasoning && (
             <p className="text-sm text-fg-muted mb-4 p-3 bg-bg-panel/50 rounded-lg border border-glass-border">
               {plan.plannerReasoning}
@@ -285,7 +287,7 @@ export default function TaskDetailPage() {
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-semibold text-fg-primary">{a.name}</span>
                       <Tag variant={status === 'completed' ? 'success' : status === 'failed' ? 'danger' : status === 'running' ? 'info' : 'default'}>
-                        {taskStatusLabels[status] || status}
+                        {t(taskStatusLabels[status] || status)}
                       </Tag>
                     </div>
                     <p className="text-xs text-fg-muted line-clamp-2">{a.role}</p>
@@ -306,10 +308,10 @@ export default function TaskDetailPage() {
 
         <Card>
           <h3 className="font-heading font-semibold text-fg-primary mb-3 flex items-center gap-2">
-            <FileText className="w-4 h-4" /> 产物（{mergedArtifacts.length}）
+            <FileText className="w-4 h-4" /> {t('taskdetail.artifactsTitle', { n: mergedArtifacts.length })}
           </h3>
           {mergedArtifacts.length === 0 ? (
-            <p className="text-sm text-fg-muted">暂无产物</p>
+            <p className="text-sm text-fg-muted">{t('taskdetail.noArtifacts')}</p>
           ) : (
             <div className="space-y-2">
               {mergedArtifacts.map((a, i) => (
@@ -335,14 +337,14 @@ export default function TaskDetailPage() {
 
       {task.error && (
         <Card className="mb-6 border-status-danger/30">
-          <h2 className="font-heading font-semibold text-status-danger mb-3">错误信息</h2>
+          <h2 className="font-heading font-semibold text-status-danger mb-3">{t('taskdetail.errorInfo')}</h2>
           <pre className="text-sm text-status-danger font-mono whitespace-pre-wrap">{JSON.stringify(task.error, null, 2)}</pre>
         </Card>
       )}
 
       {task.result && (
         <Card className="mb-6">
-          <h2 className="font-heading font-semibold text-fg-primary mb-3">执行结果</h2>
+          <h2 className="font-heading font-semibold text-fg-primary mb-3">{t('taskdetail.executionResult')}</h2>
           <pre className="bg-bg-panel/60 rounded-lg p-4 text-xs text-fg-secondary overflow-auto max-h-96 font-mono">
             {JSON.stringify(task.result, null, 2)}
           </pre>
@@ -355,11 +357,11 @@ export default function TaskDetailPage() {
           onClick={() => setLogsOpen(v => !v)}
         >
           <span className="flex items-center gap-2">
-            实时日志 / 事件时间线
-            <Tag variant="default">日志 {logs.length}</Tag>
-            <Tag variant="info">事件 {events.length}</Tag>
+            {t('taskdetail.logsTimeline')}
+            <Tag variant="default">{t('taskdetail.logCount', { n: logs.length })}</Tag>
+            <Tag variant="info">{t('taskdetail.eventCount', { n: events.length })}</Tag>
             {(['completed','failed','cancelled'].includes(task.status)) && (
-              <Tag variant="success">已归档</Tag>
+              <Tag variant="success">{t('taskdetail.archived')}</Tag>
             )}
           </span>
           {logsOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
@@ -367,13 +369,12 @@ export default function TaskDetailPage() {
         {logsOpen && (
           <div className="font-mono text-xs space-y-1 max-h-96 overflow-auto">
             {logs.length === 0 && events.length === 0 && (
-              <EmptyState title="暂无日志" description="任务尚未运行，或事件已被内存与持久化双重淘汰" />
+              <EmptyState title={t('taskdetail.noLogsTitle')} description={t('taskdetail.noLogsDesc')} />
             )}
             {/* 任务完成态下，若日志已被淘汰则给出说明 */}
             {logs.length === 0 && events.length > 0 && ['completed','failed','cancelled'].includes(task.status) && (
               <div className="text-fg-muted bg-bg-panel/40 rounded p-2 mb-1">
-                ⓘ 任务已归档：高频日志（skill.log / skill.progress）出于体积考虑不会持久化，
-                以下展示从 audit_logs 重建的关键事件时间线。
+                {t('taskdetail.archivedNote')}
               </div>
             )}
             {logs.slice(-200).map((log, i) => (
@@ -401,7 +402,7 @@ export default function TaskDetailPage() {
       </Card>
 
       <div className="mt-4 text-xs text-fg-muted">
-        <Link to="/tasks" className="text-brand hover:text-brand-hover cursor-pointer">← 返回列表</Link>
+        <Link to="/tasks" className="text-brand hover:text-brand-hover cursor-pointer">{t('taskdetail.backLink')}</Link>
       </div>
     </div>
   );
@@ -422,6 +423,7 @@ function GoalDisplay({
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const { t } = useI18n();
   const text = (goal || '').trim();
   const isMultiLine = text.includes('\n') || text.length > 80;
 
@@ -432,8 +434,8 @@ function GoalDisplay({
           <button
             type="button"
             onClick={onToggle}
-            title={expanded ? '收起' : '展开完整内容'}
-            aria-label={expanded ? '收起' : '展开'}
+            title={expanded ? t('taskdetail.collapse') : t('taskdetail.expandFull')}
+            aria-label={expanded ? t('taskdetail.collapse') : t('taskdetail.expand')}
             className="mt-1 p-1 rounded-md text-fg-muted hover:text-fg-primary hover:bg-bg-elev/40 cursor-pointer transition-colors shrink-0"
           >
             {expanded ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
@@ -448,12 +450,12 @@ function GoalDisplay({
             onClick={isMultiLine ? onToggle : undefined}
             title={isMultiLine ? text : undefined}
           >
-            {text || '（未命名任务）'}
+            {text || t('taskdetail.unnamedTask')}
           </h1>
         ) : (
           <div className="flex-1 min-w-0">
             <h1 className="text-sm font-heading font-semibold text-fg-primary leading-snug mb-1">
-              任务目标（完整）
+              {t('taskdetail.goalFull')}
             </h1>
             <pre
               className="text-xs text-fg-secondary whitespace-pre-wrap break-words font-body leading-relaxed bg-bg-panel/50 border border-glass-border rounded-lg p-3 max-h-64 overflow-auto"

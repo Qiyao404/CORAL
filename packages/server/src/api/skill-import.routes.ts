@@ -5,13 +5,13 @@ import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-regist
 
 /**
  * M1-6：技能导入 API — Anthropic Agent Skills 格式 → CORAL 技能库。
- * source：本地技能目录 / 含多技能的父目录 / git URL（支持 GitHub tree 子路径）。
+ * source：本地技能目录 / 含多技能的父目录 / git URL（支持 GitHub tree 子路径）/ npm:<spec>。
  */
 export function registerSkillImportRoutes(app: FastifyInstance, registry: FilesystemSkillRegistry): void {
   app.post('/api/skills/import', async (request, reply) => {
     const body = (request.body || {}) as { source?: string; overwrite?: boolean };
     if (typeof body.source !== 'string' || !body.source.trim()) {
-      return reply.status(400).send({ error: '缺少 source（本地目录或 git URL）' });
+      return reply.status(400).send({ error: '缺少 source（本地目录 / git URL / npm:包名）' });
     }
 
     const reports = await importSkills(body.source.trim(), {

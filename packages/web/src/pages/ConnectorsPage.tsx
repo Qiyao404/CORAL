@@ -4,6 +4,7 @@ import {
   Loader2, CheckCircle2, XCircle, AlertTriangle, Copy, HelpCircle,
 } from 'lucide-react';
 import { api } from '../api/client';
+import { useI18n } from '../i18n';
 import { Tag } from '../components/ui';
 
 /**
@@ -26,11 +27,12 @@ interface TriggerItem {
 
 /** 使用指引（用户实测反馈"看不懂怎么操作"） */
 function GuidePanel({ tab }: { tab: 'mcp' | 'triggers' }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(() => localStorage.getItem('coral.conn.guide') !== '1');
   if (!open) {
     return (
       <button onClick={() => setOpen(true)} className="text-xs text-fg-muted flex items-center gap-1 cursor-pointer hover:text-brand">
-        <HelpCircle className="w-3.5 h-3.5" /> {tab === 'mcp' ? 'MCP 工具是什么？怎么用？' : '触发器是什么？怎么用？'}（附例子）
+        <HelpCircle className="w-3.5 h-3.5" /> {tab === 'mcp' ? t('connectors.guideMcpQuestion') : t('connectors.guideTriggerQuestion')}{t('connectors.guideWithExamples')}
       </button>
     );
   }
@@ -38,23 +40,23 @@ function GuidePanel({ tab }: { tab: 'mcp' | 'triggers' }) {
     <div className="glass rounded-xl border border-glass-border p-4 text-xs text-fg-secondary leading-6">
       <div className="flex items-center gap-2 mb-2">
         <HelpCircle className="w-4 h-4 text-brand" />
-        <span className="font-medium text-fg-primary">{tab === 'mcp' ? 'MCP 工具接入指引' : '触发器使用指引'}</span>
+        <span className="font-medium text-fg-primary">{tab === 'mcp' ? t('connectors.guideMcpTitle') : t('connectors.guideTriggerTitle')}</span>
         <span className="flex-1" />
         <button onClick={() => { setOpen(false); localStorage.setItem('coral.conn.guide', '1'); }}
-          className="text-fg-muted hover:text-fg-primary cursor-pointer">收起</button>
+          className="text-fg-muted hover:text-fg-primary cursor-pointer">{t('connectors.collapse')}</button>
       </div>
       {tab === 'mcp' ? (
         <>
-          <p><b>MCP 是什么</b>：一个公开标准，让 Agent 能"借用到人的工具"。别人做好了现成的工具服务（读文件、搜网页、操作数据库…），你在这里填一行配置接进来，Agent 在对话里就能直接调用它们 —— 就像给手机装 App。</p>
-          <p className="mt-2"><b>试着接入第一个</b>（全程可逆，随时删）：点「添加 MCP Server」→ 名称填 <code className="text-brand">filesystem</code> → 选 stdio → command 填 <code className="text-brand">npx</code> → 参数填 <code className="text-brand">-y @modelcontextprotocol/server-filesystem D:/某个文件夹</code> → 连接。之后去「对话」页说"列一下那个文件夹里的文件"，Agent 就会调用它的工具完成。</p>
-          <p className="mt-2 text-fg-muted">哪里找更多：搜 "awesome MCP servers"，文件系统/fetch/git/浏览器操作等都有现成的。配置进 .env 的 key 类服务（如 Tavily 搜索）同理接入。</p>
+          <p><b>{t('connectors.guideMcpWhat')}</b>{t('connectors.guideMcpIntro')}</p>
+          <p className="mt-2"><b>{t('connectors.guideTryFirst')}</b>{t('connectors.guideTryDesc')} <code className="text-brand">filesystem</code> {t('connectors.guideTryStdio')} <code className="text-brand">npx</code> {t('connectors.guideTryArgs')} <code className="text-brand">{t('connectors.guideTryPath')}</code> {t('connectors.guideTryConnect')}</p>
+          <p className="mt-2 text-fg-muted">{t('connectors.guideFindMore')}</p>
         </>
       ) : (
         <>
-          <p><b>触发器是什么</b>：让 Agent <b>不用你开口也自动干活</b>的开关。三种形式：定时（每隔一段时间）、cron（每天几点）、webhook（外部系统来个通知就触发）。</p>
-          <p className="mt-2"><b>例 1（定时）</b>：点「新建触发器」→ 名称"每日晨报"→ 类型"定时间隔"→ 间隔 <code className="text-brand">86400</code>（= 每天一次）→ 目标写"用 web-reader 读取 https://news.ycombinator.com 的内容，整理成 5 条要点" → 创建。之后 Agent 每天自动跑一次。</p>
-          <p className="mt-2"><b>例 2（webhook）</b>：类型选 webhook → 目标写『收到告警：{'{{title}}'}，请分析可能原因』 → 创建后复制页面显示的 URL，粘到监控系统（如 Uptime Kuma / GitHub webhook）的通知地址里。监控系统一报警，Agent 自动开始分析。</p>
-          <p className="mt-2 text-fg-muted">列表里能看到每个触发器"已触发几次 / 最近触发时间 / 下次触发时间"，出问题会显示错误。</p>
+          <p><b>{t('connectors.guideTriggerWhat')}</b>{t('connectors.guideTriggerIntroA')} <b>{t('connectors.guideTriggerAuto')}</b>{t('connectors.guideTriggerIntroB')}</p>
+          <p className="mt-2"><b>{t('connectors.guideEx1Title')}</b>{t('connectors.guideEx1A')} <code className="text-brand">86400</code> {t('connectors.guideEx1B')}</p>
+          <p className="mt-2"><b>{t('connectors.guideEx2Title')}</b>{t('connectors.guideEx2A')}{'{{title}}'}{t('connectors.guideEx2B')}</p>
+          <p className="mt-2 text-fg-muted">{t('connectors.guideTriggerListHint')}</p>
         </>
       )}
     </div>
@@ -62,6 +64,7 @@ function GuidePanel({ tab }: { tab: 'mcp' | 'triggers' }) {
 }
 
 export default function ConnectorsPage() {
+  const { t } = useI18n();
   const [tab, setTab] = useState<'mcp' | 'triggers'>(localStorage.getItem('coral.connectors.tab') as any ?? 'mcp');
   const [servers, setServers] = useState<McpServerItem[]>([]);
   const [triggers, setTriggers] = useState<TriggerItem[]>([]);
@@ -89,7 +92,7 @@ export default function ConnectorsPage() {
       if (r?.message) setMsg(r.message);
       await refresh();
     } catch (err: any) {
-      setMsg(err.message || '操作失败');
+      setMsg(err.message || t('connectors.operationFailed'));
     } finally { setBusy(false); }
   };
 
@@ -100,16 +103,16 @@ export default function ConnectorsPage() {
           <Plug className="w-5 h-5 text-brand" />
         </div>
         <div>
-          <h1 className="text-xl font-heading font-medium text-fg-primary">连接器</h1>
-          <p className="text-xs text-fg-muted">MCP 外部工具接入 · 定时与 Webhook 触发器</p>
+          <h1 className="text-xl font-heading font-medium text-fg-primary">{t('connectors.title')}</h1>
+          <p className="text-xs text-fg-muted">{t('connectors.subtitle')}</p>
         </div>
       </div>
 
       <div className="flex gap-2">
-        {([['mcp', 'MCP 工具'], ['triggers', '触发器']] as const).map(([k, label]) => (
+        {([['mcp', 'connectors.tabMcp'], ['triggers', 'connectors.tabTriggers']] as const).map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`px-3 py-1.5 rounded-lg text-xs cursor-pointer border ${tab === k ? 'bg-brand text-white border-brand' : 'glass border-glass-border text-fg-secondary hover:border-brand/40'}`}>
-            {label}
+            {t(label)}
           </button>
         ))}
       </div>
@@ -120,11 +123,11 @@ export default function ConnectorsPage() {
         <div className="space-y-3">
           <div className="flex gap-2">
             <button onClick={() => setShowAdd(a => !a)} className="px-3 py-1.5 rounded-lg bg-brand text-white text-xs flex items-center gap-1.5 cursor-pointer hover:bg-brand-hover">
-              <Plus className="w-3.5 h-3.5" /> 添加 MCP Server
+              <Plus className="w-3.5 h-3.5" /> {t('connectors.addMcpServer')}
             </button>
             <button onClick={() => act(() => api.getClaudeConfig().then((d: any) => { setClaudeConfig(JSON.stringify(d.config, null, 2)); return null; }))}
               className="px-3 py-1.5 rounded-lg glass border border-glass-border text-xs text-fg-secondary flex items-center gap-1.5 cursor-pointer hover:border-brand/40">
-              <Copy className="w-3.5 h-3.5" /> Claude Desktop 接入 CORAL
+              <Copy className="w-3.5 h-3.5" /> {t('connectors.claudeDesktop')}
             </button>
           </div>
           {claudeConfig && (
@@ -134,7 +137,7 @@ export default function ConnectorsPage() {
 
           {servers.length === 0 && (
             <div className="glass rounded-xl border border-glass-border p-6 text-center text-xs text-fg-muted">
-              还没有外部 MCP server — 添加后其工具自动进入对话模式的 agent 工具集（如社区 filesystem / fetch / everything）
+              {t('connectors.mcpEmpty')}
             </div>
           )}
           {servers.map(s => {
@@ -143,7 +146,7 @@ export default function ConnectorsPage() {
             return (
               <div key={s.id} className="glass rounded-xl border border-glass-border p-3 space-y-2">
                 <div className="flex items-center gap-2 text-xs">
-                  <Tag variant={s.enabled ? 'success' : 'info'}>{s.enabled ? '启用' : '停用'}</Tag>
+                  <Tag variant={s.enabled ? 'success' : 'info'}>{s.enabled ? t('connectors.enabled') : t('connectors.disabled')}</Tag>
                   <span className="font-medium text-fg-primary">{s.name}</span>
                   <Tag variant="brand">{s.transport}</Tag>
                   {s.command && <span className="text-fg-muted font-mono truncate">{s.command}</span>}
@@ -152,21 +155,21 @@ export default function ConnectorsPage() {
                   <button onClick={() => act(() => api.toggleMcpServer(s.id, !s.enabled))} disabled={busy} className="cursor-pointer text-fg-muted hover:text-brand">
                     {s.enabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
                   </button>
-                  <button onClick={() => act(() => api.reconnectMcpServer(s.id))} disabled={busy} className="cursor-pointer text-fg-muted hover:text-brand" title="重连">
+                  <button onClick={() => act(() => api.reconnectMcpServer(s.id))} disabled={busy} className="cursor-pointer text-fg-muted hover:text-brand" title={t('connectors.reconnect')}>
                     <RefreshCw className="w-3.5 h-3.5" />
                   </button>
-                  <button onClick={() => act(() => api.deleteMcpServer(s.id))} disabled={busy} className="cursor-pointer text-fg-muted hover:text-status-danger" title="删除">
+                  <button onClick={() => act(() => api.deleteMcpServer(s.id))} disabled={busy} className="cursor-pointer text-fg-muted hover:text-status-danger" title={t('connectors.delete')}>
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
                 <div className="text-[11px] text-fg-muted flex items-center gap-2">
                   {s.last_error
                     ? <span className="text-status-danger flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> {s.last_error.slice(0, 120)}</span>
-                    : <span className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-status-success" /> {s.tool_count ?? 0} 个工具已进入 agent 工具集</span>}
+                    : <span className="flex items-center gap-1"><CheckCircle2 className="w-3 h-3 text-status-success" /> {t('connectors.toolsJoined', { n: s.tool_count ?? 0 })}</span>}
                 </div>
                 {tools.length > 0 && (
                   <details className="text-[11px] text-fg-secondary">
-                    <summary className="cursor-pointer text-fg-muted">工具预览（{tools.length}）</summary>
+                    <summary className="cursor-pointer text-fg-muted">{t('connectors.toolsPreview', { n: tools.length })}</summary>
                     <div className="mt-1 space-y-0.5">
                       {tools.map((t: any) => (
                         <div key={t.name} className="flex gap-2"><span className="font-mono text-brand">{t.name}</span><span className="text-fg-muted truncate">{t.description}</span></div>
@@ -183,46 +186,46 @@ export default function ConnectorsPage() {
       {tab === 'triggers' && (
         <div className="space-y-3">
           <button onClick={() => setShowTriggerAdd(a => !a)} className="px-3 py-1.5 rounded-lg bg-brand text-white text-xs flex items-center gap-1.5 cursor-pointer hover:bg-brand-hover">
-            <Plus className="w-3.5 h-3.5" /> 新建触发器
+            <Plus className="w-3.5 h-3.5" /> {t('connectors.newTrigger')}
           </button>
           {showTriggerAdd && <AddTriggerForm onAdd={payload => act(() => api.createTrigger(payload)).then(() => setShowTriggerAdd(false))} />}
 
           {triggers.length === 0 && (
             <div className="glass rounded-xl border border-glass-border p-6 text-center text-xs text-fg-muted">
-              还没有触发器 — 定时执行任务（interval/cron），或生成 webhook 让外部系统（GitHub/监控系统）唤起 agent
+              {t('connectors.triggersEmpty')}
             </div>
           )}
-          {triggers.map(t => {
+          {triggers.map(tr => {
             let action: any = {};
-            try { action = JSON.parse(t.action_json); } catch { /* ignore */ }
+            try { action = JSON.parse(tr.action_json); } catch { /* ignore */ }
             return (
-              <div key={t.id} className="glass rounded-xl border border-glass-border p-3 space-y-1.5">
+              <div key={tr.id} className="glass rounded-xl border border-glass-border p-3 space-y-1.5">
                 <div className="flex items-center gap-2 text-xs">
-                  <Tag variant={t.enabled ? 'success' : 'info'}>{t.enabled ? '启用' : '停用'}</Tag>
-                  {t.kind === 'webhook'
+                  <Tag variant={tr.enabled ? 'success' : 'info'}>{tr.enabled ? t('connectors.enabled') : t('connectors.disabled')}</Tag>
+                  {tr.kind === 'webhook'
                     ? <Webhook className="w-3.5 h-3.5 text-fg-muted" />
                     : <Clock className="w-3.5 h-3.5 text-fg-muted" />}
-                  <span className="font-medium text-fg-primary">{t.name}</span>
-                  <Tag variant="brand">{t.kind === 'interval' ? `每 ${t.spec}s` : t.kind === 'cron' ? t.spec : '入站'}</Tag>
+                  <span className="font-medium text-fg-primary">{tr.name}</span>
+                  <Tag variant="brand">{tr.kind === 'interval' ? t('connectors.everySeconds', { n: tr.spec }) : tr.kind === 'cron' ? tr.spec : t('connectors.webhookInbound')}</Tag>
                   <span className="flex-1" />
-                  <button onClick={() => act(() => api.toggleTrigger(t.id, !t.enabled))} disabled={busy} className="cursor-pointer text-fg-muted hover:text-brand">
-                    {t.enabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
+                  <button onClick={() => act(() => api.toggleTrigger(tr.id, !tr.enabled))} disabled={busy} className="cursor-pointer text-fg-muted hover:text-brand">
+                    {tr.enabled ? <ToggleRight className="w-4 h-4" /> : <ToggleLeft className="w-4 h-4" />}
                   </button>
-                  <button onClick={() => act(() => api.deleteTrigger(t.id))} disabled={busy} className="cursor-pointer text-fg-muted hover:text-status-danger">
+                  <button onClick={() => act(() => api.deleteTrigger(tr.id))} disabled={busy} className="cursor-pointer text-fg-muted hover:text-status-danger">
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </div>
-                <div className="text-[11px] text-fg-muted truncate">动作：{action.goal}</div>
-                {t.kind === 'webhook' && (
+                <div className="text-[11px] text-fg-muted truncate">{t('connectors.actionLabel')}{action.goal}</div>
+                {tr.kind === 'webhook' && (
                   <div className="text-[11px] font-mono text-fg-secondary break-all">
-                    POST /api/hooks/{t.id} <button className="ml-1 text-brand cursor-pointer" onClick={() => { navigator.clipboard?.writeText(`${window.location.origin}/api/hooks/${t.id}`); setMsg('webhook 地址已复制'); }}>复制</button>
+                    POST /api/hooks/{tr.id} <button className="ml-1 text-brand cursor-pointer" onClick={() => { navigator.clipboard?.writeText(`${window.location.origin}/api/hooks/${tr.id}`); setMsg(t('connectors.webhookCopied')); }}>{t('connectors.copy')}</button>
                   </div>
                 )}
                 <div className="text-[11px] text-fg-muted flex gap-3 flex-wrap">
-                  <span>已触发 {t.fire_count} 次</span>
-                  {t.last_fired_at && <span>最近：{new Date(t.last_fired_at).toLocaleString()}</span>}
-                  {t.next_fire_at && t.kind !== 'webhook' && <span>下次：{new Date(t.next_fire_at).toLocaleString()}</span>}
-                  {t.last_error && <span className="text-status-danger"><XCircle className="w-3 h-3 inline" /> {t.last_error.slice(0, 80)}</span>}
+                  <span>{t('connectors.firedCount', { n: tr.fire_count })}</span>
+                  {tr.last_fired_at && <span>{t('connectors.lastFired')}{new Date(tr.last_fired_at).toLocaleString()}</span>}
+                  {tr.next_fire_at && tr.kind !== 'webhook' && <span>{t('connectors.nextFire')}{new Date(tr.next_fire_at).toLocaleString()}</span>}
+                  {tr.last_error && <span className="text-status-danger"><XCircle className="w-3 h-3 inline" /> {tr.last_error.slice(0, 80)}</span>}
                 </div>
               </div>
             );
@@ -234,6 +237,7 @@ export default function ConnectorsPage() {
 }
 
 function AddMcpForm({ onAdd }: { onAdd: (payload: any) => void }) {
+  const { t } = useI18n();
   const [transport, setTransport] = useState<'stdio' | 'http'>('stdio');
   const [name, setName] = useState('');
   const [command, setCommand] = useState('');
@@ -243,7 +247,7 @@ function AddMcpForm({ onAdd }: { onAdd: (payload: any) => void }) {
   return (
     <div className="glass rounded-xl border border-glass-border p-3 space-y-2 text-xs">
       <div className="flex gap-2">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="名称（英文，工具前缀 mcp_<名>_…）"
+        <input value={name} onChange={e => setName(e.target.value)} placeholder={t('connectors.mcpNamePlaceholder')}
           className="flex-1 glass border border-glass-border rounded-lg px-2 py-1.5 outline-none focus:border-brand/40" />
         <select value={transport} onChange={e => setTransport(e.target.value as any)} className="glass border border-glass-border rounded-lg px-2 py-1.5">
           <option value="stdio">stdio</option>
@@ -252,24 +256,25 @@ function AddMcpForm({ onAdd }: { onAdd: (payload: any) => void }) {
       </div>
       {transport === 'stdio' ? (
         <>
-          <input value={command} onChange={e => setCommand(e.target.value)} placeholder="command（如 npx / node / uvx）"
+          <input value={command} onChange={e => setCommand(e.target.value)} placeholder={t('connectors.commandPlaceholder')}
             className="w-full glass border border-glass-border rounded-lg px-2 py-1.5 font-mono outline-none focus:border-brand/40" />
-          <input value={args} onChange={e => setArgs(e.target.value)} placeholder="参数（空格分隔，如 -y @modelcontextprotocol/server-filesystem /path）"
+          <input value={args} onChange={e => setArgs(e.target.value)} placeholder={t('connectors.argsPlaceholder')}
             className="w-full glass border border-glass-border rounded-lg px-2 py-1.5 font-mono outline-none focus:border-brand/40" />
         </>
       ) : (
-        <input value={url} onChange={e => setUrl(e.target.value)} placeholder="http(s) URL（Streamable HTTP transport）"
+        <input value={url} onChange={e => setUrl(e.target.value)} placeholder={t('connectors.urlPlaceholder')}
           className="w-full glass border border-glass-border rounded-lg px-2 py-1.5 font-mono outline-none focus:border-brand/40" />
       )}
       <div className="flex gap-2">
         <button onClick={() => onAdd({ name, transport, command: command || undefined, args: args ? args.split(/\s+/).filter(Boolean) : undefined, url: url || undefined })}
-          className="px-3 py-1.5 rounded-lg bg-brand text-white cursor-pointer hover:bg-brand-hover">连接并添加</button>
+          className="px-3 py-1.5 rounded-lg bg-brand text-white cursor-pointer hover:bg-brand-hover">{t('connectors.connectAndAdd')}</button>
       </div>
     </div>
   );
 }
 
 function AddTriggerForm({ onAdd }: { onAdd: (payload: any) => void }) {
+  const { t } = useI18n();
   const [name, setName] = useState('');
   const [kind, setKind] = useState<'interval' | 'cron' | 'webhook'>('interval');
   const [spec, setSpec] = useState('');
@@ -278,24 +283,24 @@ function AddTriggerForm({ onAdd }: { onAdd: (payload: any) => void }) {
   return (
     <div className="glass rounded-xl border border-glass-border p-3 space-y-2 text-xs">
       <div className="flex gap-2">
-        <input value={name} onChange={e => setName(e.target.value)} placeholder="名称（如 每日摘要）"
+        <input value={name} onChange={e => setName(e.target.value)} placeholder={t('connectors.triggerNamePlaceholder')}
           className="flex-1 glass border border-glass-border rounded-lg px-2 py-1.5 outline-none focus:border-brand/40" />
         <select value={kind} onChange={e => setKind(e.target.value as any)} className="glass border border-glass-border rounded-lg px-2 py-1.5">
-          <option value="interval">定时间隔</option>
+          <option value="interval">{t('connectors.kindInterval')}</option>
           <option value="cron">cron</option>
           <option value="webhook">webhook</option>
         </select>
       </div>
       {kind !== 'webhook' && (
         <input value={spec} onChange={e => setSpec(e.target.value)}
-          placeholder={kind === 'interval' ? '间隔秒数（≥60，如 3600 = 每小时）' : 'cron 表达式（分 时 日 月 周，如 0 9 * * * = 每天 9 点）'}
+          placeholder={kind === 'interval' ? t('connectors.specIntervalPlaceholder') : t('connectors.specCronPlaceholder')}
           className="w-full glass border border-glass-border rounded-lg px-2 py-1.5 font-mono outline-none focus:border-brand/40" />
       )}
       <textarea value={goal} onChange={e => setGoal(e.target.value)}
-        placeholder={kind === 'webhook' ? '触发时的目标（body 顶层键可用 {{key}} 注入，如 处理告警：{{title}}）' : '触发时要执行的目标（交给 agent 自主完成）'}
+        placeholder={kind === 'webhook' ? t('connectors.goalWebhookPlaceholder') : t('connectors.goalPlaceholder')}
         className="w-full h-16 glass border border-glass-border rounded-lg px-2 py-1.5 outline-none focus:border-brand/40 resize-none" />
       <button onClick={() => onAdd({ name, kind, spec: spec || '', action: { mode: 'free', goal } })}
-        className="px-3 py-1.5 rounded-lg bg-brand text-white cursor-pointer hover:bg-brand-hover">创建</button>
+        className="px-3 py-1.5 rounded-lg bg-brand text-white cursor-pointer hover:bg-brand-hover">{t('connectors.create')}</button>
     </div>
   );
 }

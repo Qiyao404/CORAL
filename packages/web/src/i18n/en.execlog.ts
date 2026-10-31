@@ -1,0 +1,32 @@
+/** execlog namespace (en) */
+export const en: Record<string, string> = {
+  // Tool call → one-line plain-language description (describeAction)
+  'execlog.listFiles': 'List files',
+  'execlog.listFilesPath': 'List files · {path}',
+  'execlog.readFile': 'Read file {path}',
+  'execlog.writeFile': 'Write file {path}',
+  'execlog.editFile': 'Edit file {path}',
+  'execlog.searchQuery': 'Search "{query}"',
+  'execlog.searchQueryPath': 'Search "{query}" in {path}',
+  'execlog.readWord': 'Read Word {path}',
+  'execlog.writeWord': 'Generate Word {path}',
+  'execlog.fetchUrl': 'Fetch web page {url}',
+  'execlog.updateTodo': 'Update task list',
+  'execlog.searchMemory': 'Search memory "{query}"',
+  'execlog.writeMemory': 'Save to long-term memory',
+  'execlog.readMemory': 'Read long-term memory',
+  'execlog.spawnAgent': 'Spawn sub-agent: {goal}',
+  'execlog.execSubtask': 'run a subtask',
+  'execlog.findRuns': 'Find past runs',
+  'execlog.runCommand': 'Run command',
+  'execlog.readEvidence': 'Read evidence records',
+  'execlog.dualReview': 'Dual-blind review',
+  'execlog.confirmMemory': 'Mark memory as confirmed',
+  'execlog.runSkill': 'Run skill {name}',
+  // Main view
+  'execlog.todoTitle': 'Task list',
+  'execlog.planning': 'Planning…',
+  'execlog.stepsTitle': 'Steps',
+  'execlog.stepCount': '{n} steps',
+  'execlog.waitingAgent': 'Waiting for the agent to start…',
+};

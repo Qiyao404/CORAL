@@ -1,4 +1,5 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { useI18n } from '../i18n';
 
 interface Props {
   children: ReactNode;
@@ -7,6 +8,46 @@ interface Props {
 
 interface State {
   error: Error | null;
+}
+
+/** 兜底错误 UI（函数组件形态 — 便于使用 useI18n） */
+function ErrorFallbackView({ msg, onReset }: { msg: string; onReset: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div className="min-h-screen flex items-center justify-center p-8 bg-bg-base text-fg-primary">
+      <div className="glass rounded-2xl p-8 max-w-2xl w-full">
+        <h1 className="text-xl font-heading font-bold text-status-danger mb-2">
+          {t('error.title')}
+        </h1>
+        <p className="text-sm text-fg-muted mb-4">
+          {t('error.description')}
+        </p>
+        <pre className="bg-bg-panel/60 rounded-lg p-3 text-xs font-mono text-status-danger whitespace-pre-wrap break-all max-h-60 overflow-auto mb-4">
+          {msg}
+        </pre>
+        <div className="flex gap-3">
+          <button
+            onClick={onReset}
+            className="px-4 py-2 rounded-lg bg-brand text-white font-medium text-sm hover:bg-brand-hover transition-colors cursor-pointer"
+          >
+            {t('error.retry')}
+          </button>
+          <button
+            onClick={() => window.location.reload()}
+            className="px-4 py-2 rounded-lg bg-bg-elev/50 text-fg-secondary text-sm hover:bg-bg-elev transition-colors cursor-pointer"
+          >
+            {t('error.refresh')}
+          </button>
+          <button
+            onClick={() => (window.location.href = '/tasks')}
+            className="px-4 py-2 rounded-lg bg-bg-elev/50 text-fg-secondary text-sm hover:bg-bg-elev transition-colors cursor-pointer"
+          >
+            {t('error.backToTasks')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
@@ -34,40 +75,6 @@ export class ErrorBoundary extends Component<Props, State> {
     if (this.props.fallback) return this.props.fallback;
 
     const msg = this.state.error.message || String(this.state.error);
-    return (
-      <div className="min-h-screen flex items-center justify-center p-8 bg-bg-base text-fg-primary">
-        <div className="glass rounded-2xl p-8 max-w-2xl w-full">
-          <h1 className="text-xl font-heading font-bold text-status-danger mb-2">
-            页面渲染异常
-          </h1>
-          <p className="text-sm text-fg-muted mb-4">
-            前端遇到一个意外错误，但平台后端仍在运行。你可以：
-          </p>
-          <pre className="bg-bg-panel/60 rounded-lg p-3 text-xs font-mono text-status-danger whitespace-pre-wrap break-all max-h-60 overflow-auto mb-4">
-            {msg}
-          </pre>
-          <div className="flex gap-3">
-            <button
-              onClick={this.reset}
-              className="px-4 py-2 rounded-lg bg-brand text-white font-medium text-sm hover:bg-brand-hover transition-colors cursor-pointer"
-            >
-              重试
-            </button>
-            <button
-              onClick={() => window.location.reload()}
-              className="px-4 py-2 rounded-lg bg-bg-elev/50 text-fg-secondary text-sm hover:bg-bg-elev transition-colors cursor-pointer"
-            >
-              刷新页面
-            </button>
-            <button
-              onClick={() => (window.location.href = '/tasks')}
-              className="px-4 py-2 rounded-lg bg-bg-elev/50 text-fg-secondary text-sm hover:bg-bg-elev transition-colors cursor-pointer"
-            >
-              返回任务列表
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    return <ErrorFallbackView msg={msg} onReset={this.reset} />;
   }
 }

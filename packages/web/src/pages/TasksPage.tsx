@@ -3,11 +3,12 @@ import { Link } from 'react-router-dom';
 import { Plus, Filter } from 'lucide-react';
 import { api } from '../api/client';
 import { Card, Tag, Button, EmptyState, Skeleton } from '../components/ui';
+import { useI18n } from '../i18n';
 
 const statusLabels: Record<string, string> = {
-  created: '已创建', planning: '规划中', executing: '执行中',
-  completed: '已完成', failed: '已失败', cancelled: '已取消',
-  waiting_human: '等待审批',
+  created: 'tasks.statusCreated', planning: 'tasks.statusPlanning', executing: 'tasks.statusExecuting',
+  completed: 'tasks.statusCompleted', failed: 'tasks.statusFailed', cancelled: 'tasks.statusCancelled',
+  waiting_human: 'tasks.statusWaitingHuman',
 };
 
 const statusVariant: Record<string, 'default' | 'success' | 'warn' | 'danger' | 'info'> = {
@@ -21,14 +22,15 @@ const statusVariant: Record<string, 'default' | 'success' | 'warn' | 'danger' | 
 };
 
 const filterOptions = [
-  { value: '', label: '全部' },
-  { value: 'planning', label: '规划中' },
-  { value: 'executing', label: '执行中' },
-  { value: 'completed', label: '已完成' },
-  { value: 'failed', label: '已失败' },
+  { value: '', label: 'tasks.filterAll' },
+  { value: 'planning', label: 'tasks.filterPlanning' },
+  { value: 'executing', label: 'tasks.filterExecuting' },
+  { value: 'completed', label: 'tasks.filterCompleted' },
+  { value: 'failed', label: 'tasks.filterFailed' },
 ];
 
 export default function TasksPage() {
+  const { t } = useI18n();
   const [tasks, setTasks] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [filter, setFilter] = useState('');
@@ -54,11 +56,11 @@ export default function TasksPage() {
     <div className="p-8 max-w-7xl mx-auto animate-fade-in-up">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-heading font-bold text-fg-primary">任务中心</h1>
-          <p className="text-fg-muted mt-1">管理和监控所有提交的任务</p>
+          <h1 className="text-2xl font-heading font-bold text-fg-primary">{t('tasks.title')}</h1>
+          <p className="text-fg-muted mt-1">{t('tasks.subtitle')}</p>
         </div>
         <Link to="/chat">
-          <Button icon={<Plus className="w-4 h-4" />}>新建任务</Button>
+          <Button icon={<Plus className="w-4 h-4" />}>{t('tasks.newTask')}</Button>
         </Link>
       </div>
 
@@ -75,10 +77,10 @@ export default function TasksPage() {
                   : 'text-fg-muted hover:bg-bg-elev/40 border border-transparent'
               }`}
             >
-              {opt.label}
+              {t(opt.label)}
             </button>
           ))}
-          <span className="ml-auto text-xs text-fg-muted">共 {total} 条</span>
+          <span className="ml-auto text-xs text-fg-muted">{t('tasks.totalCount', { n: total })}</span>
         </div>
 
         {loading ? (
@@ -87,7 +89,7 @@ export default function TasksPage() {
           </div>
         ) : tasks.length === 0 ? (
           <div className="p-6">
-            <EmptyState title="暂无任务" description="去对话页或点击右上角新建任务" />
+            <EmptyState title={t('tasks.emptyTitle')} description={t('tasks.emptyDesc')} />
           </div>
         ) : (
           <div className="divide-y divide-glass-border">
@@ -104,7 +106,7 @@ export default function TasksPage() {
                   </p>
                 </div>
                 <Tag variant={statusVariant[task.status] || 'default'}>
-                  {statusLabels[task.status] || task.status}
+                  {t(statusLabels[task.status] || task.status)}
                 </Tag>
               </Link>
             ))}

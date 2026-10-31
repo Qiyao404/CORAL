@@ -83,6 +83,9 @@ export function parseGitSource(url: string): GitSource | null {
 // ─── 主入口 ─────────────────────────────────────────────────────────
 
 export async function importSkills(source: string, options: ImportOptions): Promise<ImportReport[]> {
+  if (source.startsWith('npm:')) {
+    return importFromNpm(source, options);
+  }
   const git = parseGitSource(source);
   if (git && !existsSync(source)) {
     // git 源（本地同路径不存在时优先按 git 处理）
@@ -136,9 +139,57 @@ async function importFromGit(git: GitSource, options: ImportOptions, originalSou
   }
 }
 
+/**
+ * npm 源（技能包生态）：npm:<spec> 或任意合法 npm spec（含 @scope/name@version / dist-tag）。
+ *
+ * 约定：技能位于包内 skills/ 子目录（多技能包）或包根 SKILL.md（单技能包）。
+ * 供应链安全：--ignore-scripts（包的 install/preinstall 脚本不执行）+ 隔离 tmp 安装
+ * （不动用户 node_modules），只迁入 SKILL.md 及附属文件。
+ */
+export async function importFromNpm(spec: string, options: ImportOptions): Promise<ImportReport[]> {
+  const clean = spec.replace(/^npm:/, '').trim();
+  if (!clean) {
+    return [{
+      source: spec, skillName: null, status: 'failed', warnings: [], copiedFiles: [],
+      error: 'npm 包名为空',
+    }];
+  }
+  const tmp = mkdtempSync(join(tmpdir(), 'coral-npm-'));
+  // Windows 上 npm 是 npm.cmd：execFile 直启不可达，统一走 shell（参数无空格/特殊字符）
+  const npmExec = (args: string[], timeout: number) =>
+    execFileAsync('npm', args, { timeout, maxBuffer: 10 * 1024 * 1024, shell: true });
+  try {
+    // 1) 解析 canonical name@version（range 命中多版本时 npm view 返回数组 — 取末位）
+    const view = await npmExec(['view', clean, 'name', 'version', '--json'], 60_000);
+    const meta = JSON.parse(view.stdout.trim());
+    const picked = Array.isArray(meta) ? meta[meta.length - 1] : meta;
+    if (!picked?.name || !picked?.version) throw new Error(`npm view 返回异常: ${view.stdout.slice(0, 200)}`);
+    const canonical = `${picked.name}@${picked.version}`;
+
+    // 2) 隔离安装到临时目录（--ignore-scripts：外部包的安装脚本永不执行）
+    await npmExec(['install', '--prefix', tmp, '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', canonical], 180_000);
+    const pkgDir = join(tmp, 'node_modules', ...String(picked.name).split('/'));
+    if (!existsSync(pkgDir)) throw new Error(`安装后未找到包目录: ${picked.name}`);
+
+    // 3) 技能定位：skills/ 子目录优先，否则包根单技能
+    const skillsRoot = existsSync(join(pkgDir, 'skills')) ? join(pkgDir, 'skills') : pkgDir;
+    const reports = importFromDir(skillsRoot, options, `npm:${canonical}`);
+    for (const r of reports) {
+      if (r.status === 'imported') r.warnings.push(`来源: npm:${canonical}（--ignore-scripts 安装，包内脚本未执行）`);
+    }
+    return reports;
+  } catch (err: any) {
+    return [{
+      source: `npm:${clean}`, skillName: null, status: 'failed', warnings: [], copiedFiles: [],
+      error: `npm 安装失败: ${err?.message ?? err}（检查包名/网络/代理，registry 镜像可用 npm config set registry 配置）`,
+    }];
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 /** 本地目录：自身是技能 → 单导入；否则扫描一级子目录（多技能） */
-function importFromDir(dir: string, options: ImportOptions, originalSource: string): ImportReport[] {
-  const skillDirs: Array<{ dir: string; sub: string }> = [];
+function importFromDir(dir: string, options: ImportOptions, originalSource: string): ImportReport[] {  const skillDirs: Array<{ dir: string; sub: string }> = [];
   if (existsSync(join(dir, 'SKILL.md'))) {
     skillDirs.push({ dir, sub: '' });
   } else {

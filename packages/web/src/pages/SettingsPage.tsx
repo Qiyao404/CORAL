@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react';
-import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, Monitor, Palette, Brain, FileText, FolderOpen , User , Type } from 'lucide-react';
+import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, Monitor, Palette, Brain, FileText, FolderOpen, User, Type, Languages } from 'lucide-react';
 import { api } from '../api/client';
 import { Card, Button, Input, Textarea, Tag, Select, Skeleton } from '../components/ui';
 import { useTheme, type ThemeMode } from '../contexts/ThemeContext';
+import { useI18n, LANGS, type Lang } from '../i18n';
 
 interface LlmProfile {
   profileId: string;
@@ -42,6 +43,7 @@ interface CompanyProfile {
 }
 
 export default function SettingsPage() {
+  const { t, lang, setLang } = useI18n();
   const [config, setConfig] = useState<ConfigState | null>(null);
   const [profiles, setProfiles] = useState<LlmProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>('');
@@ -73,7 +75,9 @@ export default function SettingsPage() {
     effectiveTokens: number; effectiveSteps: number;
     saving: boolean; saved: boolean; error: string;
   }>({ draftTokens: '', draftSteps: '', effectiveTokens: 1_000_000, effectiveSteps: 40, saving: false, saved: false, error: '' });
-  const wan = (n: number) => (n >= 10000 ? `${(n / 10000).toFixed(0)}万` : String(n));
+  const wan = (n: number) => lang === 'en'
+    ? (n >= 1_000_000 && n % 1_000_000 === 0 ? `${n / 1_000_000}M` : String(n))
+    : (n >= 10000 ? `${(n / 10000).toFixed(0)}万` : String(n));
   const saveRunBudget = async () => {
     setRunBudget(b => ({ ...b, saving: true, saved: false, error: '' }));
     try {
@@ -88,7 +92,7 @@ export default function SettingsPage() {
       }));
       setTimeout(() => setRunBudget(b => ({ ...b, saved: false })), 2500);
     } catch (err: any) {
-      setRunBudget(b => ({ ...b, saving: false, error: err?.message ?? '保存失败' }));
+      setRunBudget(b => ({ ...b, saving: false, error: err?.message ?? t('settings.common.saveFailed') }));
     }
   };
   // M1-10：工作区管理
@@ -138,14 +142,14 @@ export default function SettingsPage() {
       await api.createWorkspace({ name: wsForm.name, dir: wsForm.dir, permission: wsForm.permission });
       setWsForm({ name: '', dir: '', permission: 'ask' });
       await loadWorkspaces();
-      setWsMessage('工作区已创建');
+      setWsMessage(t('settings.ws.created'));
     } catch (err: any) { setWsMessage(err.message); }
   };
   const handleActivateWorkspace = async (id: string) => {
     try { await api.activateWorkspace(id); await loadWorkspaces(); } catch (err: any) { setWsMessage(err.message); }
   };
   const handleDeleteWorkspace = async (id: string) => {
-    if (!confirm('删除该工作区？（只解除绑定，不会删除磁盘上的文件夹）')) return;
+    if (!confirm(t('settings.ws.deleteConfirm'))) return;
     try { await api.deleteWorkspace(id); await loadWorkspaces(); } catch (err: any) { setWsMessage(err.message); }
   };
 
@@ -161,11 +165,11 @@ export default function SettingsPage() {
     try {
       await api.saveMemory(memoryName, memoryContent);
       setMemoryFiles((await api.listMemory()).items ?? []);
-      alert('记忆已保存 — agent 下次任务即可使用');
+      alert(t('settings.memory.saved'));
     } catch (err: any) { alert(err.message); }
   };
   const deleteMemoryFile = async (name: string) => {
-    if (!confirm(`删除记忆 ${name}？agent 将不再记得该内容。`)) return;
+    if (!confirm(t('settings.memory.deleteConfirm', { name }))) return;
     try { await api.deleteMemory(name); if (memoryName === name) { setMemoryName(''); setMemoryContent(''); } setMemoryFiles((await api.listMemory()).items ?? []); }
     catch (err: any) { alert(err.message); }
   };
@@ -205,12 +209,12 @@ export default function SettingsPage() {
     setLlmForm({
       profileId: '', name: '', provider: 'openai-compat', baseUrl: 'https://coding.dashscope.aliyuncs.com/v1', model: 'kimi-k2.5', apiKey: '', setActive: true,
     });
-    setLlmMessage('已切换为新建模式');
+    setLlmMessage(t('settings.llm.switchedToNew'));
   };
 
   const handleSaveLlm = async () => {
     if (!llmForm.name.trim() || !llmForm.baseUrl.trim() || !llmForm.model.trim()) {
-      setLlmMessage('名称、API URL、模型名称不能为空');
+      setLlmMessage(t('settings.llm.required'));
       return;
     }
     setSaving(true); setLlmMessage('');
@@ -228,25 +232,25 @@ export default function SettingsPage() {
       const active = (res.items || []).find((p: LlmProfile) => p.profileId === res.activeProfileId);
       if (active) { setSelectedProfileId(active.profileId); fillFormFromProfile(active); }
       setConfig(await api.config());
-      setLlmMessage('配置已保存');
+      setLlmMessage(t('settings.llm.saved'));
     } catch (err: any) {
-      setLlmMessage(err.message || '保存失败');
+      setLlmMessage(err.message || t('settings.common.saveFailed'));
     } finally { setSaving(false); }
   };
 
   const handleActivateLlm = async () => {
-    if (!llmForm.profileId) return setLlmMessage('请先保存该配置');
+    if (!llmForm.profileId) return setLlmMessage(t('settings.llm.saveFirst'));
     setSaving(true);
     try {
       const res = await api.activateLlmConfig(llmForm.profileId);
       setProfiles(res.items || []);
       setConfig(await api.config());
-      setLlmMessage('已切换到该 LLM 配置');
+      setLlmMessage(t('settings.llm.activated'));
     } catch (err: any) { setLlmMessage(err.message); } finally { setSaving(false); }
   };
 
   const handleDeleteLlm = async () => {
-    if (!llmForm.profileId) return setLlmMessage('当前是新配置无需删除');
+    if (!llmForm.profileId) return setLlmMessage(t('settings.llm.nothingToDelete'));
     setSaving(true);
     try {
       const res = await api.deleteLlmConfig(llmForm.profileId);
@@ -255,54 +259,63 @@ export default function SettingsPage() {
       if (next) { setSelectedProfileId(next.profileId); fillFormFromProfile(next); }
       else handleNewProfile();
       setConfig(await api.config());
-      setLlmMessage('已删除');
+      setLlmMessage(t('settings.llm.deleted'));
     } catch (err: any) { setLlmMessage(err.message); } finally { setSaving(false); }
   };
 
   const handleSaveProfile = async () => {
-    if (!profileForm.name) return setProfileMessage('请填写名字/昵称');
+    if (!profileForm.name) return setProfileMessage(t('settings.profile.nameRequired'));
     setSaving(true); setProfileMessage('');
     try {
       const res = await api.putUserProfile(profileForm);
       setProfile(res);
       setProfileForm(res);
-      setProfileMessage(`已保存（v${res.version}）`);
+      setProfileMessage(t('settings.profile.saved', { version: res.version }));
     } catch (err: any) { setProfileMessage(err.message); } finally { setSaving(false); }
   };
 
   const handleResetProfile = async () => {
-    if (!confirm('恢复为默认画像？当前修改将被覆盖。')) return;
+    if (!confirm(t('settings.profile.resetConfirm'))) return;
     setSaving(true);
     try {
       const res = await api.resetUserProfile();
       setProfile(res); setProfileForm(res);
-      setProfileMessage('已恢复默认');
+      setProfileMessage(t('settings.profile.resetDone'));
     } catch (err: any) { setProfileMessage(err.message); } finally { setSaving(false); }
   };
 
   if (loading) return <div className="p-8"><Skeleton height="h-8" width="w-48" className="mb-6" /><Skeleton height="h-64" /></div>;
 
+  const personalizationItems = [
+    { key: 'interestTags', label: t('settings.personalization.interestTags.label'), desc: t('settings.personalization.interestTags.desc') },
+    { key: 'styleAdaptive', label: t('settings.personalization.styleAdaptive.label'), desc: t('settings.personalization.styleAdaptive.desc') },
+    { key: 'rhythmAware', label: t('settings.personalization.rhythmAware.label'), desc: t('settings.personalization.rhythmAware.desc') },
+    { key: 'knowledgeGraph', label: t('settings.personalization.knowledgeGraph.label'), desc: t('settings.personalization.knowledgeGraph.desc') },
+    { key: 'proactive', label: t('settings.personalization.proactive.label'), desc: t('settings.personalization.proactive.desc') },
+    { key: 'implicitPrefs', label: t('settings.personalization.implicitPrefs.label'), desc: t('settings.personalization.implicitPrefs.desc') },
+  ];
+
   return (
     <div className="p-8 max-w-4xl mx-auto animate-fade-in-up">
       <div className="mb-6">
-        <h1 className="text-2xl font-heading font-bold text-fg-primary">系统设置</h1>
-        <p className="text-fg-muted mt-1">配置 LLM 模型、个人画像与平台参数</p>
+        <h1 className="text-2xl font-heading font-bold text-fg-primary">{t('settings.title')}</h1>
+        <p className="text-fg-muted mt-1">{t('settings.subtitle')}</p>
       </div>
 
       {config?.demoMode && (
         <div className="mb-6 p-4 glass border border-status-warn/30 rounded-xl flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-status-warn mt-0.5" />
           <p className="text-status-warn text-sm font-medium">
-            演示模式已启用（--demo 启动）— 所有 LLM 调用返回带 <code className="font-mono">mock: true</code> 标记的模拟数据
+            {t('settings.demoMode')}
           </p>
         </div>
       )}
 
-      
+
       {/* 字体大小调节 */}
       <Card className="mb-6">
         <h2 className="font-heading font-semibold text-fg-primary mb-4 flex items-center gap-2">
-          <Type className="w-5 h-5" /> 字体大小
+          <Type className="w-5 h-5" /> {t('settings.font.title')}
         </h2>
         <div className="flex items-center gap-4">
           <input
@@ -323,24 +336,41 @@ export default function SettingsPage() {
             {Math.round(fontScale * 100)}%
           </span>
         </div>
-        <p className="text-xs text-fg-muted mt-2">调整全局字体大小（85% ~ 130%），立即生效并保存</p>
+        <p className="text-xs text-fg-muted mt-2">{t('settings.font.desc')}</p>
+      </Card>
+
+      {/* 界面语言 */}
+      <Card className="mb-6">
+        <h2 className="font-heading font-semibold text-fg-primary mb-4 flex items-center gap-2">
+          <Languages className="w-5 h-5" /> {t('settings.lang.title')}
+        </h2>
+        <p className="text-xs text-fg-muted mb-4">{t('settings.lang.desc')}</p>
+        <div className="flex gap-3">
+          {LANGS.map(l => (
+            <button
+              key={l.id}
+              type="button"
+              onClick={() => setLang(l.id as Lang)}
+              className={`px-4 py-2 rounded-lg border text-sm cursor-pointer transition-colors ${
+                lang === l.id
+                  ? 'border-brand bg-brand-soft text-brand font-medium'
+                  : 'border-glass-border text-fg-secondary hover:border-glass-borderStrong hover:text-fg-primary'
+              }`}
+            >
+              {l.label}
+            </button>
+          ))}
+        </div>
       </Card>
 
       {/* 个性化（6 维度"越用越懂你"，默认全关） */}
       <Card className="mb-6">
         <h2 className="font-heading font-semibold text-fg-primary mb-4 flex items-center gap-2">
-          <Brain className="w-5 h-5" /> 个性化（越用越懂你）
+          <Brain className="w-5 h-5" /> {t('settings.personalization.title')}
         </h2>
-        <p className="text-xs text-fg-muted mb-4">以下功能默认关闭。开启后，CORAL 会从你的使用习惯中学习，让回答更贴合你。所有数据仅存本地（data/personalization/），可随时清零。</p>
+        <p className="text-xs text-fg-muted mb-4">{t('settings.personalization.desc')}</p>
         <div className="space-y-3">
-          {[
-            { key: 'interestTags', label: '动态兴趣标签', desc: '从你的提问中自动提取兴趣标签（如"机器人""SLAM"），回答时适当关联相关领域' },
-            { key: 'styleAdaptive', label: '交互风格自适应', desc: '从你的纠正（"太长了""用表格"）中学到偏好，下次回答自动调整长度和格式' },
-            { key: 'rhythmAware', label: '工作节奏感知', desc: '记录你的活跃时段，在不同时段调整响应策略（白天简洁、周末深入）' },
-            { key: 'knowledgeGraph', label: '跨会话知识图谱', desc: '关联不同对话中讨论过的概念，下次提及时能关联之前的内容' },
-            { key: 'proactive', label: '主动推荐', desc: '基于当前上下文和历史兴趣，主动建议下一步操作（如"需要做成 PPT 吗？"）' },
-            { key: 'implicitPrefs', label: '隐式偏好推断', desc: '从你的拒绝/纠正行为中推断偏好（如"偏好轻量格式""重视证据"），不需要你主动配置' },
-          ].map(item => (
+          {personalizationItems.map(item => (
             <div key={item.key} className="flex items-start justify-between gap-4 p-3 rounded-lg border border-glass-border/50 hover:border-brand/20 transition-colors">
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-fg-primary font-medium">{item.label}</p>
@@ -360,80 +390,80 @@ export default function SettingsPage() {
           ))}
         </div>
         <div className="flex items-center gap-3 mt-4">
-          <Button variant="ghost" onClick={() => { api.resetPersonalization().catch(() => {}); }}>清零全部个性化数据</Button>
-          <span className="text-xs text-fg-muted">删除所有观察记录，不影响功能开关状态</span>
+          <Button variant="ghost" onClick={() => { api.resetPersonalization().catch(() => {}); }}>{t('settings.personalization.reset')}</Button>
+          <span className="text-xs text-fg-muted">{t('settings.personalization.resetDesc')}</span>
         </div>
       </Card>
 
       {/* 运行预算（用户可调 — 每个 run 的 token/步数上限） */}
       <Card className="mb-6">
         <h2 className="font-heading font-semibold text-fg-primary mb-4 flex items-center gap-2">
-          <Cpu className="w-5 h-5" /> 运行预算
+          <Cpu className="w-5 h-5" /> {t('settings.budget.title')}
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="text-xs text-fg-muted mb-1 block">Token 上限（每次 run 累计输入+输出）</label>
+            <label className="text-xs text-fg-muted mb-1 block">{t('settings.budget.tokenLabel')}</label>
             <Input
               type="number"
               value={runBudget.draftTokens}
               disabled={runBudget.saving}
               onChange={e => setRunBudget(b => ({ ...b, draftTokens: e.target.value }))}
-              placeholder={`默认 ${wan(runBudget.effectiveTokens)}`}
+              placeholder={t('settings.budget.defaultPlaceholder', { v: wan(runBudget.effectiveTokens) })}
             />
-            <p className="text-[11px] text-fg-muted mt-1">填 0 = 无上限（默认 1000 万 token）</p>
+            <p className="text-[11px] text-fg-muted mt-1">{t('settings.budget.tokenHint')}</p>
           </div>
           <div>
-            <label className="text-xs text-fg-muted mb-1 block">步数上限（LLM 调用轮数）</label>
+            <label className="text-xs text-fg-muted mb-1 block">{t('settings.budget.stepLabel')}</label>
             <Input
               type="number"
               value={runBudget.draftSteps}
               disabled={runBudget.saving}
               onChange={e => setRunBudget(b => ({ ...b, draftSteps: e.target.value }))}
-              placeholder={`默认 ${runBudget.effectiveSteps}`}
+              placeholder={t('settings.budget.defaultPlaceholder', { v: runBudget.effectiveSteps })}
             />
-            <p className="text-[11px] text-fg-muted mt-1">填 0 = 无上限（默认 200 步）</p>
+            <p className="text-[11px] text-fg-muted mt-1">{t('settings.budget.stepHint')}</p>
           </div>
         </div>
         <div className="flex items-center gap-3 mt-3">
           <Button onClick={saveRunBudget} disabled={runBudget.saving}>
-            {runBudget.saving ? '保存中…' : '保存预算设置'}
+            {runBudget.saving ? t('settings.budget.saving') : t('settings.budget.save')}
           </Button>
-          {runBudget.saved && <span className="text-xs text-status-success">已保存 — 对新发起的任务立即生效</span>}
+          {runBudget.saved && <span className="text-xs text-status-success">{t('settings.budget.saved')}</span>}
           {runBudget.error && <span className="text-xs text-status-danger">{runBudget.error}</span>}
           <span className="text-xs text-fg-muted ml-auto">
-            当前生效：Token {wan(runBudget.effectiveTokens)} · 步数 {runBudget.effectiveSteps}
+            {t('settings.budget.current', { tokens: wan(runBudget.effectiveTokens), steps: runBudget.effectiveSteps })}
           </span>
         </div>
-        <p className="text-xs text-fg-muted mt-2">运行中任务的实时消耗显示在「会话」页标题栏（🪙 图标）；预算耗尽会优雅收尾，发送"继续"可从断点接力</p>
+        <p className="text-xs text-fg-muted mt-2">{t('settings.budget.desc')}</p>
       </Card>
 
       <ThemeSettingsCard />
 
       <Card className="mb-6">
         <h2 className="font-heading font-semibold text-fg-primary mb-4 flex items-center gap-2">
-          <Cpu className="w-5 h-5" /> LLM 配置管理
+          <Cpu className="w-5 h-5" /> {t('settings.llm.title')}
         </h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
           <div>
-            <label className="block text-xs text-fg-muted mb-1">已保存配置</label>
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.llm.savedProfiles')}</label>
             <Select value={selectedProfileId} onChange={e => handleSelectProfile(e.target.value)}>
               {profiles.map(p => (
                 <option key={p.profileId} value={p.profileId}>
-                  {p.name} {p.isActive ? '(当前生效)' : ''}
+                  {p.name} {p.isActive ? t('settings.llm.activeSuffix') : ''}
                 </option>
               ))}
             </Select>
           </div>
-          <ConfigItem label="演示模式" value={config?.demoMode ? '已启用（--demo）' : '未启用'} />
+          <ConfigItem label={t('settings.llm.demoMode')} value={config?.demoMode ? t('settings.llm.demoOn') : t('settings.llm.demoOff')} />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
-            <label className="block text-xs text-fg-muted mb-1">配置名称</label>
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.llm.name')}</label>
             <Input value={llmForm.name} onChange={e => setLlmForm(p => ({ ...p, name: e.target.value }))} placeholder="DashScope Coding · kimi-k2.5" />
           </div>
           <div>
-            <label className="block text-xs text-fg-muted mb-1">接入协议（provider）</label>
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.llm.provider')}</label>
             <Select value={llmForm.provider} onChange={e => setLlmForm(p => ({
               ...p,
               provider: e.target.value as 'openai-compat' | 'anthropic',
@@ -441,20 +471,20 @@ export default function SettingsPage() {
                 ? 'https://api.anthropic.com' : p.baseUrl,
               model: e.target.value === 'anthropic' && (p.model === '' || p.model === 'kimi-k2.5') ? 'claude-sonnet-4-5' : p.model,
             }))}>
-              <option value="openai-compat">OpenAI 兼容端点（DashScope / DeepSeek / OpenRouter / Ollama…）</option>
-              <option value="anthropic">Anthropic 原生（Claude）</option>
+              <option value="openai-compat">{t('settings.llm.providerOpenai')}</option>
+              <option value="anthropic">{t('settings.llm.providerAnthropic')}</option>
             </Select>
           </div>
           <div>
-            <label className="block text-xs text-fg-muted mb-1">模型名称</label>
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.llm.model')}</label>
             <Input value={llmForm.model} onChange={e => setLlmForm(p => ({ ...p, model: e.target.value }))} placeholder="kimi-k2.5" />
           </div>
           <div>
-            <label className="block text-xs text-fg-muted mb-1">API 基础 URL</label>
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.llm.baseUrl')}</label>
             <Input value={llmForm.baseUrl} onChange={e => setLlmForm(p => ({ ...p, baseUrl: e.target.value }))} placeholder={llmForm.provider === 'anthropic' ? 'https://api.anthropic.com' : 'https://coding.dashscope.aliyuncs.com/v1'} />
           </div>
           <div>
-            <label className="block text-xs text-fg-muted mb-1">API Key（留空则保持原值）</label>
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.llm.apiKey')}</label>
             <Input
               type="password"
               value={llmForm.apiKey}
@@ -472,15 +502,15 @@ export default function SettingsPage() {
               onChange={e => setLlmForm(p => ({ ...p, setActive: e.target.checked }))}
               className="accent-brand"
             />
-            保存后设为当前生效配置
+            {t('settings.llm.setActiveOnSave')}
           </label>
         </div>
 
         <div className="mt-5 flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={handleNewProfile}>新建配置</Button>
-          <Button loading={saving} onClick={handleSaveLlm} icon={<Save className="w-4 h-4" />}>保存配置</Button>
-          <Button variant="ghost" disabled={!llmForm.profileId} onClick={handleActivateLlm}>设为生效</Button>
-          <Button variant="danger" disabled={!llmForm.profileId} onClick={handleDeleteLlm}>删除</Button>
+          <Button variant="secondary" onClick={handleNewProfile}>{t('settings.llm.new')}</Button>
+          <Button loading={saving} onClick={handleSaveLlm} icon={<Save className="w-4 h-4" />}>{t('settings.llm.save')}</Button>
+          <Button variant="ghost" disabled={!llmForm.profileId} onClick={handleActivateLlm}>{t('settings.llm.activate')}</Button>
+          <Button variant="danger" disabled={!llmForm.profileId} onClick={handleDeleteLlm}>{t('settings.llm.delete')}</Button>
         </div>
         {llmMessage && <p className="mt-3 text-sm text-fg-muted">{llmMessage}</p>}
       </Card>
@@ -488,88 +518,88 @@ export default function SettingsPage() {
       <Card className="mb-6">
         <div className="flex items-center justify-between mb-4">
           <h2 className="font-heading font-semibold text-fg-primary flex items-center gap-2">
-            <User className="w-5 h-5" /> 个人画像（越聊越懂你）
+            <User className="w-5 h-5" /> {t('settings.profile.title')}
           </h2>
           {profile && <Tag variant="info">v{profile.version}</Tag>}
         </div>
-        <p className="text-xs text-fg-muted mb-4 -mt-2">个人画像会注入每次对话的系统提示（Agent 根据它调整回答风格）；同时通过长期记忆自动丰富 — 越聊越了解你。旧公司画像已自动迁移。</p>
+        <p className="text-xs text-fg-muted mb-4 -mt-2">{t('settings.profile.desc')}</p>
         <div className="flex items-center justify-between mb-4">
         </div>
 
         <div className="space-y-4">
           <div>
-            <label className="block text-xs text-fg-muted mb-1">你的名字/昵称</label>
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.profile.name')}</label>
             <Input
               value={profileForm.name || ''}
               onChange={e => setProfileForm(p => ({ ...p, name: e.target.value }))}
-              placeholder="例如：小徐"
+              placeholder={t('settings.profile.namePlaceholder')}
             />
           </div>
           <div>
-            <label className="block text-xs text-fg-muted mb-1">职业/角色</label>
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.profile.role')}</label>
             <Input
               value={profileForm.role || ''}
               onChange={e => setProfileForm(p => ({ ...p, role: e.target.value }))}
-              placeholder="例如：大模型应用开发工程师"
+              placeholder={t('settings.profile.rolePlaceholder')}
             />
           </div>
 
           <KeywordInput
-            label="兴趣领域"
+            label={t('settings.profile.interests')}
             values={profileForm.interests || []}
             onChange={v => setProfileForm(p => ({ ...p, interests: v }))}
           />
           <KeywordInput
-            label="专业特长"
+            label={t('settings.profile.expertise')}
             values={profileForm.expertise || []}
             onChange={v => setProfileForm(p => ({ ...p, expertise: v }))}
           />
           <KeywordInput
-            label="喜欢的内容/话题"
+            label={t('settings.profile.likes')}
             values={profileForm.preferences?.likeKeywords || []}
             onChange={v => setProfileForm(p => ({ ...p, preferences: { ...(p.preferences || {}), likeKeywords: v } }))}
           />
           <KeywordInput
-            label="不喜欢的内容/话题"
+            label={t('settings.profile.dislikes')}
             values={profileForm.preferences?.avoidKeywords || []}
             onChange={v => setProfileForm(p => ({ ...p, preferences: { ...(p.preferences || {}), avoidKeywords: v } }))}
           />
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs text-fg-muted mb-1">偏好输出格式</label>
+              <label className="block text-xs text-fg-muted mb-1">{t('settings.profile.outputFormat')}</label>
               <Input
                 value={profileForm.workStyle?.outputFormat || ''}
                 onChange={e => setProfileForm(p => ({ ...p, workStyle: { ...(p.workStyle || { outputFormat: '', language: '', detailLevel: '', tone: '' }), outputFormat: e.target.value } }))}
-                placeholder="例如：表格汇总、Markdown"
+                placeholder={t('settings.profile.outputFormatPlaceholder')}
               />
             </div>
             <div>
-              <label className="block text-xs text-fg-muted mb-1">偏好语言</label>
+              <label className="block text-xs text-fg-muted mb-1">{t('settings.profile.language')}</label>
               <Input
                 value={profileForm.workStyle?.language || ''}
                 onChange={e => setProfileForm(p => ({ ...p, workStyle: { ...(p.workStyle || { outputFormat: '', language: '', detailLevel: '', tone: '' }), language: e.target.value } }))}
-                placeholder="例如：中文"
+                placeholder={t('settings.profile.languagePlaceholder')}
               />
             </div>
             <div>
-              <label className="block text-xs text-fg-muted mb-1">偏好详细程度</label>
+              <label className="block text-xs text-fg-muted mb-1">{t('settings.profile.detailLevel')}</label>
               <Input
                 value={profileForm.workStyle?.detailLevel || ''}
                 onChange={e => setProfileForm(p => ({ ...p, workStyle: { ...(p.workStyle || { outputFormat: '', language: '', detailLevel: '', tone: '' }), detailLevel: e.target.value } }))}
-                placeholder="例如：简明扼要"
+                placeholder={t('settings.profile.detailLevelPlaceholder')}
               />
             </div>
             <div>
-              <label className="block text-xs text-fg-muted mb-1">偏好语气</label>
+              <label className="block text-xs text-fg-muted mb-1">{t('settings.profile.tone')}</label>
               <Input
                 value={profileForm.workStyle?.tone || ''}
                 onChange={e => setProfileForm(p => ({ ...p, workStyle: { ...(p.workStyle || { outputFormat: '', language: '', detailLevel: '', tone: '' }), tone: e.target.value } }))}
-                placeholder="例如：直接、技术向"
+                placeholder={t('settings.profile.tonePlaceholder')}
               />
             </div>
           </div>
           <div>
-            <label className="block text-xs text-fg-muted mb-1">自由描述（150-500 字，给 LLM 的额外上下文）</label>
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.profile.background')}</label>
             <Textarea
               rows={3}
               value={profileForm.background || ''}
@@ -578,8 +608,8 @@ export default function SettingsPage() {
           </div>
 
           <div className="flex flex-wrap gap-2 pt-2">
-            <Button loading={saving} onClick={handleSaveProfile} icon={<Save className="w-4 h-4" />}>保存（生成 v{(profile?.version || 0) + 1}）</Button>
-            <Button variant="secondary" onClick={handleResetProfile} icon={<RefreshCw className="w-4 h-4" />}>恢复默认</Button>
+            <Button loading={saving} onClick={handleSaveProfile} icon={<Save className="w-4 h-4" />}>{t('settings.profile.save', { version: (profile?.version || 0) + 1 })}</Button>
+            <Button variant="secondary" onClick={handleResetProfile} icon={<RefreshCw className="w-4 h-4" />}>{t('settings.profile.reset')}</Button>
           </div>
           {profileMessage && <p className="text-sm text-fg-muted">{profileMessage}</p>}
         </div>
@@ -587,10 +617,10 @@ export default function SettingsPage() {
 
       <Card className="mb-6">
         <h2 className="font-heading font-semibold text-fg-primary mb-1 flex items-center gap-2">
-          <FolderOpen className="w-5 h-5" /> 工作区（Agent 的本地文件夹权限）
+          <FolderOpen className="w-5 h-5" /> {t('settings.ws.title')}
         </h2>
         <p className="text-xs text-fg-muted mb-4">
-          绑定本地文件夹后，Agent 才能读写其中的文件。权限档：只读 / 询问（写改弹 diff 批准，默认）/ 自动。Chat 页顶部可选择本次使用哪个工作区。
+          {t('settings.ws.desc')}
         </p>
 
         {workspaces.length > 0 && (
@@ -601,8 +631,8 @@ export default function SettingsPage() {
                 <span className="font-medium text-fg-primary">{w.name}</span>
                 <code className="text-fg-muted truncate flex-1">{w.dir}</code>
                 <Tag variant={w.permission === 'readonly' ? 'default' : w.permission === 'auto' ? 'warn' : 'info'}>{w.permission}</Tag>
-                {activeWsId === w.id ? <Tag variant="success">当前</Tag>
-                  : <Button size="sm" variant="ghost" onClick={() => handleActivateWorkspace(w.id)}>设为当前</Button>}
+                {activeWsId === w.id ? <Tag variant="success">{t('settings.ws.current')}</Tag>
+                  : <Button size="sm" variant="ghost" onClick={() => handleActivateWorkspace(w.id)}>{t('settings.ws.setCurrent')}</Button>}
                 <button className="text-fg-disabled hover:text-status-danger cursor-pointer" onClick={() => handleDeleteWorkspace(w.id)}><X className="w-3.5 h-3.5" /></button>
               </div>
             ))}
@@ -611,38 +641,38 @@ export default function SettingsPage() {
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
           <div>
-            <label className="block text-xs text-fg-muted mb-1">名称</label>
-            <Input value={wsForm.name} onChange={e => setWsForm(f => ({ ...f, name: e.target.value }))} placeholder="我的项目" />
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.ws.name')}</label>
+            <Input value={wsForm.name} onChange={e => setWsForm(f => ({ ...f, name: e.target.value }))} placeholder={t('settings.ws.namePlaceholder')} />
           </div>
           <div className="md:col-span-2">
-            <label className="block text-xs text-fg-muted mb-1">本地文件夹完整路径（须已存在）</label>
-            <Input value={wsForm.dir} onChange={e => setWsForm(f => ({ ...f, dir: e.target.value }))} placeholder="D:\projects\my-notes" />
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.ws.dir')}</label>
+            <Input value={wsForm.dir} onChange={e => setWsForm(f => ({ ...f, dir: e.target.value }))} placeholder="D:\\projects\\my-notes" />
           </div>
           <div>
-            <label className="block text-xs text-fg-muted mb-1">权限档</label>
+            <label className="block text-xs text-fg-muted mb-1">{t('settings.ws.permission')}</label>
             <Select value={wsForm.permission} onChange={e => setWsForm(f => ({ ...f, permission: e.target.value }))}>
-              <option value="ask">询问（默认，写改弹 diff 批准）</option>
-              <option value="readonly">只读</option>
-              <option value="auto">自动（写改直接执行）</option>
+              <option value="ask">{t('settings.ws.permAsk')}</option>
+              <option value="readonly">{t('settings.ws.permReadonly')}</option>
+              <option value="auto">{t('settings.ws.permAuto')}</option>
             </Select>
           </div>
         </div>
         <div className="mt-3 flex items-center gap-3">
-          <Button onClick={handleCreateWorkspace} icon={<Plus className="w-4 h-4" />}>创建工作区</Button>
+          <Button onClick={handleCreateWorkspace} icon={<Plus className="w-4 h-4" />}>{t('settings.ws.create')}</Button>
           {wsMessage && <p className="text-xs text-fg-muted">{wsMessage}</p>}
         </div>
       </Card>
 
       <Card className="mb-6">
         <h2 className="font-heading font-semibold text-fg-primary mb-1 flex items-center gap-2">
-          <Brain className="w-5 h-5" /> Agent 长期记忆
+          <Brain className="w-5 h-5" /> {t('settings.memory.title')}
         </h2>
         <p className="text-xs text-fg-muted mb-4">
-          Agent 跨会话记住的内容（Markdown）。可直接编辑——它下次任务就会按新记忆行事。
+          {t('settings.memory.desc')}
         </p>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="space-y-1.5 md:col-span-1">
-            {memoryFiles.length === 0 && <p className="text-xs text-fg-muted">记忆为空 — agent 学到新东西后会自动归档到这里</p>}
+            {memoryFiles.length === 0 && <p className="text-xs text-fg-muted">{t('settings.memory.empty')}</p>}
             {memoryFiles.map(f => (
               <div key={f.name} className={`flex items-center gap-1 p-2 rounded-lg cursor-pointer text-xs ${memoryName === f.name ? 'bg-brand-soft text-brand' : 'hover:bg-bg-elev/40 text-fg-secondary'}`} onClick={() => openMemoryFile(f.name)}>
                 <FileText className="w-3.5 h-3.5 shrink-0" />
@@ -653,26 +683,26 @@ export default function SettingsPage() {
           </div>
           <div className="md:col-span-2 space-y-2">
             <div className="flex gap-2 items-center">
-              <input value={memoryName} onChange={e => setMemoryName(e.target.value)} placeholder="文件名（如 user-preferences.md）"
+              <input value={memoryName} onChange={e => setMemoryName(e.target.value)} placeholder={t('settings.memory.filePlaceholder')}
                 className="flex-1 bg-bg-panel/50 border border-glass-border rounded-lg px-3 py-1.5 text-xs font-mono text-fg-primary" />
-              <Button size="sm" onClick={saveMemoryFile} icon={<Save className="w-3.5 h-3.5" />}>保存</Button>
+              <Button size="sm" onClick={saveMemoryFile} icon={<Save className="w-3.5 h-3.5" />}>{t('settings.memory.save')}</Button>
             </div>
             <textarea value={memoryContent} onChange={e => setMemoryContent(e.target.value)} rows={10}
-              placeholder="选择左侧文件查看，或输入新文件名创建记忆"
+              placeholder={t('settings.memory.contentPlaceholder')}
               className="w-full bg-bg-panel/50 border border-glass-border rounded-lg p-3 text-xs font-mono text-fg-primary font-mono" />
           </div>
         </div>
       </Card>
 
       <Card>
-        <h2 className="font-heading font-semibold text-fg-primary mb-4">平台配置</h2>
+        <h2 className="font-heading font-semibold text-fg-primary mb-4">{t('settings.platform.title')}</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <ConfigItem label="服务端口" value={config?.port} />
-          <ConfigItem label="Skill 目录" value={config?.skillsDir} />
-          <ConfigItem label="沙箱模式" value={config?.sandboxMode} />
-          <ConfigItem label="最大并发任务" value={config?.maxConcurrentTasks} />
-          <ConfigItem label="单任务 Agent 并发上限" value={config?.maxConcurrentAgentsPerTask} />
-          <ConfigItem label="平台版本" value="CORAL v2.2.0" />
+          <ConfigItem label={t('settings.platform.port')} value={config?.port} />
+          <ConfigItem label={t('settings.platform.skillsDir')} value={config?.skillsDir} />
+          <ConfigItem label={t('settings.platform.sandbox')} value={config?.sandboxMode} />
+          <ConfigItem label={t('settings.platform.maxTasks')} value={config?.maxConcurrentTasks} />
+          <ConfigItem label={t('settings.platform.maxAgents')} value={config?.maxConcurrentAgentsPerTask} />
+          <ConfigItem label={t('settings.platform.version')} value="CORAL v2.2.0" />
         </div>
       </Card>
     </div>
@@ -681,25 +711,26 @@ export default function SettingsPage() {
 
 function ThemeSettingsCard() {
   const { mode, effective, setMode } = useTheme();
+  const { t } = useI18n();
 
   const options: Array<{ value: ThemeMode; label: string; desc: string; icon: any }> = [
-    { value: 'light', label: '浅色', desc: '明亮通透，白天办公更舒适', icon: Sun },
-    { value: 'dark', label: '深色', desc: '低眩光，长时间使用不疲劳', icon: Moon },
-    { value: 'system', label: '跟随系统', desc: '根据操作系统外观自动切换', icon: Monitor },
+    { value: 'light', label: t('settings.theme.light'), desc: t('settings.theme.lightDesc'), icon: Sun },
+    { value: 'dark', label: t('settings.theme.dark'), desc: t('settings.theme.darkDesc'), icon: Moon },
+    { value: 'system', label: t('settings.theme.system'), desc: t('settings.theme.systemDesc'), icon: Monitor },
   ];
 
   return (
     <Card className="mb-6">
       <div className="flex items-center justify-between mb-4">
         <h2 className="font-heading font-semibold text-fg-primary flex items-center gap-2">
-          <Palette className="w-5 h-5" /> 外观主题
+          <Palette className="w-5 h-5" /> {t('settings.theme.title')}
         </h2>
         <Tag variant={effective === 'dark' ? 'info' : 'success'}>
-          当前生效：{effective === 'dark' ? '深色' : '浅色'}
+          {t('settings.theme.current', { mode: effective === 'dark' ? t('settings.theme.dark') : t('settings.theme.light') })}
         </Tag>
       </div>
       <p className="text-sm text-fg-muted mb-4">
-        选择系统的整体配色模式。设置会保存到本地浏览器，不影响其他用户。
+        {t('settings.theme.desc')}
       </p>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {options.map(opt => {
@@ -721,7 +752,7 @@ function ThemeSettingsCard() {
                 <span className={`font-semibold text-sm ${active ? 'text-brand' : 'text-fg-primary'}`}>
                   {opt.label}
                 </span>
-                {active && <Tag variant="brand">已选</Tag>}
+                {active && <Tag variant="brand">{t('settings.theme.chosen')}</Tag>}
               </div>
               <p className="text-xs text-fg-muted">{opt.desc}</p>
             </button>
@@ -744,6 +775,7 @@ function ConfigItem({ label, value }: { label: string; value: any }) {
 }
 
 function KeywordInput({ label, values, onChange }: { label: string; values: string[]; onChange: (v: string[]) => void }) {
+  const { t } = useI18n();
   const [draft, setDraft] = useState('');
   const add = () => {
     const items = draft.split(/[,;\s\n]+/).map(s => s.trim()).filter(Boolean);
@@ -771,10 +803,10 @@ function KeywordInput({ label, values, onChange }: { label: string; values: stri
         <Input
           value={draft}
           onChange={e => setDraft(e.target.value)}
-          placeholder="输入后回车，或粘贴换行/逗号分隔的多项"
+          placeholder={t('settings.keyword.placeholder')}
           onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); add(); } }}
         />
-        <Button variant="secondary" onClick={add} icon={<Plus className="w-3 h-3" />}>添加</Button>
+        <Button variant="secondary" onClick={add} icon={<Plus className="w-3 h-3" />}>{t('settings.keyword.add')}</Button>
       </div>
     </div>
   );

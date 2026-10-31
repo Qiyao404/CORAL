@@ -100,7 +100,7 @@ export function makeShellTool(): Tool {
             stderr: stderr.slice(0, MAX_OUTPUT_CHARS),
             stdoutTruncated: stdout.length >= MAX_OUTPUT_CHARS,
             stderrTruncated: stderr.length >= MAX_OUTPUT_CHARS,
-          }));
+          }, `$ ${command.slice(0, 60)} → exit ${code}（stdout ${(stdout.length / 1024).toFixed(1)} KB）`));
         });
 
         child.on('error', (err) => {

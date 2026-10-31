@@ -36,6 +36,9 @@ jobs:
       - name: Typecheck & build (server, tsc)
         run: npm run build:server
 
+      - name: Typecheck & build (sdk, tsc)
+        run: npm run build:sdk
+
       - name: Test (vitest)
         run: npm test
 

@@ -1,0 +1,21 @@
+/** tasks namespace (en) */
+export const en: Record<string, string> = {
+  'tasks.title': 'Tasks',
+  'tasks.subtitle': 'Manage and monitor all submitted tasks',
+  'tasks.newTask': 'New Task',
+  'tasks.filterAll': 'All',
+  'tasks.filterPlanning': 'Planning',
+  'tasks.filterExecuting': 'Executing',
+  'tasks.filterCompleted': 'Completed',
+  'tasks.filterFailed': 'Failed',
+  'tasks.totalCount': '{n} total',
+  'tasks.emptyTitle': 'No tasks yet',
+  'tasks.emptyDesc': 'Go to the chat page or click "New Task" in the top right',
+  'tasks.statusCreated': 'Created',
+  'tasks.statusPlanning': 'Planning',
+  'tasks.statusExecuting': 'Executing',
+  'tasks.statusCompleted': 'Completed',
+  'tasks.statusFailed': 'Failed',
+  'tasks.statusCancelled': 'Cancelled',
+  'tasks.statusWaitingHuman': 'Awaiting approval',
+};

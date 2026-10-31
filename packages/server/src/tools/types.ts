@@ -75,6 +75,11 @@ export interface ToolContext {
 export interface ToolResult<T = unknown> {
   ok: boolean;
   data?: T;
+  /**
+   * 展示层摘要（人话）：工具结果的双通道分离 — data 进模型上下文，
+   * display 只进 UI 事件流（tool.result_preview）。未提供时 UI 回退到 data 的 JSON 预览。
+   */
+  display?: string;
   error?: {
     code: string;
     message: string;
@@ -84,8 +89,8 @@ export interface ToolResult<T = unknown> {
   tokensUsed?: number;
 }
 
-export function toolOk<T>(data: T): ToolResult<T> {
-  return { ok: true, data };
+export function toolOk<T>(data: T, display?: string): ToolResult<T> {
+  return display ? { ok: true, data, display } : { ok: true, data };
 }
 
 export function toolError(code: string, message: string, retryable = false): ToolResult {

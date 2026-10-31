@@ -4,6 +4,7 @@ import {
   ListTodo, FileText, Globe, Search, Brain, Users, FileEdit,
   FilePlus, Wrench, Circle, Zap,
 } from 'lucide-react';
+import { useI18n } from '../i18n';
 
 /**
  * 执行过程 UI v2 — 逐步操作日志（截图风格）。
@@ -26,8 +27,11 @@ export interface TodoItem {
   status: string;
 }
 
+/** i18n 翻译函数类型（供模块级辅助函数使用） */
+type TFn = (key: string, params?: Record<string, string | number>) => string;
+
 /** 把工具调用翻译成一行人话 + 图标 */
-function describeAction(card: ToolCardItem): { icon: typeof FileText; text: string } {
+function describeAction(card: ToolCardItem, t: TFn): { icon: typeof FileText; text: string } {
   const input = card.inputPreview ?? '';
   const tryMatch = (re: RegExp): string | null => {
     const m = input.match(re);
@@ -41,45 +45,45 @@ function describeAction(card: ToolCardItem): { icon: typeof FileText; text: stri
 
   switch (card.tool) {
     case 'fs_list':
-      return { icon: FileText, text: `查看文件列表${path ? ` · ${path}` : ''}` };
+      return { icon: FileText, text: path ? t('execlog.listFilesPath', { path }) : t('execlog.listFiles') };
     case 'fs_read':
-      return { icon: FileText, text: `读取文件 ${path ?? ''}` };
+      return { icon: FileText, text: t('execlog.readFile', { path: path ?? '' }) };
     case 'fs_write':
-      return { icon: FilePlus, text: `写入文件 ${path ?? ''}` };
+      return { icon: FilePlus, text: t('execlog.writeFile', { path: path ?? '' }) };
     case 'fs_edit':
-      return { icon: FileEdit, text: `编辑文件 ${path ?? ''}` };
+      return { icon: FileEdit, text: t('execlog.editFile', { path: path ?? '' }) };
     case 'fs_search':
-      return { icon: Search, text: `搜索 "${query ?? ''}"${path ? ` in ${path}` : ''}` };
+      return { icon: Search, text: path ? t('execlog.searchQueryPath', { query: query ?? '', path }) : t('execlog.searchQuery', { query: query ?? '' }) };
     case 'docx_read':
-      return { icon: FileText, text: `读取 Word ${path ?? ''}` };
+      return { icon: FileText, text: t('execlog.readWord', { path: path ?? '' }) };
     case 'docx_write':
-      return { icon: FilePlus, text: `生成 Word ${path ?? ''}` };
+      return { icon: FilePlus, text: t('execlog.writeWord', { path: path ?? '' }) };
     case 'http_fetch':
-      return { icon: Globe, text: `访问网页 ${url ?? ''}` };
+      return { icon: Globe, text: t('execlog.fetchUrl', { url: url ?? '' }) };
     case 'todo_write':
-      return { icon: ListTodo, text: `更新任务清单` };
+      return { icon: ListTodo, text: t('execlog.updateTodo') };
     case 'memory_search':
-      return { icon: Brain, text: `查找记忆 "${query ?? ''}"` };
+      return { icon: Brain, text: t('execlog.searchMemory', { query: query ?? '' }) };
     case 'memory_write':
-      return { icon: Brain, text: `记录到长期记忆` };
+      return { icon: Brain, text: t('execlog.writeMemory') };
     case 'memory_read':
     case 'memory_list':
-      return { icon: Brain, text: `读取长期记忆` };
+      return { icon: Brain, text: t('execlog.readMemory') };
     case 'agent_spawn':
-      return { icon: Users, text: `派出子代理：${goal ?? '执行子任务'}` };
+      return { icon: Users, text: t('execlog.spawnAgent', { goal: goal ?? t('execlog.execSubtask') }) };
     case 'past_runs':
-      return { icon: Search, text: `查找历史运行` };
+      return { icon: Search, text: t('execlog.findRuns') };
     case 'shell_run':
-      return { icon: Zap, text: `执行命令` };
+      return { icon: Zap, text: t('execlog.runCommand') };
     case 'evidence_read':
-      return { icon: FileText, text: `调取证据记录` };
+      return { icon: FileText, text: t('execlog.readEvidence') };
     case 'dual_review':
-      return { icon: Users, text: `双盲会审` };
+      return { icon: Users, text: t('execlog.dualReview') };
     case 'memory_review':
-      return { icon: Brain, text: `标记记忆已确认` };
+      return { icon: Brain, text: t('execlog.confirmMemory') };
     default:
       if (card.tool.startsWith('skill_')) {
-        return { icon: Wrench, text: `执行技能 ${card.tool.replace('skill_', '')}` };
+        return { icon: Wrench, text: t('execlog.runSkill', { name: card.tool.replace('skill_', '') }) };
       }
       return { icon: Wrench, text: card.tool };
   }
@@ -87,8 +91,9 @@ function describeAction(card: ToolCardItem): { icon: typeof FileText; text: stri
 
 /** 单条操作行 */
 function ActionRow({ card }: { card: ToolCardItem }) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
-  const { icon: Icon, text } = describeAction(card);
+  const { icon: Icon, text } = describeAction(card, t);
   const isSub = card.agentId !== 'main';
 
   return (
@@ -152,6 +157,7 @@ export function ExecutionLogView({ todos, toolCards, running }: {
   toolCards: ToolCardItem[];
   running?: boolean;
 }) {
+  const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const lastCardId = toolCards.at(-1)?.callId;
 
@@ -171,7 +177,7 @@ export function ExecutionLogView({ todos, toolCards, running }: {
         <div className="pb-1">
           <div className="flex items-center gap-1.5 mb-1">
             <ListTodo className="w-3 h-3 text-fg-muted" />
-            <span className="text-[10px] text-fg-muted font-medium">任务清单</span>
+            <span className="text-[10px] text-fg-muted font-medium">{t('execlog.todoTitle')}</span>
             <span className={`text-[9px] px-1 py-px rounded ${completed === todos.length ? 'bg-status-success/10 text-status-success' : 'bg-status-info/10 text-status-info'}`}>
               {completed}/{todos.length}
             </span>
@@ -189,7 +195,7 @@ export function ExecutionLogView({ todos, toolCards, running }: {
         </div>
       )}
       {todos.length === 0 && running && (
-        <p className="text-[11px] text-fg-muted">正在制定计划…</p>
+        <p className="text-[11px] text-fg-muted">{t('execlog.planning')}</p>
       )}
 
       {/* 操作时间线 */}
@@ -197,8 +203,8 @@ export function ExecutionLogView({ todos, toolCards, running }: {
         <div className="pt-1">
           <div className="flex items-center gap-1.5 mb-1">
             <Zap className="w-3 h-3 text-fg-muted" />
-            <span className="text-[10px] text-fg-muted font-medium">操作步骤</span>
-            <span className="text-[9px] text-fg-disabled">{toolCards.length} 步</span>
+            <span className="text-[10px] text-fg-muted font-medium">{t('execlog.stepsTitle')}</span>
+            <span className="text-[9px] text-fg-disabled">{t('execlog.stepCount', { n: toolCards.length })}</span>
           </div>
           <div ref={scrollRef} className="space-y-0 max-h-none">
             {toolCards.map(card => (
@@ -208,7 +214,7 @@ export function ExecutionLogView({ todos, toolCards, running }: {
         </div>
       )}
       {toolCards.length === 0 && running && (
-        <p className="text-[11px] text-fg-muted">等待 agent 开始执行…</p>
+        <p className="text-[11px] text-fg-muted">{t('execlog.waitingAgent')}</p>
       )}
     </div>
   );
