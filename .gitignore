@@ -35,3 +35,4 @@ data/gaia-ws/
 scripts/pawbench-eval.mjs
 scripts/pawbench-eval.mts
 scripts/pawbench-grade.py
+.run3ds.cjs
