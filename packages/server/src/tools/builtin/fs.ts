@@ -62,7 +62,7 @@ export const fsListTool: Tool = {
       path: String(input?.path ?? '.'),
       entries,
       truncated: entries.length >= MAX_LIST_ENTRIES,
-    });
+    }, `列出 ${String(input?.path ?? '.')}：${entries.filter(e => e.type === 'dir').length} 个目录 / ${entries.filter(e => e.type === 'file').length} 个文件${entries.length >= MAX_LIST_ENTRIES ? '（已截断）' : ''}`);
   },
 };
 
@@ -108,7 +108,7 @@ export const fsReadTool: Tool = {
       content: truncated ? text.slice(0, MAX_READ_BYTES) : text,
       size: buf.length,
       truncated,
-    });
+    }, `读取 ${relPath}（${(buf.length / 1024).toFixed(1)} KB${truncated ? '，超出部分截断' : ''}）`);
   },
 };
 
@@ -155,7 +155,7 @@ export const fsWriteTool: Tool = {
       bytes: Buffer.byteLength(input.content, 'utf-8'),
       created: !existed,
       diff,
-    });
+    }, `${existed ? '修改' : '新建'} ${String(input?.path)}（${(Buffer.byteLength(input.content, 'utf-8') / 1024).toFixed(1)} KB）`);
   },
 };
 
@@ -213,7 +213,7 @@ export const fsEditTool: Tool = {
       path: String(input?.path),
       replacements: input.replace_all ? count : 1,
       diff: unifiedDiff(before, after, String(input.path)),
-    });
+    }, `编辑 ${String(input?.path)}：替换 ${input.replace_all ? count : 1} 处`);
   },
 };
 

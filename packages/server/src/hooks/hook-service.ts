@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { existsSync, readFileSync, statSync } from 'fs';
+import { existsSync, readFileSync, statSync, writeFileSync, renameSync } from 'fs';
 import { join, dirname, resolve } from 'path';
 import { platformConfig } from '../services/config.js';
 
@@ -46,6 +46,8 @@ interface HookDef {
   matcher?: string;   // 工具名正则（仅工具类事件生效）
   command: string;
   timeout?: number;   // 秒
+  /** 管理页启停：false = 保留配置但不触发 */
+  enabled?: boolean;
 }
 
 export interface HookOutcome {
@@ -102,6 +104,7 @@ export class HookService {
             ...(typeof h.matcher === 'string' && h.matcher.trim() ? { matcher: h.matcher } : {}),
             command: String(h.command),
             timeout: Math.min(Math.max(Number(h.timeout) || 60, 1), 300),
+            ...(h.enabled === false ? { enabled: false } : {}),
           })) as HookDef[];
         if (defs.length > 0) this.hooks.set(ev, defs);
       }
@@ -141,6 +144,75 @@ export class HookService {
     return out;
   }
 
+  // ─── 管理页支持：命中记录（环形缓冲）+ 配置写入 ─────────────────────
+
+  private firings: Array<{
+    ts: number; event: HookEvent; tool?: string; durationMs: number;
+    decision: HookOutcome['decision']; reason?: string; matched: number; failed: number;
+  }> = [];
+
+  private recordFiring(f: (typeof this.firings)[number]): void {
+    this.firings.push(f);
+    if (this.firings.length > 100) this.firings.shift();
+  }
+
+  /** 最近命中记录（管理页活动流；进程内存态 — 重启清零） */
+  recentFirings(limit = 50): Array<(typeof this.firings)[number]> {
+    return this.firings.slice(-limit).reverse();
+  }
+
+  /**
+   * 写入配置（管理页保存）：校验事件名 / command 非空 / matcher 可编译 / timeout 夹取。
+   * 原子写（tmp + rename）后立即重载 — 不等待 mtime 失效检查。
+   */
+  saveConfig(input: Record<string, unknown>): { ok: true } | { ok: false; error: string } {
+    const cleaned: Record<string, HookDef[]> = {};
+    for (const [ev, rawList] of Object.entries(input ?? {})) {
+      if (!HOOK_EVENTS.includes(ev as HookEvent)) {
+        return { ok: false, error: `未知事件: ${ev}（合法值: ${HOOK_EVENTS.join(', ')}）` };
+      }
+      if (!Array.isArray(rawList)) {
+        return { ok: false, error: `事件 ${ev} 的配置必须是数组` };
+      }
+      const defs: HookDef[] = [];
+      for (const [i, raw] of rawList.entries()) {
+        if (!raw || typeof raw !== 'object') {
+          return { ok: false, error: `${ev}[${i}] 必须是对象` };
+        }
+        const r = raw as Record<string, unknown>;
+        if (typeof r.command !== 'string' || !r.command.trim()) {
+          return { ok: false, error: `${ev}[${i}].command 不能为空` };
+        }
+        let matcher: string | undefined;
+        if (typeof r.matcher === 'string' && r.matcher.trim()) {
+          try {
+            new RegExp(r.matcher, 'i');
+          } catch (err: any) {
+            return { ok: false, error: `${ev}[${i}].matcher 不是合法正则: ${err?.message ?? err}` };
+          }
+          matcher = r.matcher.trim();
+        }
+        defs.push({
+          ...(matcher ? { matcher } : {}),
+          command: r.command.trim(),
+          timeout: Math.min(Math.max(Number(r.timeout) || 60, 1), 300),
+          ...(r.enabled === false ? { enabled: false } : {}),
+        });
+      }
+      if (defs.length > 0) cleaned[ev] = defs;
+    }
+
+    try {
+      const tmp = this.configPath + '.tmp';
+      writeFileSync(tmp, JSON.stringify({ hooks: cleaned }, null, 2) + '\n', 'utf-8');
+      renameSync(tmp, this.configPath);
+    } catch (err: any) {
+      return { ok: false, error: `写入失败: ${err?.message ?? err}` };
+    }
+    this.reload();
+    return { ok: true };
+  }
+
   /** 该事件是否有配置（无配置 = 零开销直通） */
   has(event: HookEvent): boolean {
     return (this.hooks.get(event)?.length ?? 0) > 0;
@@ -150,6 +222,7 @@ export class HookService {
     const defs = this.hooks.get(event);
     if (!defs) return [];
     return defs.filter(d => {
+      if (d.enabled === false) return false; // 管理页停用：配置保留、不触发
       if (!d.matcher || !toolName) return true;
       try {
         return new RegExp(d.matcher, 'i').test(toolName);
@@ -164,10 +237,14 @@ export class HookService {
    * 无命中 → 立即 allow（零开销）。
    */
   async run(event: HookEvent, payload: Record<string, any>): Promise<HookOutcome> {
+    const startedAt = Date.now();
     this.reloadIfStale(); // 热加载：mtime/存在性变化即重载（含启动后才创建的配置）
     const toolName = typeof payload.tool === 'string' ? payload.tool : undefined;
     const defs = this.matchDefs(event, toolName);
-    if (defs.length === 0) return { ...ALLOW, event };
+    if (defs.length === 0) {
+      const pass = { ...ALLOW, event };
+      return pass;
+    }
 
     const results = await Promise.all(defs.map(d => this.runOne(event, d, payload)));
 
@@ -200,7 +277,50 @@ export class HookService {
       matched: defs.length,
       failed,
     };
+    this.recordFiring({ ...merged, ts: startedAt, tool: toolName, durationMs: Date.now() - startedAt });
     return merged;
+  }
+
+  /**
+   * 管理页「测试」：以样例载荷真实执行一条命令，返回裁决解析 + 原始输出（截尾）。
+   * 与运行路径同一契约（stdin JSON / stdout 决策 JSON / exit 2 = deny）。
+   */
+  async test(event: HookEvent, command: string, timeoutSec: number, payload: Record<string, any> = {}): Promise<{
+    exitCode: number | null; durationMs: number; decision: string; reason?: string;
+    stdoutTail: string; stderrTail: string; timedOut: boolean;
+  }> {
+    const startedAt = Date.now();
+    const stdin = JSON.stringify({ tool: 'sample_tool', runId: 'hook-test', ...payload, event, configPath: this.configPath });
+    const timeoutMs = Math.min(Math.max(timeoutSec, 1), 15) * 1000;
+    return new Promise(resolve => {
+      let child;
+      try {
+        child = spawn(command, { shell: true, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      } catch (err: any) {
+        return resolve({ exitCode: null, durationMs: 0, decision: 'error', reason: `无法启动: ${err?.message ?? err}`, stdoutTail: '', stderrTail: '', timedOut: false });
+      }
+      let out = '', errOut = '', settled = false;
+      const settle = (v: any) => { if (!settled) { settled = true; clearTimeout(timer); resolve(v); } };
+      const timer = setTimeout(() => { child.kill('SIGKILL'); settle({ exitCode: null, durationMs: Date.now() - startedAt, decision: 'timeout', reason: `测试超时（${timeoutMs / 1000}s）`, stdoutTail: out.slice(-2000), stderrTail: errOut.slice(-2000), timedOut: true }); }, timeoutMs);
+      child.stdout?.on('data', (d: Buffer) => { out += d.toString(); });
+      child.stderr?.on('data', (d: Buffer) => { errOut += d.toString(); });
+      child.on('error', err => settle({ exitCode: null, durationMs: Date.now() - startedAt, decision: 'error', reason: err.message, stdoutTail: '', stderrTail: '', timedOut: false }));
+      child.on('close', code => {
+        const parsed = parseHookStdout(out);
+        const decision = code === 2 ? 'deny' : code === 0 ? (parsed?.decision ?? 'allow') : 'error';
+        settle({
+          exitCode: code,
+          durationMs: Date.now() - startedAt,
+          decision,
+          ...(parsed?.reason || errOut.trim() ? { reason: (parsed?.reason ?? errOut.trim()).slice(0, 500) } : {}),
+          stdoutTail: out.slice(-2000),
+          stderrTail: errOut.slice(-2000),
+          timedOut: false,
+        });
+      });
+      child.stdin?.on('error', () => { /* EPIPE 忽略 */ });
+      child.stdin?.end(stdin, 'utf-8');
+    });
   }
 
   private async runOne(event: HookEvent, def: HookDef, payload: Record<string, any>): Promise<HookPartial> {
@@ -252,8 +372,7 @@ export class HookService {
   }
 }
 
-function parseHookStdout(out: string): HookPartial | null {
-  const text = out.trim();
+function parseHookStdout(out: string): HookPartial | null {  const text = out.trim();
   if (!text) return null;
   // 从左往右找第一个能完整解析的 JSON 对象（外层优先 —
   // lastIndexOf 会命中嵌套内层对象，导致 updatedInput 这类嵌套字段丢失）

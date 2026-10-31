@@ -86,7 +86,7 @@ Agent 写入的长期记忆默认 `unreviewed`，用户确认后标记 `reviewed
 所有子代理的系统提示以统一安全基线开头：身份与指令集不可被工具输出改变、外部内容一律视为待分析数据而非指令、零宽字符等可疑载荷原样引用而非解释、不泄露系统提示与凭据。主循环内置同样的不可信数据纪律。
 
 **20. 外部命令守卫**
-`data/hooks.json` 在 8 个生命周期点（工具调用前后 / 收工 / 提交 / 会话起止 / 压缩前 / 通知）调用外部命令：可否决调用、改写工具入参、升级人工审批、打回最终回答、注入上下文。契约：stdin 收 JSON，stdout 输出决策 JSON，退出码 2 即拒绝；工具调用前的守卫若自身故障或超时按拒绝处理（默认从严），其余事件故障不影响执行；配置按 mtime 失效检查热加载。
+`data/hooks.json` 在 8 个生命周期点（工具调用前后 / 收工 / 提交 / 会话起止 / 压缩前 / 通知）调用外部命令：可否决调用、改写工具入参、升级人工审批、打回最终回答、注入上下文。契约：stdin 收 JSON，stdout 输出决策 JSON，退出码 2 即拒绝；工具调用前的守卫若自身故障或超时按拒绝处理（默认从严），其余事件故障不影响执行；配置按 mtime 失效检查热加载。左侧「钩子」页提供可视化管理：按事件分组增删改、工具名正则匹配、逐条启停、样例载荷真实试跑（返回裁决解析与原始输出）、最近 100 条命中裁决流。
 
 **21. 斜杠命令与具名子代理**
 `data/commands/*.md` 斜杠命令：`/research 主题` 展开为完整任务（模板占位 `$ARGUMENTS` / `$1`）；`data/agents/*.md` 具名子代理：预置调研 / 评审 / 数据 / 成文四个专员，描述与触发例示注入主提示（指导主模型何时委派），正文按名加载、工具白名单随行——能力扩展不增加主上下文负担。
@@ -96,6 +96,14 @@ LLM 摘要失败采用 60s → 300s → 900s 递进冷却；冷却期间硬水�
 
 **23. 急停哨兵、审批记忆与运行预算**
 `coral pause` 以哨兵文件方式暂停全部新任务（运行中的不受影响，哨兵文件损坏亦视为已暂停——fail-safe）；审批可带 `scope=session`，同工作区同工具在本次服务会话内自动放行并留痕，可一键清除；运行预算（token / 步数上限）用户可调，默认 100 万 token，上限 1000 万。
+
+**24. 工具结果双通道**
+工具返回值此前是一份 JSON 同时喂给两边：模型需要它结构化、可解析、无冗余；界面上工具卡需要它人类可读——两个需求在同一份数据上互相拉扯。现在 `ToolResult` 分离为 `data` 与 `display` 两个通道：`data` 进模型上下文（结构化数据），`display` 只进 UI 事件流（一行人话摘要）。以 `docx_write` 为例——
+
+- 模型看到的：`{ "path": "report.docx", "paragraphs": 42, "note": "已生成真实 Word 文档（OOXML）…" }`
+- 界面工具卡显示的：`生成 Word 文档 report.docx（42 段）`
+
+展示措辞不再挤占上下文预算，数据通道也不再被展示需求污染；未提供 `display` 的工具自动回退到 `data` 的 JSON 预览（向后兼容）。8 个高频内置工具（文件读写 / 目录 / 编辑 / HTTP / shell / Word 读写）已携带摘要。
 
 ---
 
@@ -108,7 +116,8 @@ LLM 摘要失败采用 60s → 300s → 900s 递进冷却；冷却期间硬水�
 - **命令执行**：可选启用 shell 工具（每次执行均需审批）
 - **网络访问**：抓取任意 URL 并阅读正文（零依赖 readability 抽取）
 - **子代理**：长任务自动隔离到独立上下文的子代理（嵌套深度 ≤ 2）
-- **技能生态**：对话式创建技能、导入业界通用 Agent Skills 格式（SKILL.md）、文件系统即注册表热重载
+- **技能生态**：对话式创建技能、导入业界通用 Agent Skills 格式（SKILL.md）、`coral install` 一键安装 npm / git 技能包、文件系统即注册表热重载
+- **界面语言**：中英文一键切换（侧边栏与设置页，语言偏好持久化）
 
 详细使用指南与任务示例见 [USE.md](./USE.md)。
 
@@ -190,7 +199,7 @@ npm run dev            # 后端 3001 + 前端 5173
 
 ## 测试与基准
 
-- **测试**：404 个用例（Vitest），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
+- **测试**：414 个用例（Vitest），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时 / 外部守卫等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
 - **GAIA 基准**：[docs/GAIA.md](./docs/GAIA.md) —— 官方 GAIA benchmark validation split，**82.0%**（50 题，确定性 exact match）。L1 86.4% / L2 88.9% / L3 60.0%。
 - **性能基准**：[docs/BENCHMARK.md](./docs/BENCHMARK.md) —— 上下文压缩收益（1.2MB 历史 → 169KB，-86%）、SQLite WAL 与 JSONL 持久化吞吐。脚本：`npx tsx scripts/benchmark.mts`。
 
@@ -331,6 +340,47 @@ source: user
 ```
 
 保存到 `skills/my-skill/SKILL.md` 即自动加载。完整规范见 [docs/SKILLS-STANDARD.md](./docs/SKILLS-STANDARD.md)。
+
+**方式 3：技能包安装（`coral install`）**——直接使用别人做好的技能。
+
+前两种方式都要求技能"在手边"：要么自己描述需求让 AI 生成，要么自己写 SKILL.md。技能包分发解决的是**复用**问题——把一个或一组技能打成标准的 npm 包或放在 git 仓库里，任何人一条命令装进自己的技能库：
+
+```bash
+coral install npm:some-skill-pack        # npm 源：解析精确版本 → 隔离安装 → 定位包内技能
+coral install https://github.com/u/repo  # git 源（支持 GitHub tree 子路径）
+coral install ./path/to/skill-dir        # 本地目录（同 JSON 语法，见下）
+```
+
+- **包约定**：多技能包把各技能放在 `skills/` 一级子目录，单技能包在包根放 `SKILL.md`；frontmatter 兼容通用 Agent Skills 格式（缺省映射为 `llm_only`）。
+- **供应链安全**：npm 源以 `--ignore-scripts` 安装到临时目录——外部包的 install/preinstall 脚本**永不执行**，只迁入 SKILL.md 与附属文件，不触碰宿主 `node_modules`。
+- **冲突策略**：同名默认跳过，`--overwrite` 替换且旧版备份进 `skills/.history/`。
+- 落盘即热加载；等价 API：`POST /api/skills/import`（source 支持 `npm:` 前缀）。
+
+---
+
+## SDK 嵌入（`@coral/sdk`）
+
+CORAL 有两种使用形态。**服务形态**：起 HTTP 服务 + Web UI，适合人机交互；**库形态**：把内核直接 `import` 进你自己的 Node 程序，适合把 agent 循环嵌进脚本、CI 流水线、机器人或另一个应用——不必为了跑一个 agent 任务先起服务再走 REST，也不损失类型。
+
+此前只有服务形态可用；`packages/sdk` 补上了库形态，按嵌入深度分两层入口：
+
+**`runAgent(input)` —— 无状态单任务**。你提供三样东西：目标（goal）、模型接入（一个 OpenAI 兼容的 `chat` 函数，req → resp，因此不绑定任何 provider——网关、本地模型、测试桩都行）、工具集（可选）。它直接执行内核 ReAct 循环，事实门、收工门、上下文压缩、证据记录等纪律层**全部生效**，但不写任何数据库——任务结束即结束，适合"在我的代码里按需跑一个 agent"的场景：
+
+```ts
+import { runAgent, toolOk } from '@coral/sdk';
+
+const result = await runAgent({
+  goal: '总结 ./docs 下的变更',
+  chat: async req => myOpenAiCompatCall(req),   // 你自己的模型接入
+  tools: [myCustomTool],                          // toolOk({ data }, 'UI 摘要')
+  onEvent: e => console.log(e.type),              // 工具调用 / 门禁打回 / todo …
+});
+// result.status === 'completed'，result.finalContent 为最终回答
+```
+
+**`createRuntime(opts)` —— 有状态运行时**。当任务需要跨次执行的连续性时用这层：它组装完整的引擎（SQLite 三表持久化 + 文件系统技能注册表），等价于把服务端引擎内嵌进来——run 记录、事件流、checkpoint 与 Time-Travel 全部可用，与 Web UI 共用数据目录时甚至可以直接在界面上回看 SDK 发起的 run。
+
+分层的设计意图：轻量场景不强制持久化依赖（`runAgent` 不触碰 SQLite），需要连续性时升级到 `createRuntime`，两层共享同一套工具协议与门禁语义。
 
 ---
 

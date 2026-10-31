@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Activity, AlertTriangle, ArrowRight, Cpu, Sparkles, Workflow } from 'lucide-react';
 import { api } from '../api/client';
 import { Card, Tag, EmptyState, Skeleton } from '../components/ui';
+import { useI18n } from '../i18n';
 
 interface Stats {
   tasks: { total: number; byStatus: Record<string, number>; successRate: number };
@@ -12,9 +13,9 @@ interface Stats {
 }
 
 const statusLabels: Record<string, string> = {
-  created: '已创建', planning: '规划中', executing: '执行中',
-  completed: '已完成', failed: '已失败', cancelled: '已取消',
-  waiting_human: '等待审批', pending: '等待中', running: '运行中', suspended: '已挂起',
+  created: 'dashboard.statusCreated', planning: 'dashboard.statusPlanning', executing: 'dashboard.statusExecuting',
+  completed: 'dashboard.statusCompleted', failed: 'dashboard.statusFailed', cancelled: 'dashboard.statusCancelled',
+  waiting_human: 'dashboard.statusWaitingHuman', pending: 'dashboard.statusPending', running: 'dashboard.statusRunning', suspended: 'dashboard.statusSuspended',
 };
 
 const statusVariant: Record<string, 'default' | 'success' | 'warn' | 'danger' | 'info' | 'brand'> = {
@@ -39,6 +40,7 @@ function StatCard({ title, value, subtitle, icon, accent }: { title: string; val
 }
 
 export default function DashboardPage() {
+  const { t } = useI18n();
   const [stats, setStats] = useState<Stats | null>(null);
   const [recentTasks, setRecentTasks] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -80,64 +82,62 @@ export default function DashboardPage() {
   return (
     <div className="p-8 max-w-7xl mx-auto animate-fade-in-up">
       <div className="mb-8">
-        <h1 className="text-3xl font-heading font-bold text-fg-primary">控制台</h1>
-        <p className="text-fg-muted mt-1">CORAL v1.1.0 · 自动化多智能体协作平台</p>
+        <h1 className="text-3xl font-heading font-bold text-fg-primary">{t('dashboard.title')}</h1>
+        <p className="text-fg-muted mt-1">{t('dashboard.subtitle')}</p>
       </div>
 
       {stats?.system.demoMode && (
         <div className="mb-6 p-4 glass border border-status-warn/30 rounded-xl flex items-start gap-3">
           <AlertTriangle className="w-5 h-5 text-status-warn mt-0.5" />
           <p className="text-status-warn text-sm font-medium">
-            系统当前处于<b>演示模式</b>（--demo 启动）— 所有 LLM 调用返回模拟数据，
-            任务结果带 <code className="font-mono">mock: true</code> 标记，不代表真实模型输出。
-            重新启动（不带 --demo）即可恢复真实调用。
+            {t('dashboard.demoPrefix')}<b>{t('dashboard.demoMode')}</b>{t('dashboard.demoMid')}<code className="font-mono">mock: true</code>{t('dashboard.demoSuffix')}
           </p>
         </div>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
-        <StatCard title="总任务数" value={stats?.tasks.total || 0} subtitle="全部任务" icon={<Workflow className="w-6 h-6" />} />
+        <StatCard title={t('dashboard.totalTasks')} value={stats?.tasks.total || 0} subtitle={t('dashboard.allTasks')} icon={<Workflow className="w-6 h-6" />} />
         <StatCard
-          title="成功率"
+          title={t('dashboard.successRate')}
           value={`${stats?.tasks.successRate || 0}%`}
           accent={stats?.tasks.successRate && stats.tasks.successRate >= 80 ? 'text-status-success' : 'text-status-warn'}
           icon={<Activity className="w-6 h-6" />}
         />
         <StatCard
-          title="已注册技能"
+          title={t('dashboard.registeredSkills')}
           value={stats?.skills.available || 0}
-          subtitle={`${stats?.skills.domains?.length || 0} 个能力域`}
+          subtitle={t('dashboard.domainCount', { n: stats?.skills.domains?.length || 0 })}
           icon={<Sparkles className="w-6 h-6" />}
         />
         <StatCard
-          title="Agent 实例"
+          title={t('dashboard.agentInstances')}
           value={stats?.agents.total || 0}
-          subtitle={`运行中 ${stats?.agents.byStatus?.running || 0}`}
+          subtitle={t('dashboard.runningCount', { n: stats?.agents.byStatus?.running || 0 })}
           icon={<Cpu className="w-6 h-6" />}
         />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
-          <h2 className="font-heading font-semibold text-fg-primary mb-4">任务状态分布</h2>
+          <h2 className="font-heading font-semibold text-fg-primary mb-4">{t('dashboard.statusDistribution')}</h2>
           <div className="space-y-3">
             {Object.entries(stats?.tasks.byStatus || {}).map(([status, count]) => (
               <div key={status} className="flex items-center justify-between">
-                <Tag variant={statusVariant[status] || 'default'}>{statusLabels[status] || status}</Tag>
+                <Tag variant={statusVariant[status] || 'default'}>{t(statusLabels[status] || status)}</Tag>
                 <span className="text-sm font-medium text-fg-primary tabular-nums">{count}</span>
               </div>
             ))}
             {Object.keys(stats?.tasks.byStatus || {}).length === 0 && (
-              <EmptyState title="暂无任务数据" description="去对话页提交一个任务" />
+              <EmptyState title={t('dashboard.noTaskDataTitle')} description={t('dashboard.noTaskDataDesc')} />
             )}
           </div>
         </Card>
 
         <Card>
           <div className="flex items-center justify-between mb-4">
-            <h2 className="font-heading font-semibold text-fg-primary">最近任务</h2>
+            <h2 className="font-heading font-semibold text-fg-primary">{t('dashboard.recentTasks')}</h2>
             <Link to="/tasks" className="text-xs text-brand hover:text-brand-hover flex items-center gap-1 cursor-pointer">
-              查看全部 <ArrowRight className="w-3 h-3" />
+              {t('dashboard.viewAll')} <ArrowRight className="w-3 h-3" />
             </Link>
           </div>
           <div className="space-y-2">
@@ -150,7 +150,7 @@ export default function DashboardPage() {
                 <div className="flex items-center justify-between gap-3">
                   <p className="text-sm text-fg-primary truncate flex-1">{task.goal}</p>
                   <Tag variant={statusVariant[task.status] || 'default'}>
-                    {statusLabels[task.status] || task.status}
+                    {t(statusLabels[task.status] || task.status)}
                   </Tag>
                 </div>
                 <p className="text-xs text-fg-muted mt-1">
@@ -160,11 +160,11 @@ export default function DashboardPage() {
             ))}
             {recentTasks.length === 0 && (
               <EmptyState
-                title="暂无任务"
-                description="试试用自然语言描述一个目标"
+                title={t('dashboard.emptyTitle')}
+                description={t('dashboard.emptyDesc')}
                 action={
                   <Link to="/chat" className="text-brand hover:text-brand-hover text-sm cursor-pointer underline">
-                    前往对话页
+                    {t('dashboard.goChat')}
                   </Link>
                 }
               />

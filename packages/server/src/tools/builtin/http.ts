@@ -142,7 +142,7 @@ export const httpFetchTool: Tool = {
         body: bodyText,
         truncated,
         byteLength,
-      });
+      }, `${method} ${response.url} → ${response.status}（${(byteLength / 1024).toFixed(1)} KB${truncated ? '，超出部分截断' : ''}）`);
     } catch (err: any) {
       if (ctx.signal.aborted) {
         return toolError('CANCELLED', '请求已取消', false);

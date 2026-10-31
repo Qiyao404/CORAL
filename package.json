@@ -5,7 +5,8 @@
   "workspaces": [
     "packages/server",
     "packages/web",
-    "packages/progress"
+    "packages/progress",
+    "packages/sdk"
   ],
   "scripts": {
     "dev:server": "npm run dev -w packages/server",
@@ -14,8 +15,9 @@
     "build:web": "npm run build -w packages/web",
     "test": "npm run test -w packages/server && npm run test -w packages/progress",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
-    "build": "npm run build:server && npm run build:web",
-    "start": "node packages/server/bin/coral.mjs"
+    "build": "npm run build:server && npm run build:web && npm run build:sdk",
+    "start": "node packages/server/bin/coral.mjs",
+    "build:sdk": "npm run build -w packages/sdk"
   },
   "devDependencies": {
     "concurrently": "^9.1.0",

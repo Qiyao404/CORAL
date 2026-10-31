@@ -1,0 +1,32 @@
+/** execlog 命名空间（zh 权威）*/
+export const zh: Record<string, string> = {
+  // 工具调用 → 一行人话描述（describeAction）
+  'execlog.listFiles': '查看文件列表',
+  'execlog.listFilesPath': '查看文件列表 · {path}',
+  'execlog.readFile': '读取文件 {path}',
+  'execlog.writeFile': '写入文件 {path}',
+  'execlog.editFile': '编辑文件 {path}',
+  'execlog.searchQuery': '搜索 "{query}"',
+  'execlog.searchQueryPath': '搜索 "{query}" in {path}',
+  'execlog.readWord': '读取 Word {path}',
+  'execlog.writeWord': '生成 Word {path}',
+  'execlog.fetchUrl': '访问网页 {url}',
+  'execlog.updateTodo': '更新任务清单',
+  'execlog.searchMemory': '查找记忆 "{query}"',
+  'execlog.writeMemory': '记录到长期记忆',
+  'execlog.readMemory': '读取长期记忆',
+  'execlog.spawnAgent': '派出子代理：{goal}',
+  'execlog.execSubtask': '执行子任务',
+  'execlog.findRuns': '查找历史运行',
+  'execlog.runCommand': '执行命令',
+  'execlog.readEvidence': '调取证据记录',
+  'execlog.dualReview': '双盲会审',
+  'execlog.confirmMemory': '标记记忆已确认',
+  'execlog.runSkill': '执行技能 {name}',
+  // 主组件
+  'execlog.todoTitle': '任务清单',
+  'execlog.planning': '正在制定计划…',
+  'execlog.stepsTitle': '操作步骤',
+  'execlog.stepCount': '{n} 步',
+  'execlog.waitingAgent': '等待 agent 开始执行…',
+};

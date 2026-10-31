@@ -737,12 +737,15 @@ export class AgentLoop {
         workspaceDir: this.options.workspaceDir,
         emit: ev => this.emit(ev.type, { tool: call.name, ...ev.payload }),
       }));
-      // 结果预览进事件（M1-8 工具卡片「结果可展开」）
+      // 结果预览进事件（M1-8 工具卡片「结果可展开」）。
+      // 展示层摘要优先（toolOk(data, display) 的第二通道）：UI 看人话摘要，
+      // 模型上下文仍是下面的 JSON.stringify(result.data) — 双通道分离
       if (result.ok) {
         this.emit('tool.result_preview', {
           tool: resolvedTool.name,
           callId: call.id,
-          preview: preview(result.data),
+          preview: result.display ?? preview(result.data),
+          ...(result.display ? { display: result.display } : {}),
         });
       }
       // hooks：post_tool_use — 观察型（审计/记录）；守卫异常不伤已执行的结果

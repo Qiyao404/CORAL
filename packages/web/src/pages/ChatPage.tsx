@@ -9,6 +9,7 @@ import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState, Modal, Input } from '../components/ui';
 import { ExecutionLogView } from '../components/ExecutionLog';
 import { useRunStream, deriveRunView, type RunEventItem } from '../hooks/useRunStream';
+import { useI18n } from '../i18n';
 
 /**
  * M1-8：Chat 页升级 — 真 agent 会话。
@@ -30,6 +31,7 @@ interface Workspace {
 
 export default function ChatPage() {
   const navigate = useNavigate();
+  const { t } = useI18n();
   const [goal, setGoal] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
@@ -117,13 +119,13 @@ export default function ChatPage() {
   const [optimizer, setOptimizer] = useState<{ loading: boolean; original?: string; optimized?: string; error?: string } | null>(null);
   const runOptimize = async () => {
     const text = goal.trim();
-    if (!text) { setOptimizer({ loading: false, error: '先写点什么再优化～' }); return; }
+    if (!text) { setOptimizer({ loading: false, error: t('chat.optimizeEmptyDraft') }); return; }
     setOptimizer({ loading: true, original: text });
     try {
       const d = await api.optimizePrompt(text);
       setOptimizer({ loading: false, original: text, optimized: d.optimized });
     } catch (err: any) {
-      setOptimizer({ loading: false, error: err?.message ?? '优化失败' });
+      setOptimizer({ loading: false, error: err?.message ?? t('chat.optimizeFailed') });
     }
   };
 
@@ -158,13 +160,13 @@ export default function ChatPage() {
   // 右侧预览抽屉
   const [preview, setPreview] = useState<{ open: boolean; loading?: boolean; name?: string; kind?: string; content?: string; rawUrl?: string; note?: string; error?: string } | null>(null);
   const openPreview = async (rel: string) => {
-    if (!workspaceId) { setPreview({ open: true, name: rel.split('/').pop(), error: '未绑定工作区 — 请先在顶部选择工作区' }); return; }
+    if (!workspaceId) { setPreview({ open: true, name: rel.split('/').pop(), error: t('chat.previewNoWorkspace') }); return; }
     setPreview({ open: true, loading: true, name: rel.split('/').pop() });
     try {
       const d = await api.previewFile(workspaceId, rel);
       setPreview({ open: true, name: d.name ?? rel.split('/').pop(), kind: d.kind, content: d.content, rawUrl: d.rawUrl, note: d.note });
     } catch (err: any) {
-      setPreview({ open: true, name: rel.split('/').pop(), error: err?.message ?? '预览失败' });
+      setPreview({ open: true, name: rel.split('/').pop(), error: err?.message ?? t('chat.previewFailed') });
     }
   };
 
@@ -207,12 +209,12 @@ export default function ChatPage() {
     try {
       await api.updateWorkspace(workspaceId, { permission: perm });
       await loadWorkspaces();
-    } catch (err: any) { alert('权限修改失败: ' + err.message); }
+    } catch (err: any) { alert(t('chat.permissionChangeFailed', { message: err.message })); }
   };
 
   const handleUpload = async (file: File) => {
-    if (!workspaceId || uploading.current) { if (!workspaceId) alert('请先选择工作区再上传'); return; }
-    if (file.size > 1024 * 1024) { alert('文件超过 1MB 上限'); return; }
+    if (!workspaceId || uploading.current) { if (!workspaceId) alert(t('chat.uploadNeedWorkspace')); return; }
+    if (file.size > 1024 * 1024) { alert(t('chat.uploadFileTooLarge')); return; }
     uploading.current = true;
     try {
       // 二进制类型走 base64 保真通道（.docx/.xlsx 等）；文本直传
@@ -231,7 +233,7 @@ export default function ChatPage() {
       }
       setUploadedFiles(prev => prev.some(f => f === file.name) ? prev : [...prev, file.name]);
     } catch (err: any) {
-      alert('上传失败: ' + err.message);
+      alert(t('chat.uploadFailed', { message: err.message }));
     } finally {
       uploading.current = false;
     }
@@ -443,7 +445,7 @@ export default function ChatPage() {
       setActiveRunId(res.runId);
       loadSessions();
     } catch (err: any) {
-      alert(`创建失败: ${err.message}`);
+      alert(t('chat.createRunFailed', { message: err.message }));
     } finally {
       setSubmitting(false);
     }
@@ -454,22 +456,22 @@ export default function ChatPage() {
     try {
       await api.resolveApproval(activeRunId, approvalId, approved);
     } catch (err: any) {
-      alert(`审批失败: ${err.message}`);
+      alert(t('chat.approvalFailed', { message: err.message }));
     }
   };
 
   const handleDeleteRun = async (runId: string) => {
-    if (!confirm('删除这条对话？（事件与检查点一并删除）')) return;
+    if (!confirm(t('chat.confirmDeleteRun'))) return;
     try {
       await api.deleteRun(runId);
       if (activeRunId === runId) { setActiveRunId(null); setCurrentSessionId(null); }
       await loadSessions();
-    } catch (err: any) { alert('删除失败: ' + err.message); }
+    } catch (err: any) { alert(t('chat.deleteFailed', { message: err.message })); }
   };
 
   const handleDeleteSession = async (sessionId: string | null) => {
-    if (!sessionId) { alert('该对话不属于任何会话，请删除单条对话'); return; }
-    if (!confirm('删除整个会话（含全部对话记录）？')) return;
+    if (!sessionId) { alert(t('chat.deleteSessionNotGrouped')); return; }
+    if (!confirm(t('chat.confirmDeleteSession'))) return;
     try {
       await api.deleteSession(sessionId);
       if (currentSessionId === sessionId) { setCurrentSessionId(null); }
@@ -477,7 +479,7 @@ export default function ChatPage() {
         setActiveRunId(null);
       }
       await loadSessions();
-    } catch (err: any) { alert('删除失败: ' + err.message); }
+    } catch (err: any) { alert(t('chat.deleteFailed', { message: err.message })); }
   };
 
   // 预算超限后续接：同会话新 run，checkpoint 续接上一轮进度，预算按 run 重置。
@@ -496,7 +498,7 @@ export default function ChatPage() {
       setActiveRunId(res.runId);
       loadSessions();
     } catch (err: any) {
-      alert('续接失败: ' + err.message);
+      alert(t('chat.continueFailed', { message: err.message }));
     } finally {
       setSubmitting(false);
     }
@@ -513,7 +515,7 @@ export default function ChatPage() {
   const renderSessionItem = (s: SessionItem, nested = false) => {
     const isSession = Boolean(s.sessionId);
     const active = isSession ? currentSessionId === s.sessionId : activeRunId === s.runs[0]?.id;
-    const title = s.runs[0]?.goal?.slice(0, 24) || '对话';
+    const title = s.runs[0]?.goal?.slice(0, 24) || t('chat.conversation');
     return (
       <div
         key={s.sessionId ?? `ungrouped-${s.runs[0]?.id}`}
@@ -534,7 +536,7 @@ export default function ChatPage() {
         <div className="flex-1 min-w-0">
           <p className="truncate">{title}</p>
           <p className="text-[10px] text-fg-muted mt-0.5">
-            {s.runs.length > 1 ? `${s.runs.length} 轮 · ` : ''}{statusLabel(s.runs[0]?.status ?? '')} · {new Date(s.runs[0]?.createdAt ?? 0).toLocaleDateString('zh-CN')}
+            {s.runs.length > 1 ? `${t('chat.turns', { count: s.runs.length })} · ` : ''}{t(statusLabel(s.runs[0]?.status ?? ''))} · {new Date(s.runs[0]?.createdAt ?? 0).toLocaleDateString('zh-CN')}
           </p>
         </div>
         <button
@@ -543,7 +545,7 @@ export default function ChatPage() {
             if (isSession) handleDeleteSession(s.sessionId);
             else handleDeleteRun(s.runs[0]?.id ?? '');
           }}
-          title={isSession ? '删除此条对话线' : '删除此对话'}
+          title={isSession ? t('chat.deleteThread') : t('chat.deleteConversation')}
           className="opacity-0 group-hover:opacity-100 text-fg-disabled hover:text-status-danger cursor-pointer shrink-0 transition-opacity"
         >
           <Trash2 className="w-3.5 h-3.5" />
@@ -557,17 +559,17 @@ export default function ChatPage() {
       {/* 左侧：历史会话 */}
       <aside className="w-64 shrink-0 border-r border-glass-border glass rounded-none flex flex-col">
         <div className="p-3 border-b border-glass-border flex items-center justify-between">
-          <span className="text-xs text-fg-muted flex items-center gap-1"><History className="w-3.5 h-3.5" /> 历史会话</span>
+          <span className="text-xs text-fg-muted flex items-center gap-1"><History className="w-3.5 h-3.5" /> {t('chat.history')}</span>
           <button
             onClick={() => { setActiveRunId(null); setCurrentSessionId(`sess_${Date.now().toString(36)}`); setUploadedFiles([]); }}
             className="text-xs text-brand hover:text-brand-hover flex items-center gap-1 cursor-pointer"
-            title="开始新会话"
+            title={t('chat.startNewSession')}
           >
-            <Plus className="w-3.5 h-3.5" /> 新建
+            <Plus className="w-3.5 h-3.5" /> {t('chat.new')}
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
-          {sessions.length === 0 && <p className="text-xs text-fg-muted p-2">暂无历史</p>}
+          {sessions.length === 0 && <p className="text-xs text-fg-muted p-2">{t('chat.noHistory')}</p>}
           {collections.map(col => {
             // 单会话 = 单条目；多会话 = 可折叠对话集（点开看全部对话线：原对话 + 分支）
             if (col.sessions.length <= 1) {
@@ -588,11 +590,11 @@ export default function ChatPage() {
                   {expanded ? <ChevronDown className="w-3 h-3 shrink-0" /> : <ChevronRight className="w-3 h-3 shrink-0" />}
                   <GitBranch className="w-3 h-3 text-brand shrink-0" />
                   <span className="truncate flex-1 font-medium">{col.topic.slice(0, 22)}…</span>
-                  <span className="text-fg-muted shrink-0">{col.sessions.length} 线 · {totalRuns} 轮</span>
+                  <span className="text-fg-muted shrink-0">{t('chat.threadsRuns', { threads: col.sessions.length, runs: totalRuns })}</span>
                 </button>
                 {expanded && (
                   <div className="pb-1">
-                    <p className="px-3 pt-1 text-[10px] text-fg-muted">对话线（互不影响，可独立打开/删除）：</p>
+                    <p className="px-3 pt-1 text-[10px] text-fg-muted">{t('chat.threadListHint')}</p>
                     {col.sessions.map(s => renderSessionItem(s, true))}
                   </div>
                 )}
@@ -608,16 +610,16 @@ export default function ChatPage() {
         <div className="p-5 border-b border-glass-border glass rounded-none flex items-center gap-3">
           <Bot className="w-6 h-6 text-brand" />
           <div className="flex-1">
-            <h1 className="text-lg font-heading font-bold text-fg-primary">Agent 会话</h1>
+            <h1 className="text-lg font-heading font-bold text-fg-primary">{t('chat.title')}</h1>
             <p className="text-xs text-fg-muted">
-              自主规划 · 工具调用 · 全程可观测 {connected ? '· 实时已连接' : ''}
+              {t('chat.subtitle')} {connected ? t('chat.liveConnected') : ''}
               {ctxUsage && ctxUsage.contextMax > 0 && (() => {
                 const pct = Math.min(100, Math.round((ctxUsage.contextChars / ctxUsage.contextMax) * 100));
                 const kb = Math.round(ctxUsage.contextChars / 1024);
                 const maxKb = Math.round(ctxUsage.contextMax / 1024);
                 const color = pct > 85 ? 'text-status-danger' : pct > 60 ? 'text-status-warning' : 'text-fg-muted';
                 return (
-                  <span className={`ml-2 inline-flex items-center gap-1 ${color}`} title={`消息 ${ctxUsage.messageCount} 条 · 会话文件 ${ctxUsage.sessionContext?.fileCount ?? 0} 个`}>
+                  <span className={`ml-2 inline-flex items-center gap-1 ${color}`} title={t('chat.contextUsageTooltip', { messages: ctxUsage.messageCount, files: ctxUsage.sessionContext?.fileCount ?? 0 })}>
                     <Database className="w-3 h-3" />
                     {kb}/{maxKb}KB ({pct}%)
                   </span>
@@ -625,10 +627,10 @@ export default function ChatPage() {
               })()}
               {tokenUsage && (() => {
                 const pct = Math.min(100, Math.round((tokenUsage.used / tokenUsage.budget) * 100));
-                const wan = (n: number) => (n >= 10000 ? `${(n / 10000).toFixed(1)}万` : String(n));
+                const wan = (n: number) => (n >= 10000 ? `${(n / 10000).toFixed(1)}${t('chat.wanUnit')}` : String(n));
                 const color = pct > 85 ? 'text-status-danger' : pct > 60 ? 'text-status-warning' : 'text-fg-muted';
                 return (
-                  <span className={`ml-2 inline-flex items-center gap-1 ${color}`} title={`本轮 run 的 token 累计消耗（输入+输出）/ 预算上限。预算可在设置页调整`}>
+                  <span className={`ml-2 inline-flex items-center gap-1 ${color}`} title={t('chat.tokenUsageTooltip')}>
                     <Coins className="w-3 h-3" />
                     {wan(tokenUsage.used)}/{wan(tokenUsage.budget)} ({pct}%)
                   </span>
@@ -647,28 +649,28 @@ export default function ChatPage() {
               }}
               className="!w-52 text-xs"
             >
-              <option value="">{workspaces.length === 0 ? '未绑定工作区' : '不绑定工作区'}</option>
+              <option value="">{workspaces.length === 0 ? t('chat.workspaceUnbound') : t('chat.workspaceDontBind')}</option>
               {workspaces.map(w => (
                 <option key={w.id} value={w.id}>{w.name}</option>
               ))}
-              <option value="__new__">＋ 新建工作区…</option>
+              <option value="__new__">{t('chat.newWorkspaceOption')}</option>
             </Select>
             {workspaceId && (
               <Select
                 value={workspaces.find(w => w.id === workspaceId)?.permission ?? 'ask'}
                 onChange={e => changePermission(e.target.value)}
                 className="!w-24 text-xs"
-                title="工作区权限档：写改是否需要审批"
-              >
-                <option value="readonly">只读</option>
-                <option value="ask">写改询问</option>
-                <option value="auto">全自动</option>
+              title={t('chat.permissionTitle')}
+            >
+              <option value="readonly">{t('chat.permReadonly')}</option>
+              <option value="ask">{t('chat.permAsk')}</option>
+              <option value="auto">{t('chat.permAuto')}</option>
               </Select>
             )}
             <button
               onClick={() => setWsModal({ open: true, name: '', dir: '', permission: 'ask', error: '' })}
               className="p-1 rounded-md text-fg-muted hover:text-brand hover:bg-bg-elev/40 cursor-pointer"
-              title="新建工作区"
+              title={t('chat.newWorkspaceTitle')}
             >
               <FolderPlus className="w-4 h-4" />
             </button>
@@ -682,10 +684,10 @@ export default function ChatPage() {
               <div className="w-14 h-14 bg-brand-soft rounded-2xl flex items-center justify-center mx-auto mb-3 border border-brand/30">
                 <Bot className="w-7 h-7 text-brand" />
               </div>
-              <h2 className="text-base font-heading font-medium text-fg-primary mb-1">描述你的目标</h2>
-              <p className="text-fg-muted text-sm mb-5">Agent 会自主调用工具完成；绑定工作区后可读写本地文件</p>
+              <h2 className="text-base font-heading font-medium text-fg-primary mb-1">{t('chat.emptyGoalTitle')}</h2>
+              <p className="text-fg-muted text-sm mb-5">{t('chat.emptyGoalDesc')}</p>
               <div className="flex flex-wrap justify-center gap-2 max-w-xl mx-auto">
-                {['总结 https://example.com 的要点', '看看工作区里有什么文件', '把笔记整理成表格'].map(ex => (
+                {[t('chat.exampleSummarize'), t('chat.exampleWorkspaceFiles'), t('chat.exampleNotesToTable')].map(ex => (
                   <button key={ex} onClick={() => setGoal(ex)}
                     className="px-3 py-1.5 glass border border-glass-border rounded-full text-xs text-fg-secondary hover:border-brand/40 hover:text-brand cursor-pointer">
                     {ex}
@@ -702,8 +704,8 @@ export default function ChatPage() {
               <div key={r.id} className={`space-y-3 msg-enter ${r.parent_run_id ? 'ml-8 border-l-2 border-brand/30 pl-3' : ''}`}>
                 {r.parent_run_id && (
                   <div className="text-[11px] text-brand/80 flex items-center gap-1">
-                    <GitBranch className="w-3 h-3" /> 分支线（从原对话第 {r.fork_from_seq ?? '?'} 步分出）
-                    {r.inherited && r.inherited.length > 0 && <span className="text-fg-muted">· 以下为继承的问答（只读）</span>}
+                    <GitBranch className="w-3 h-3" /> {t('chat.branchLine', { seq: r.fork_from_seq ?? '?' })}
+                    {r.inherited && r.inherited.length > 0 && <span className="text-fg-muted">{t('chat.inheritedReadonly')}</span>}
                   </div>
                 )}
                 {r.inherited?.map((b, i) => (
@@ -729,17 +731,17 @@ export default function ChatPage() {
                   return (
                     <div className="flex justify-start">
                       <div className="flex flex-wrap gap-1.5 max-w-[85%] items-center">
-                        <span className="text-[10px] text-fg-muted">本次产出 ·</span>
+                        <span className="text-[10px] text-fg-muted">{t('chat.artifactsProduced')}</span>
                         {arts.map(a => (
                           <button
                             key={a.rel}
                             onClick={() => openPreview(a.rel)}
-                            title={`${a.rel}（点击预览）`}
+                            title={t('chat.clickToPreview', { file: a.rel })}
                             className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-brand-soft/50 text-brand border border-brand/25 hover:bg-brand-soft cursor-pointer"
                           >
                             <FileText className="w-3 h-3 shrink-0" />
                             <span className="truncate max-w-40">{a.name}</span>
-                            {a.action === 'modify' && <span className="text-[9px] opacity-70">改</span>}
+                            {a.action === 'modify' && <span className="text-[9px] opacity-70">{t('chat.actionModify')}</span>}
                           </button>
                         ))}
                       </div>
@@ -756,9 +758,9 @@ export default function ChatPage() {
             return (
               <div className="flex justify-start">
                 <div className="flex flex-wrap gap-1.5 items-center">
-                  <span className="text-[10px] text-fg-muted">产出中 ·</span>
+                  <span className="text-[10px] text-fg-muted">{t('chat.artifactsInProgress')}</span>
                   {arts.map(a => (
-                    <button key={a.rel} onClick={() => openPreview(a.rel)} title={`${a.rel}（点击预览）`} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-brand-soft/50 text-brand border border-brand/25 hover:bg-brand-soft cursor-pointer">
+                    <button key={a.rel} onClick={() => openPreview(a.rel)} title={t('chat.clickToPreview', { file: a.rel })} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-brand-soft/50 text-brand border border-brand/25 hover:bg-brand-soft cursor-pointer">
                       <FileText className="w-3 h-3 shrink-0" /><span className="truncate max-w-40">{a.name}</span>
                     </button>
                   ))}
@@ -777,17 +779,17 @@ export default function ChatPage() {
               <span className="text-sm font-medium text-fg-primary truncate flex-1" title={preview.name}>{preview.name}</span>
               {preview.rawUrl && (
                 <a href={`${preview.rawUrl}${preview.rawUrl.includes('?') ? '&' : '?'}download=1`} download className="text-xs text-fg-muted hover:text-brand flex items-center gap-1 shrink-0">
-                  <Download className="w-3.5 h-3.5" /> 下载
+                  <Download className="w-3.5 h-3.5" /> {t('chat.download')}
                 </a>
               )}
-              <button onClick={() => setPreview(null)} className="text-fg-muted hover:text-status-danger cursor-pointer p-1 shrink-0" title="关闭预览">
+              <button onClick={() => setPreview(null)} className="text-fg-muted hover:text-status-danger cursor-pointer p-1 shrink-0" title={t('chat.closePreview')}>
                 <XCircle className="w-4 h-4" />
               </button>
             </div>
             <div className="flex-1 overflow-auto">
               {preview.loading && (
                 <div className="flex items-center justify-center h-32 text-fg-muted text-xs gap-2">
-                  <Loader2 className="w-4 h-4 animate-spin" /> 加载预览…
+                  <Loader2 className="w-4 h-4 animate-spin" /> {t('chat.loadingPreview')}
                 </div>
               )}
               {preview.error && <p className="p-4 text-xs text-status-danger">{preview.error}</p>}
@@ -795,15 +797,15 @@ export default function ChatPage() {
                 <pre className="p-4 text-xs font-mono text-fg-secondary whitespace-pre-wrap break-words leading-5">{preview.content}</pre>
               )}
               {!preview.loading && !preview.error && preview.kind === 'pdf' && preview.rawUrl && (
-                <iframe src={preview.rawUrl} title="PDF 预览" className="w-full h-full border-0" />
+                <iframe src={preview.rawUrl} title={t('chat.pdfPreview')} className="w-full h-full border-0" />
               )}
               {!preview.loading && !preview.error && preview.kind === 'image' && preview.rawUrl && (
                 <div className="p-4 flex justify-center"><img src={preview.rawUrl} alt={preview.name} className="max-w-full rounded-lg border border-glass-border" /></div>
               )}
               {!preview.loading && !preview.error && preview.kind === 'binary' && (
                 <div className="p-6 text-center text-xs text-fg-muted space-y-2">
-                  <p>{preview.note ?? '此格式暂不支持在线预览'}</p>
-                  {preview.rawUrl && <a href={`${preview.rawUrl}&download=1`} download className="inline-flex items-center gap-1 text-brand hover:underline"><Download className="w-3 h-3" /> 下载查看</a>}
+                  <p>{preview.note ?? t('chat.previewUnsupported')}</p>
+                  {preview.rawUrl && <a href={`${preview.rawUrl}&download=1`} download className="inline-flex items-center gap-1 text-brand hover:underline"><Download className="w-3 h-3" /> {t('chat.downloadToView')}</a>}
                 </div>
               )}
             </div>
@@ -817,10 +819,10 @@ export default function ChatPage() {
               {uploadedFiles.map(name => (
                 <span key={name} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs bg-status-success/10 text-status-success border border-status-success/30">
                   <Type className="w-3 h-3" /> {name}
-                  <button className="text-status-success/60 hover:text-status-danger cursor-pointer" title="从列表移除" onClick={() => setUploadedFiles(prev => prev.filter(f => f !== name))}>×</button>
+                  <button className="text-status-success/60 hover:text-status-danger cursor-pointer" title={t('chat.removeFromList')} onClick={() => setUploadedFiles(prev => prev.filter(f => f !== name))}>×</button>
                 </span>
               ))}
-              <span className="text-[11px] text-fg-muted ml-1">将随下一条消息一并发送，发送后自动移除</span>
+              <span className="text-[11px] text-fg-muted ml-1">{t('chat.attachmentStagingHint')}</span>
             </div>
           )}
           <div className="max-w-4xl mx-auto flex gap-3 items-end relative">
@@ -828,7 +830,7 @@ export default function ChatPage() {
             {slashOpen && (
               <div className="absolute bottom-full left-0 right-24 mb-2 bg-bg-panel border border-glass-border rounded-xl shadow-xl overflow-hidden z-20 expand-anim">
                 <div className="px-3 py-1.5 text-[10px] text-fg-muted border-b border-glass-border/60 bg-bg-elev/40">
-                  斜杠命令 — ↑↓ 选择 · Tab/Enter 补全 · Esc 关闭
+                  {t('chat.slashHint')}
                 </div>
                 {slashMatches.map((c, i) => (
                   <button
@@ -850,7 +852,7 @@ export default function ChatPage() {
             {atOpen && (
               <div className="absolute bottom-full left-0 right-24 mb-2 bg-bg-panel border border-glass-border rounded-xl shadow-xl overflow-hidden z-20 expand-anim">
                 <div className="px-3 py-1.5 text-[10px] text-fg-muted border-b border-glass-border/60 bg-bg-elev/40">
-                  引用工作区文件 — ↑↓ 选择 · Tab/Enter 插入 · Esc 关闭
+                  {t('chat.atFileHint')}
                 </div>
                 {atMatches.map((f, i) => (
                   <button
@@ -870,18 +872,18 @@ export default function ChatPage() {
             {optimizer && (
               <div className="absolute bottom-full left-0 right-0 mb-2 bg-bg-panel border border-brand/30 rounded-xl shadow-2xl overflow-hidden z-20 expand-anim">
                 <div className="px-3 py-1.5 text-[10px] text-fg-muted border-b border-glass-border/60 bg-bg-elev/40 flex items-center gap-2">
-                  <Wand2 className="w-3 h-3 text-brand" /> 提示词优化
+                  <Wand2 className="w-3 h-3 text-brand" /> {t('chat.promptOptimize')}
                   {optimizer.original && (
                     <details className="ml-auto">
-                      <summary className="cursor-pointer text-fg-muted hover:text-fg-secondary">看原文</summary>
+                      <summary className="cursor-pointer text-fg-muted hover:text-fg-secondary">{t('chat.viewOriginal')}</summary>
                       <p className="mt-1 max-h-24 overflow-auto text-xs text-fg-muted whitespace-pre-wrap">{optimizer.original}</p>
                     </details>
                   )}
-                  <button className="ml-2 text-fg-muted hover:text-status-danger cursor-pointer" onClick={() => setOptimizer(null)} title="关闭">✕</button>
+                  <button className="ml-2 text-fg-muted hover:text-status-danger cursor-pointer" onClick={() => setOptimizer(null)} title={t('chat.close')}>✕</button>
                 </div>
                 <div className="p-3">
                   {optimizer.loading && (
-                    <p className="text-xs text-fg-muted flex items-center gap-2 py-3"><Loader2 className="w-3.5 h-3.5 animate-spin" /> 正在理解你的意图并优化…</p>
+                    <p className="text-xs text-fg-muted flex items-center gap-2 py-3"><Loader2 className="w-3.5 h-3.5 animate-spin" /> {t('chat.optimizing')}</p>
                   )}
                   {optimizer.error && !optimizer.loading && <p className="text-xs text-status-danger py-2">{optimizer.error}</p>}
                   {optimizer.optimized && !optimizer.loading && (
@@ -892,9 +894,9 @@ export default function ChatPage() {
                         onChange={e => setOptimizer(o => o ? { ...o, optimized: e.target.value } : o)}
                       />
                       <div className="flex gap-2 mt-2 justify-end">
-                        <Button variant="ghost" onClick={() => setOptimizer(null)}>放弃</Button>
+                        <Button variant="ghost" onClick={() => setOptimizer(null)}>{t('chat.discard')}</Button>
                         <Button onClick={() => { setGoal(optimizer.optimized ?? ''); setOptimizer(null); requestAnimationFrame(() => { const el = document.querySelector('textarea') as HTMLTextAreaElement | null; el?.focus(); }); }}>
-                          采用（替换输入框）
+                          {t('chat.applyOptimized')}
                         </Button>
                       </div>
                     </>
@@ -930,14 +932,14 @@ export default function ChatPage() {
                 }
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); }
               }}
-              placeholder="描述你的目标…（输入 / 唤起快捷命令；Enter 发送，Shift+Enter 换行）"
+              placeholder={t('chat.goalPlaceholder')}
               rows={2}
               className="flex-1 resize-none"
             />
             <label
               className="cursor-pointer p-2 rounded-lg hover:bg-bg-elev/40 text-fg-muted hover:text-brand"
-              title={workspaceId ? '上传文件到工作区' : '先在设置页创建工作区，才能上传文件'}
-              onClick={e => { if (!workspaceId) { e.preventDefault(); alert('上传需要先绑定工作区：请到「设置」页创建工作区（绑定一个本地文件夹），然后在顶部选择它。'); } }}
+              title={workspaceId ? t('chat.uploadToWorkspace') : t('chat.uploadNeedWorkspaceFirst')}
+              onClick={e => { if (!workspaceId) { e.preventDefault(); alert(t('chat.uploadNeedWorkspaceAlert')); } }}
             >
               <Upload className="w-4 h-4" />
               <input type="file" className="hidden" onChange={e => { const f = e.target.files?.[0]; if (f) handleUpload(f); e.target.value = ''; }} />
@@ -946,7 +948,7 @@ export default function ChatPage() {
               onClick={runOptimize}
               disabled={submitting}
               className="p-2 rounded-lg hover:bg-bg-elev/40 text-fg-muted hover:text-brand cursor-pointer disabled:opacity-50"
-              title="优化提示词 — 理解你的意图后改写，让 AI 完成得更好"
+              title={t('chat.optimizeButtonTitle')}
             >
               {optimizer?.loading ? <Loader2 className="w-4 h-4 animate-spin text-brand" /> : <Wand2 className="w-4 h-4" />}
             </button>
@@ -962,30 +964,30 @@ export default function ChatPage() {
         <Modal
           open={wsModal.open}
           onClose={() => setWsModal(m => ({ ...m, open: false }))}
-          title="新建工作区"
+          title={t('chat.newWorkspaceTitle')}
           footer={
             <>
-              <Button variant="ghost" onClick={() => setWsModal(m => ({ ...m, open: false }))}>取消</Button>
-              <Button onClick={handleCreateWorkspace} disabled={!wsModal.name.trim() || !wsModal.dir.trim()}>创建并使用</Button>
+              <Button variant="ghost" onClick={() => setWsModal(m => ({ ...m, open: false }))}>{t('chat.cancel')}</Button>
+              <Button onClick={handleCreateWorkspace} disabled={!wsModal.name.trim() || !wsModal.dir.trim()}>{t('chat.createAndUse')}</Button>
             </>
           }
         >
           <div className="space-y-3 text-sm">
             <div>
-              <label className="block text-xs text-fg-muted mb-1">名称</label>
-              <Input value={wsModal.name} onChange={e => setWsModal(m => ({ ...m, name: e.target.value }))} placeholder="我的项目" />
+              <label className="block text-xs text-fg-muted mb-1">{t('chat.nameLabel')}</label>
+              <Input value={wsModal.name} onChange={e => setWsModal(m => ({ ...m, name: e.target.value }))} placeholder={t('chat.workspaceNamePlaceholder')} />
             </div>
             <div>
-              <label className="block text-xs text-fg-muted mb-1">本地文件夹完整路径（须已存在）</label>
+              <label className="block text-xs text-fg-muted mb-1">{t('chat.workspaceDirLabel')}</label>
               <Input value={wsModal.dir} onChange={e => setWsModal(m => ({ ...m, dir: e.target.value }))} placeholder="D:\\projects\\my-notes" />
-              <p className="text-[10px] text-fg-muted mt-1">提示：资源管理器地址栏复制路径粘贴即可</p>
+              <p className="text-[10px] text-fg-muted mt-1">{t('chat.workspaceDirHint')}</p>
             </div>
             <div>
-              <label className="block text-xs text-fg-muted mb-1">权限档</label>
+              <label className="block text-xs text-fg-muted mb-1">{t('chat.permissionLabel')}</label>
               <Select value={wsModal.permission} onChange={e => setWsModal(m => ({ ...m, permission: e.target.value }))}>
-                <option value="ask">询问（默认，写改弹 diff 批准）</option>
-                <option value="readonly">只读</option>
-                <option value="auto">全自动（写改直接执行）</option>
+                <option value="ask">{t('chat.permAskFull')}</option>
+                <option value="readonly">{t('chat.permReadonly')}</option>
+                <option value="auto">{t('chat.permAutoFull')}</option>
               </Select>
             </div>
             {wsModal.error && <p className="text-xs text-status-danger">{wsModal.error}</p>}
@@ -1011,6 +1013,7 @@ function ProcessSection({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [loaded, setLoaded] = useState<ReturnType<typeof deriveRunView> | null>(null);
+  const { t } = useI18n();
 
   useEffect(() => {
     if (!open || liveView || loaded || !runId) return;
@@ -1041,10 +1044,10 @@ function ProcessSection({
         {running
           ? <Loader2 className="w-3.5 h-3.5 text-status-info animate-spin shrink-0" />
           : <Activity className="w-3.5 h-3.5 text-fg-muted shrink-0" />}
-        <span className="text-fg-secondary font-medium">{running ? '正在执行…' : '执行过程'}</span>
+        <span className="text-fg-secondary font-medium">{running ? t('chat.executing') : t('chat.executionProcess')}</span>
         {v && (
           <span className="text-fg-muted">
-            {toolCount} 次工具调用{v.todos.length > 0 ? ' · ' + v.todos.filter(t => t.status === 'completed').length + '/' + v.todos.length + ' 项任务' : ''}
+            {t('chat.toolCallsCount', { count: toolCount })}{v.todos.length > 0 ? ' · ' + t('chat.todosProgress', { done: v.todos.filter(td => td.status === 'completed').length, total: v.todos.length }) : ''}
           </span>
         )}
         <span className="flex-1" />
@@ -1052,7 +1055,7 @@ function ProcessSection({
       </button>
       {open && (
         <div className="px-3 pb-3 space-y-2 max-h-[480px] overflow-y-auto">
-          {!v && <p className="text-xs text-fg-muted py-2">加载事件中…</p>}
+          {!v && <p className="text-xs text-fg-muted py-2">{t('chat.loadingEvents')}</p>}
           {v && <ExecutionLogView todos={v.todos} toolCards={v.toolCards} running={running} />}
         </div>
       )}
@@ -1078,7 +1081,7 @@ function SentAttachments({ names }: { names?: string[] }) {
 
 
 function statusLabel(s: string): string {
-  return ({ created: '已创建', running: '运行中', waiting_human: '等待审批', completed: '已完成', failed: '已失败', cancelled: '已取消' } as Record<string, string>)[s] ?? s;
+  return ({ created: 'chat.statusCreated', running: 'chat.statusRunning', waiting_human: 'chat.statusWaitingApproval', completed: 'chat.statusCompleted', failed: 'chat.statusFailed', cancelled: 'chat.statusCancelled' } as Record<string, string>)[s] ?? s;
 }
 
 /** 单个 run 的直播视图（goal + todo + 工具卡 + 审批 + 最终回答） */
@@ -1104,6 +1107,7 @@ function RunLiveView({
   onContinue?: () => void;
 }) {
   const [openCards, setOpenCards] = useState<Set<string>>(new Set());
+  const { t } = useI18n();
   const toggle = (id: string) => setOpenCards(prev => {
     const next = new Set(prev);
     next.has(id) ? next.delete(id) : next.add(id);
@@ -1111,8 +1115,8 @@ function RunLiveView({
   });
 
   const statusTag = view.runStatus
-    ? <Tag variant={view.runStatus === 'completed' ? 'success' : view.runStatus === 'failed' ? 'danger' : 'info'}>{statusLabel(view.runStatus)}</Tag>
-    : <Tag variant="info">运行中</Tag>;
+    ? <Tag variant={view.runStatus === 'completed' ? 'success' : view.runStatus === 'failed' ? 'danger' : 'info'}>{t(statusLabel(view.runStatus))}</Tag>
+    : <Tag variant="info">{t('chat.statusRunning')}</Tag>;
 
   return (
     <div className="space-y-4">
@@ -1134,7 +1138,7 @@ function RunLiveView({
       {view.pendingApprovals.map(a => (
         <Card key={a.approvalId} className="!p-4 border-status-warn/40">
           <h3 className="text-sm font-semibold text-status-warn mb-2 flex items-center gap-1.5">
-            <ShieldAlert className="w-4 h-4" /> 需要你的批准：{a.tool}
+            <ShieldAlert className="w-4 h-4" /> {t('chat.approvalNeeded', { tool: a.tool })}
           </h3>
           {a.diff ? (
             <pre className="bg-bg-panel/60 rounded-lg p-3 text-[11px] font-mono overflow-auto max-h-64 whitespace-pre-wrap break-all border border-glass-border">
@@ -1151,8 +1155,8 @@ function RunLiveView({
             </pre>
           )}
           <div className="flex gap-2 mt-3 justify-end">
-            <Button size="sm" variant="ghost" onClick={() => onDecide(a.approvalId, false)}>拒绝</Button>
-            <Button size="sm" onClick={() => onDecide(a.approvalId, true)}>批准执行</Button>
+            <Button size="sm" variant="ghost" onClick={() => onDecide(a.approvalId, false)}>{t('chat.reject')}</Button>
+            <Button size="sm" onClick={() => onDecide(a.approvalId, true)}>{t('chat.approveExecution')}</Button>
           </div>
         </Card>
       ))}
@@ -1173,9 +1177,9 @@ function RunLiveView({
             <p className="text-sm text-fg-primary whitespace-pre-wrap break-words">{fullFinal ?? view.finalContent}</p>
             {view.endReason === 'budget_exceeded' && (
               <div className="mt-2 flex items-center gap-2">
-                <p className="text-xs text-status-warn">⚠ 预算达到上限，以上为部分成果总结</p>
+                <p className="text-xs text-status-warn">{t('chat.budgetExceeded')}</p>
                 {onContinue && (
-                  <Button size="sm" variant="secondary" onClick={onContinue}>继续执行</Button>
+                  <Button size="sm" variant="secondary" onClick={onContinue}>{t('chat.continueRun')}</Button>
                 )}
               </div>
             )}
@@ -1186,11 +1190,11 @@ function RunLiveView({
       {/* 事件计数 */}
       {events.length > 0 && (
         <p className="text-center text-[10px] text-fg-disabled">
-          {events.length} 个事件 · {view.toolCards.length} 次工具调用
+          {t('chat.eventCount', { count: events.length })} · {t('chat.toolCallsCount', { count: view.toolCards.length })}
         </p>
       )}
       {events.length === 0 && (
-        <EmptyState title="等待事件…" description="run 已创建，正在等待第一条事件" />
+        <EmptyState title={t('chat.waitingEvents')} description={t('chat.waitingEventsDesc')} />
       )}
     </div>
   );

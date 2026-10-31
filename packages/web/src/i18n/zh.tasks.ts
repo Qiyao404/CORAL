@@ -1,0 +1,21 @@
+/** tasks 命名空间（zh 权威）*/
+export const zh: Record<string, string> = {
+  'tasks.title': '任务中心',
+  'tasks.subtitle': '管理和监控所有提交的任务',
+  'tasks.newTask': '新建任务',
+  'tasks.filterAll': '全部',
+  'tasks.filterPlanning': '规划中',
+  'tasks.filterExecuting': '执行中',
+  'tasks.filterCompleted': '已完成',
+  'tasks.filterFailed': '已失败',
+  'tasks.totalCount': '共 {n} 条',
+  'tasks.emptyTitle': '暂无任务',
+  'tasks.emptyDesc': '去对话页或点击右上角新建任务',
+  'tasks.statusCreated': '已创建',
+  'tasks.statusPlanning': '规划中',
+  'tasks.statusExecuting': '执行中',
+  'tasks.statusCompleted': '已完成',
+  'tasks.statusFailed': '已失败',
+  'tasks.statusCancelled': '已取消',
+  'tasks.statusWaitingHuman': '等待审批',
+};

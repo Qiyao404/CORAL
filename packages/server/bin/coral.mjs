@@ -5,7 +5,7 @@
  */
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, openSync, closeSync, unlinkSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'node:net';
 
@@ -29,6 +29,43 @@ if (process.argv[2] === 'doctor') {
     process.exit(report.ok ? 0 : 1);
   } catch (err) {
     fail(`doctor 执行失败: ${err?.message ?? err}`);
+  }
+}
+
+// ── 子命令：coral install <source>（技能包安装：npm 包 / git URL / 本地目录）──
+// 技能包生态入口：npm:<spec> 走 npm 隔离安装（--ignore-scripts），git/本地目录复用导入器。
+// skillsDir 与 dataRoot 同源（仓库根 skills/），安装落盘后文件监控自动热加载。
+if (process.argv[2] === 'install') {
+  const source = process.argv[3];
+  const repoRoot = join(serverRoot, '..', '..');
+  if (!source) {
+    fail('用法: coral install <npm:包名 | git URL | 本地目录> [--overwrite]');
+  }
+  const overwrite = process.argv.includes('--overwrite');
+  const distImporter = join(serverRoot, 'dist', 'skill-runtime', 'skill-importer.js');
+  if (!existsSync(distImporter)) {
+    fail(`构建产物缺失: ${distImporter}\n  请先运行: npm run build -w packages/server`);
+  }
+  try {
+    const { importSkills } = await import(`file:///${distImporter.replace(/\\/g, '/')}`);
+    const skillsDir = process.env.SKILLS_DIR && isAbsolute(process.env.SKILLS_DIR)
+      ? process.env.SKILLS_DIR
+      : join(repoRoot, 'skills');
+    const reports = await importSkills(source, { skillsDir, overwrite });
+    for (const r of reports) {
+      const icon = r.status === 'imported' ? '✓' : r.status === 'skipped' ? '·' : '✗';
+      console.log(`${icon} ${r.skillName ?? '—'} → ${r.status}${r.error ? ` — ${r.error}` : ''}`);
+      for (const w of r.warnings) console.log(`  ⚠ ${w}`);
+    }
+    const imported = reports.filter(r => r.status === 'imported').length;
+    if (imported > 0) {
+      console.log(`\n已安装 ${imported} 个技能 → ${skillsDir}（运行中的服务由文件监控自动热加载）`);
+    } else {
+      console.log('\n未安装任何技能');
+    }
+    process.exit(reports.every(r => r.status !== 'failed') ? 0 : 1);
+  } catch (err) {
+    fail(`install 执行失败: ${err?.message ?? err}`);
   }
 }
 
