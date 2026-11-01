@@ -9,7 +9,9 @@ import { platformConfig } from '../services/config.js';
 import { createDefaultToolRegistry } from '../tools/registry.js';
 import { makeTodoTool } from '../tools/builtin/todo.js';
 import { makePastRunsTool } from '../tools/builtin/past-runs.js';
-import { makeSpawnTool } from '../tools/builtin/spawn.js';
+import { makeSpawnTool, makeTeamSpawnTool } from '../tools/builtin/spawn.js';
+import { makeTeamSendTool, makeTeamTasksTool, makeTeamWaitTool } from '../tools/builtin/team.js';
+import { TeamService } from './team-service.js';
 import { makeMemoryTools, MEMORY_GUIDE } from '../tools/builtin/memory.js';
 import { makeEvidenceReadTool } from '../tools/builtin/evidence.js';
 import { makeDualReviewTool } from '../tools/builtin/dual-review.js';
@@ -65,6 +67,11 @@ export interface StartRunInput {
   /** 多轮对话：从本会话最近 run 的末次 checkpoint 续接历史（含上一轮工具结果与最终回答） */
   continueSession?: boolean;
   extraSystem?: string;
+  /**
+   * 精确重放（Time-Travel fork）：来自源 checkpoint 的历史系统提示。
+   * 提供时新 run 完全复现当时的上下文组装（画像/习惯/个性化的后续变化不影响 fork）。
+   */
+  forkSystem?: string;
   /**
    * 模型路由：指定本 run 使用的 LLM 配置档案 ID（llm_profiles 表）。
    * 未指定 = 使用当前 active 配置。适用于"图像题切视觉模型 / 简单题切便宜模型"场景。
@@ -372,7 +379,19 @@ export class RunEngine {
         }
       }
 
-      const tools = this.buildTools(runId, workspace, runLlm);
+      const { tools, team } = this.buildTools(runId, workspace, runLlm);
+      // 精确重放：模型配置快照（路由优先；否则取当前 active 配置）
+      let modelInfo: { model: string; provider?: string; baseUrl?: string; profileId?: string };
+      if (input.modelProfileId && routedModel) {
+        modelInfo = { model: routedModel, profileId: input.modelProfileId };
+      } else {
+        try {
+          const active = (await import('../services/llm-config-service.js')).getActiveLlmConfig();
+          modelInfo = { model: active.model, provider: active.provider, baseUrl: active.baseUrl };
+        } catch {
+          modelInfo = { model: routedModel ?? 'unknown' };
+        }
+      }
       const loop = new AgentLoop(runLlm, {
         runId,
         agentId: 'main',
@@ -385,6 +404,11 @@ export class RunEngine {
         signal,
         workspaceDir: workspace?.dir,
         initialHistory,
+        // 精确重放：fork 携带历史系统提示时一字不差复现（优先于现场组装）
+        ...(input.forkSystem ? { exactSystem: input.forkSystem } : {}),
+        modelInfo,
+        // 团队邮箱（主循环）：步边界收件 — teammate 发给 'main' 的消息在下一轮请求前注入
+        pollInbox: () => team.drain('main'),
         // D18：记忆使用指引常驻系统提示；调用方的 extraSystem 追加在后
         // D18 记忆指引 + 个人画像（越聊越懂用户）+ 协作习惯 + 具名子代理目录 + 个性化（6维度，默认关）+ 调用方 extraSystem
         extraSystem: [
@@ -610,7 +634,7 @@ export class RunEngine {
    *  · ask（默认） → fs 全量（写改 approval）+ shell（如启用，approval）
    *  · auto        → fs 权限位提为 auto；shell 保持 approval（D13）
    *  注意：todo_write 的 emit 是构造时注入的闭包（不走 ctx.emit），必须显式路由到本 run 的事件流 */
-  private buildTools(runId: string, workspace: Workspace | null, llmOverride?: any): Tool[] {
+  private buildTools(runId: string, workspace: Workspace | null, llmOverride?: any): { tools: Tool[]; team: TeamService } {
     const registry = createDefaultToolRegistry({
       skillRegistry: this.deps.skillRegistry,
       skillExecutor: this.deps.skillExecutor,
@@ -650,6 +674,9 @@ export class RunEngine {
     tools.push(makeDualReviewTool({ llm: llmOverride ?? this.deps.llm }));;
 
     // M1-4：spawn 工具 — 子预算上限为平台默认的 1/2 量级，spawn 限额 run 级共享
+    // Teams：run 级协作内核（任务板 + 邮箱 + 名册）；team_* 工具按代理各配副本
+    //（selfName 不同 — teammate 的 team_send 落名是自己，主循环是 'main'）
+    const team = new TeamService(runId, ev => this.emitRunEvent(runId, ev.type, ev.payload ?? {}));
     const spawn = makeSpawnTool({
       llm: this.deps.llm,
       summarize: async transcript => this.summarizeTranscript(transcript),
@@ -668,8 +695,30 @@ export class RunEngine {
         maxTokens: Math.max(10000, Math.floor(platformConfig.runMaxTokens / 2)),
       },
     });
+    const teamSpawn = makeTeamSpawnTool({
+      llm: this.deps.llm,
+      summarize: async transcript => this.summarizeTranscript(transcript),
+      baseTools: tools,
+      evidenceStore: this.evidence,
+      presets: this.agentPresets,
+      hooks: this.loopHooks,
+      ...(workspace ? { approveTool: (tool, inp, callId) => this.requestApproval(runId, tool, inp, callId, workspace) } : {}),
+      depth: 0,
+      team,
+      spawnCounter: { count: 0 },
+      subBudget: {
+        defaultSteps: Math.max(3, Math.floor(platformConfig.runMaxSteps / 3)),
+        defaultTokens: Math.max(5000, Math.floor(platformConfig.runMaxTokens / 3)),
+        maxSteps: Math.max(5, Math.floor(platformConfig.runMaxSteps / 2)),
+        maxTokens: Math.max(10000, Math.floor(platformConfig.runMaxTokens / 2)),
+      },
+    });
     tools.push(spawn);
-    return tools;
+    tools.push(teamSpawn);
+    tools.push(makeTeamSendTool(team, 'main'));
+    tools.push(makeTeamTasksTool(team, 'main'));
+    tools.push(makeTeamWaitTool(team));
+    return { tools, team };
   }
 
   // ─── M1-10：审批流（waiting_human → 人工决定 → 恢复）──────────────────

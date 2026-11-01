@@ -105,6 +105,12 @@ LLM 摘要失败采用 60s → 300s → 900s 递进冷却；冷却期间硬水�
 
 展示措辞不再挤占上下文预算，数据通道也不再被展示需求污染；未提供 `display` 的工具自动回退到 `data` 的 JSON 预览（向后兼容）。8 个高频内置工具（文件读写 / 目录 / 编辑 / HTTP / shell / Word 读写）已携带摘要。
 
+**25. 多代理团队协作**
+`team_*` 工具组把一次性委托升级为可协作的团队：`team_spawn` 派生**后台具名 teammate**（立即返回、并行执行，与 `agent_spawn` 共享全部安全不变量：工具子集不超父集、预算钳制、深度限制、取消级联）；`team_send` 是代理间直接消息，投递语义为**步边界**——运行中的代理在下一轮请求前收到（不丢、不打断当前步骤），由循环在压缩之后、请求组装之前排空收件箱；`team_tasks` 是共享任务板（`blockedBy` 强制无环、`revision` 乐观锁防覆盖冲突、就绪态由阻塞完成度派生）；`team_wait` 收割 teammate 的最终回答。防失控边界：成员 ≤16、任务 ≤256、单消息 ≤16KB、名字永久占用（含失败成员，不复用）。适合可并行的独立子任务（多路检索、交叉验证）——Router 只看板不看细节，各 Worker 独立持有自己的上下文窗口。
+
+**26. Checkpoint 精确重放**
+"模型可见即已记录"：每步 checkpoint 除消息快照外，随步携带当时实际组装的**系统提示**与**模型配置快照**（路由信息），以及上下文操作审计线（收纳 / 压缩各自回收了多少字符）。Time-Travel fork 自历史节点回放时，若源 checkpoint 携带系统提示则**一字不差复现**——画像、习惯、个性化的后续变化不影响 fork，任意一步"模型当时看到什么"都可原样取出（`GET /api/runs/:id/checkpoints` 返回系统提示预览与模型配置）；压缩丢掉了什么可以按步对账。旧格式 checkpoint 自然回退到现场重组装（向后兼容）。
+
 ---
 
 ## 功能范围
@@ -199,7 +205,7 @@ npm run dev            # 后端 3001 + 前端 5173
 
 ## 测试与基准
 
-- **测试**：414 个用例（Vitest），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时 / 外部守卫等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
+- **测试**：427 个用例（Vitest），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时 / 外部守卫 / 团队协作等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
 - **GAIA 基准**：[docs/GAIA.md](./docs/GAIA.md) —— 官方 GAIA benchmark validation split，**82.0%**（50 题，确定性 exact match）。L1 86.4% / L2 88.9% / L3 60.0%。
 - **性能基准**：[docs/BENCHMARK.md](./docs/BENCHMARK.md) —— 上下文压缩收益（1.2MB 历史 → 169KB，-86%）、SQLite WAL 与 JSONL 持久化吞吐。脚本：`npx tsx scripts/benchmark.mts`。
 
@@ -228,7 +234,7 @@ npm run dev            # 后端 3001 + 前端 5173
 
 ---
 
-## 内置工具清单（19 个）
+## 内置工具清单（23 个）
 
 | 工具 | 说明 | 权限 |
 |------|------|------|
@@ -240,6 +246,7 @@ npm run dev            # 后端 3001 + 前端 5173
 | `shell_run` | 执行命令（沙箱 env 白名单 + 进程树终止） | 恒审批 |
 | `memory_list` / `memory_read` / `memory_write` / `memory_search` / `memory_review` | 长期记忆读写（Markdown 文件；写入默认 create-only，覆盖需显式 overwrite；review 标记用户确认） | auto |
 | `agent_spawn` | 派出子代理（独立上下文 / 工具子集 / 深度 ≤ 2 / 统一安全基线） | auto |
+| `team_spawn` / `team_send` / `team_tasks` / `team_wait` | 多代理团队：后台具名 teammate / 步边界直接消息 / 共享任务板（CAS + 无环 DAG）/ 收割最终回答 | auto |
 | `past_runs` | 检索历史运行 | auto |
 | `evidence_read` | 取回证据记录（超大工具结果的不可变存档，支持分页） | auto |
 | `dual_review` | 双独立评审与分歧仲裁 | auto |

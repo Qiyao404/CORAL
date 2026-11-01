@@ -31,7 +31,15 @@ export interface LoopCheckpoint {
   seq: number;
   kind: 'loop_step';
   label: string;
-  state: { messages: ChatMessage[] };
+  state: {
+    messages: ChatMessage[];
+    /** 精确重放：本步模型实际看到的系统提示（fork 优先用它，而非现场重组装） */
+    system?: string;
+    /** 精确重放：本步使用的模型配置快照 */
+    model?: { model: string; provider?: string; baseUrl?: string; profileId?: string };
+    /** 上下文操作审计：收纳/压缩发生的时间线（最近 20 条） */
+    contextOps?: Array<{ step: number; kind: 'shelve' | 'compress' | 'deterministic'; reclaimedChars: number; keptMessages: number }>;
+  };
 }
 
 export interface LoopBudget {
@@ -47,6 +55,18 @@ export interface AgentLoopOptions {
   goal: string;
   /** 追加到基础系统提示的额外指令（如公司画像/记忆指引，由 run-engine 注入） */
   extraSystem?: string;
+  /**
+   * 精确重放（Time-Travel fork）：提供时完全取代现场组装的系统提示 —
+   * fork 自历史 checkpoint 时一字不差地复现当时的上下文（画像/习惯后续变化不影响）。
+   */
+  exactSystem?: string;
+  /** 精确重放：本 run 的模型配置快照（落 checkpoint，供审计与 TimeTravel 展示） */
+  modelInfo?: { model: string; provider?: string; baseUrl?: string; profileId?: string };
+  /**
+   * 团队邮箱（Teams）：每步 LLM 调用前排空收件箱，命中则注入为 user 消息。
+   * 由 run-engine 注入 TeamService 的 drain 闭包（主循环 'main'，子代理各 agentId）。
+   */
+  pollInbox?: () => Array<{ from: string; content: string }> | Promise<Array<{ from: string; content: string }>>;
   /** 多轮续接：本会话此前的对话历史（含上一轮的 goal/工具结果/最终回答），种子在新 goal 之前 */
   initialHistory?: ChatMessage[];
   tools: Tool[];
@@ -131,6 +151,10 @@ export class AgentLoop {
   private lastTodos: Array<{ content: string; status: string }> | null = null;
   // 事实门实例（每 loop 一个 — 记录本 run 内的拦截计数）
   private factGate = new FactGate();
+  // 精确重放：组装完成的系统提示与模型信息（checkpoint 随步落盘）
+  private systemPrompt = '';
+  // 上下文操作审计线（收纳/压缩），checkpoint 携带最近 20 条
+  private contextOps: Array<{ step: number; kind: 'shelve' | 'compress' | 'deterministic'; reclaimedChars: number; keptMessages: number }> = [];
 
   constructor(
     private llm: LoopLLM,
@@ -147,6 +171,7 @@ export class AgentLoop {
     }));
 
     const system = this.buildSystemPrompt();
+    this.systemPrompt = system; // 精确重放：checkpoint 随步携带
     // 多轮续接：先种入历史（合法性过滤），再追加本轮 goal
     const seed = (this.options.initialHistory ?? []).filter(
       m => m && typeof m.content === 'string' && ['user', 'assistant', 'tool'].includes(m.role)
@@ -232,6 +257,7 @@ export class AgentLoop {
         });
         if (shelvedRes.shelved > 0) {
           messages = shelvedRes.messages;
+          this.contextOps.push({ step: steps, kind: 'shelve', reclaimedChars: shelvedRes.reclaimedChars, keptMessages: messages.length });
           this.emit('tool.results_shelved', {
             shelved: shelvedRes.shelved,
             reclaimedChars: shelvedRes.reclaimedChars,
@@ -255,6 +281,7 @@ export class AgentLoop {
           }
           if (!compactBlockedByHook) {
           try {
+            const charsBefore = messages.reduce((n, m) => n + (m.content ?? '').length, 0);
             const compressed = await compressIfNeeded(messages, {
               maxTotalChars: this.options.maxTotalChars,
               keepRecent: this.options.keepRecent,
@@ -262,6 +289,12 @@ export class AgentLoop {
             });
             if (compressed.compressed) {
               messages = compressed.messages;
+              this.contextOps.push({
+                step: steps,
+                kind: 'compress',
+                reclaimedChars: Math.max(0, charsBefore - messages.reduce((n, m) => n + (m.content ?? '').length, 0)),
+                keptMessages: messages.length,
+              });
               this.emit('loop.context_compressed', {
                 summaryChars: compressed.summary?.length ?? 0,
                 keptMessages: messages.length,
@@ -281,7 +314,9 @@ export class AgentLoop {
               keepRecent: this.options.keepRecent,
             });
             if (det.compressed) {
+              const before = messages.reduce((n, m) => n + (m.content ?? '').length, 0);
               messages = det.messages;
+              this.contextOps.push({ step: steps, kind: 'deterministic', reclaimedChars: Math.max(0, before - messages.reduce((n, m) => n + (m.content ?? '').length, 0)), keptMessages: messages.length });
               this.emit('loop.compact_deterministic', { summaryChars: det.summary?.length ?? 0, afterFailure: true });
             }
           }
@@ -295,10 +330,24 @@ export class AgentLoop {
               keepRecent: this.options.keepRecent,
             });
             if (det.compressed) {
+              const before = messages.reduce((n, m) => n + (m.content ?? '').length, 0);
               messages = det.messages;
+              this.contextOps.push({ step: steps, kind: 'deterministic', reclaimedChars: Math.max(0, before - messages.reduce((n, m) => n + (m.content ?? '').length, 0)), keptMessages: messages.length });
               this.emit('loop.compact_deterministic', { summaryChars: det.summary?.length ?? 0, duringCooldown: true });
             }
           }
+        }
+
+        // 团队邮箱（步边界投递）：下一轮请求前排空收件箱，命中注入为 user 消息。
+        // 放在压缩之后、请求组装之前 — 消息进入本轮上下文，不丢不打断
+        if (this.options.pollInbox) {
+          try {
+            const incoming = await this.options.pollInbox();
+            for (const msg of incoming) {
+              messages.push({ role: 'user', content: `[teammate message from ${msg.from}]\n${msg.content}` });
+              this.emit('team.message_delivered', { to: this.options.agentId, from: msg.from, chars: msg.content.length });
+            }
+          } catch { /* 邮箱故障不伤主循环 */ }
         }
 
         steps++;
@@ -809,7 +858,13 @@ export class AgentLoop {
       seq: step,
       kind: 'loop_step',
       label: `step-${step}`,
-      state: { messages: this.sanitizeForCheckpoint(messages) },
+      state: {
+        messages: this.sanitizeForCheckpoint(messages),
+        // 精确重放三件套：系统提示 / 模型快照 / 上下文操作审计线
+        system: this.systemPrompt,
+        ...(this.options.modelInfo ? { model: this.options.modelInfo } : {}),
+        ...(this.contextOps.length > 0 ? { contextOps: this.contextOps.slice(-20) } : {}),
+      },
     });
     this.emit('checkpoint.created', { seq: step, label: `step-${step}` });
   }
@@ -842,6 +897,8 @@ export class AgentLoop {
   }
 
   private buildSystemPrompt(): string {
+    // 精确重放：fork 显式提供历史系统提示时一字不差复现（不叠加现场状态）
+    if (this.options.exactSystem) return this.options.exactSystem;
     const parts = [BASE_SYSTEM];
     if (this.options.workspaceDir) {
       parts.push(
