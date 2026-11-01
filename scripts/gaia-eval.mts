@@ -29,6 +29,10 @@ const args = process.argv.slice(2);
 const argOf = (k: string) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
 const N = Number(argOf('--n') ?? 30);
 const IDS = argOf('--ids')?.split(',').map(s => s.trim()).filter(Boolean);
+/** 模型路由：指定本批使用的 LLM 配置档案 ID（缺省 = 当前 active 配置） */
+const PROFILE = argOf('--profile');
+/** 单题限时（分钟；官方基准无时限，此为 harness 自定预算） */
+const TIMEOUT_MIN = Number(argOf('--timeout-min') ?? 25);
 const ALL = args.includes('--all');
 const WITH_ATT = args.includes('--with-attachments');
 const PROXY = process.env.EVAL_PROXY ?? 'http://127.0.0.1:22307';
@@ -129,7 +133,17 @@ async function api(path: string, init?: RequestInit): Promise<any> {
 const PROMPT = (q: string) =>
   `${q}\n\n---\nUse your tools (skill_web-search for search, http_fetch for pages, and your own knowledge) to find the answer. ` +
   `Think step by step, verify facts, and end your reply with a line exactly of the form:\nFinal Answer: <short answer>\n` +
-  `The short answer must be only a word, number, name or short phrase (no explanation, no unit unless essential).`;
+  `The short answer must be only a word, number, name or short phrase (no explanation, no unit unless essential).\n` +
+  `Disciplines: (1) ANY arithmetic, counting or combinatorial calculation MUST be computed and verified with code ` +
+  `(skill_code-exec) — never rely on mental math, even if the problem seems small. ` +
+  `(2) For "how many pages/times does X mention Y" questions: first pin the EXACT document version ` +
+  `(verify its page count), then map every claimed occurrence to a specific printed page of that exact version — ` +
+  `mentions found in other versions, references or annexes do not count, and a fully verified count of zero is a valid answer. ` +
+  `Prefer PROGRAMMATIC whole-document counting: fetch the document file once and count per-page occurrences with code ` +
+  `(skill_code-exec) instead of browsing pages one by one; after two independent confirmations of a count, commit to it. ` +
+  `Interpret "mentions X" strictly: count the EXACT phrase as asked (not a related single word) in PROSE body text — ` +
+  `labels inside figures/charts/axes are not mentions unless the question is explicitly about figures. ` +
+  `(3) Preserve the source's original precision — do not round numbers or truncate decimals.`;
 
 async function ensureWorkspace(dir: string): Promise<string> {
   const existing = await api('/api/workspaces');
@@ -171,11 +185,15 @@ async function main() {
       const { runId } = await api('/api/runs', {
         method: 'POST',
         // sessionId：让评测 run 作为一个对话出现在 ChatPage 侧栏——用户可实时看到正在跑的题
-        body: JSON.stringify({ goal: PROMPT(q.question), workspaceId: wsId, sessionId: 'gaia-eval-session', budget: { maxSteps: 0, maxTokens: 0 } }),
+        body: JSON.stringify({
+          goal: PROMPT(q.question), workspaceId: wsId, sessionId: 'gaia-eval-session', budget: { maxSteps: 0, maxTokens: 0 },
+          // 模型路由：--profile <id> 指定本 run 的 LLM 配置档案（缺省 = 当前 active）
+          ...(PROFILE ? { modelProfileId: PROFILE } : {}),
+        }),
       });
       const started = Date.now();
       let result: any = null;
-      while (Date.now() - started < 25 * 60_000) {  // 单题 25 分钟（官方无硬限，宽松预算）
+      while (Date.now() - started < TIMEOUT_MIN * 60_000) {  // 单题限时（--timeout-min，官方无硬限）
         await new Promise(r => setTimeout(r, 5000));
         const d = await api(`/api/runs/${runId}`);
         const run = d.run ?? d;
