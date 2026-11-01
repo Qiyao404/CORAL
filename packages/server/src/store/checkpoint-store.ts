@@ -56,7 +56,15 @@ export class CheckpointStore {
     seq: number;
     kind: 'loop_step' | 'graph_node' | 'interrupt';
     label?: string;
-    state: { messages?: ChatMessage[]; vars?: Record<string, unknown>; cursor?: string };
+    state: {
+      messages?: ChatMessage[];
+      vars?: Record<string, unknown>;
+      cursor?: string;
+      /** 精确重放：模型实际看到的系统提示（loop_step 携带；graph/interrupt 不用） */
+      system?: string;
+      model?: { model: string; provider?: string; baseUrl?: string; profileId?: string };
+      contextOps?: Array<{ step: number; kind: string; reclaimedChars: number; keptMessages: number }>;
+    };
   }): void {
     this.stmt(
       `INSERT OR REPLACE INTO checkpoints (run_id, seq, kind, label, state_json, created_at)
@@ -85,8 +93,15 @@ export class CheckpointStore {
     }));
   }
 
-  /** 完整快照（Time-Travel 回滚/fork 的数据源，M4-1） */
-  get(runId: string, seq: number): { messages?: ChatMessage[]; vars?: Record<string, unknown>; cursor?: string } | null {
+  /** 完整快照（Time-Travel 回滚/fork 的数据源，M4-1；system/model 为精确重放字段） */
+  get(runId: string, seq: number): {
+    messages?: ChatMessage[];
+    vars?: Record<string, unknown>;
+    cursor?: string;
+    system?: string;
+    model?: { model: string; provider?: string; baseUrl?: string; profileId?: string };
+    contextOps?: Array<{ step: number; kind: string; reclaimedChars: number; keptMessages: number }>;
+  } | null {
     const row = this.stmt(
       `SELECT state_json FROM checkpoints WHERE run_id = ? AND seq = ?`
     ).get(runId, seq) as { state_json: string } | undefined;

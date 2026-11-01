@@ -147,6 +147,10 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
         label: m.label,
         createdAt: m.createdAt,
         messageCount: messages.length,
+        // 精确重放字段：该步模型看到的系统提示预览 + 模型配置 + 上下文操作数
+        systemPreview: state?.system ? state.system.slice(0, 400) : null,
+        model: state?.model ?? null,
+        contextOpsCount: state?.contextOps?.length ?? 0,
         // 预览：每条消息的角色 + 摘要（不含工具结果全文 — 防大 payload）
         preview: messages.map(msg => ({
           role: msg.role,
@@ -203,6 +207,8 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
         parentRunId: runId,
         forkFromSeq: fromSeq,
         initialHistory: history,
+        // 精确重放：源 checkpoint 记录了当时的系统提示 → fork 一字不差复现
+        ...(state.system ? { forkSystem: state.system } : {}),
       });
       return reply.status(201).send({ ...result, forkFrom: runId, fromSeq });
     } catch (err: any) {

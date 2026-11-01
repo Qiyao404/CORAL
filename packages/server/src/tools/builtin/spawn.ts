@@ -1,8 +1,10 @@
 import { nanoid } from 'nanoid';
 import { AgentLoop, type LoopLLM } from '../../kernel/agent-loop.js';
 import type { EvidenceStore } from '../../kernel/evidence.js';
+import type { TeamService } from '../../kernel/team-service.js';
 import type { Tool, ToolResult } from '../types.js';
 import { toolOk, toolError } from '../types.js';
+import { makeTeamSendTool, makeTeamTasksTool, makeTeamWaitTool } from './team.js';
 
 /**
  * M1-4：agent_spawn — orchestrator 派生 sub-agent（harness 范式的子代理）。
@@ -232,4 +234,172 @@ function pickSubset(base: Tool[], requested: unknown): SubsetResult {
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(Math.round(v), min), max);
+}
+
+// ─── Teams：team_spawn（后台 teammate — 与 agent_spawn 同机制，不阻塞等待）──────
+
+const TEAMMATE_SYSTEM = (name: string) =>
+  `You are teammate "${name}" in an agent team. The lead agent is "main". ` +
+  `Focus strictly on your assigned goal. You can message the lead ("main") or other teammates via team_send ` +
+  `(delivery at their next step boundary), and coordinate shared work on the task board via team_tasks. ` +
+  `When your goal is achieved (or truly blocked), finish with a concise, self-contained final answer — ` +
+  `that answer is what the team collects via team_wait.`;
+
+export interface TeamSpawnDeps extends SpawnDeps {
+  team: TeamService;
+}
+
+/**
+ * team_spawn — 派生后台 teammate：立即返回（不阻塞调用方循环），完成结果经 team_wait 收割。
+ * 与 agent_spawn 共享全部安全不变量：工具子集不超父集、预算钳制、深度限制、取消级联、
+ * 事件溯源（team.* 事件汇入同一 run）。差异只有两点：注册进 TeamService 名册（名字永久占用）
+ * + 步边界收件（pollInbox 注入子循环，teammate 可在运行中收到消息）。
+ */
+export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
+  const maxDepth = deps.maxDepth ?? 2;
+  const spawnCounter = deps.spawnCounter ?? { count: 0 };
+  const maxSpawns = deps.maxSpawnsPerRun ?? 8;
+
+  return {
+    name: 'team_spawn',
+    description:
+      'Spawn a NAMED background teammate and return immediately (does NOT wait — collect results later via team_wait). ' +
+      'Teammates run in parallel with a fresh context window and can receive direct messages (team_send) at step boundaries. ' +
+      'Use for parallelizable independent subtasks (e.g. several independent searches/cross-checks); ' +
+      'use agent_spawn instead when you need the answer right now.',
+    inputSchema: {
+      type: 'object',
+      required: ['name', 'goal'],
+      properties: {
+        name: { type: 'string', description: 'Unique lowercase teammate name, 2-24 chars [a-z0-9_-] (permanent for this run; never reused)' },
+        goal: { type: 'string', description: 'Complete, self-contained subtask description (include all needed context)' },
+        agent: { type: 'string', description: 'Optional named specialist preset (same as agent_spawn)' },
+        system_prompt: { type: 'string', description: 'Optional extra instructions for the teammate' },
+        max_steps: { type: 'integer', description: `Step budget (default ${deps.subBudget.defaultSteps}, max ${deps.subBudget.maxSteps})` },
+        max_tokens: { type: 'integer', description: `Token budget (default ${deps.subBudget.defaultTokens}, max ${deps.subBudget.maxTokens})` },
+      },
+    },
+    source: 'builtin',
+    permission: 'auto',
+    effects: { accessesNetwork: true },
+
+    async invoke(input: any, ctx): Promise<ToolResult> {
+      const goal = String(input?.goal ?? '').trim();
+      if (!goal) return toolError('BAD_INPUT', 'goal 必填');
+      if (goal.length > GOAL_LIMIT) return toolError('BAD_INPUT', `goal 过长（${goal.length}，上限 ${GOAL_LIMIT}）`);
+
+      // 名字：合法性 + 永久占用（含失败 — 不复用）
+      const claim = deps.team.claimName(String(input?.name ?? ''));
+      if (!claim.ok) return toolError('TEAM_NAME_REJECTED', claim.error, false);
+      const name = String(input?.name).trim().toLowerCase();
+
+      if (spawnCounter.count >= maxSpawns) {
+        return toolError('SPAWN_LIMIT', `本 run 的 sub-agent 数量已达上限（${maxSpawns}，含 agent_spawn 与 team_spawn 共用计数）`, false);
+      }
+
+      // 具名预设（与 agent_spawn 同规则：预设白名单与基础工具集静默交集）
+      let presetPrompt = '';
+      let toolsFilter: unknown;
+      if (typeof input?.agent === 'string' && input.agent.trim()) {
+        const preset = deps.presets?.get(input.agent.trim());
+        if (!preset) {
+          const available = deps.presets?.list().map(p => p.name).join(', ') || '（预设目录为空）';
+          return toolError('PRESET_NOT_FOUND', `子代理预设 "${input.agent}" 不存在。可用预设: ${available}`, false);
+        }
+        presetPrompt = preset.prompt;
+        if (Array.isArray(preset.tools)) {
+          const availableNames = new Set(deps.baseTools.map(t => t.name));
+          toolsFilter = preset.tools.filter((t: string) => availableNames.has(t));
+        }
+      }
+
+      const subset = pickSubset(deps.baseTools, toolsFilter);
+      if ('error' in subset) return toolError('BAD_TOOLS', subset.error);
+
+      const childDepth = deps.depth + 1;
+      const subId = `mate-${name}-${nanoid(4)}`;
+
+      const subTools: Tool[] = [...subset.tools];
+      // teammate 自己的协作工具副本（selfName = 自己的名字 — 消息落名正确）
+      subTools.push(makeTeamSendTool(deps.team, name));
+      subTools.push(makeTeamTasksTool(deps.team, name));
+      subTools.push(makeTeamWaitTool(deps.team));
+      if (childDepth < maxDepth) {
+        // 深度未到顶：teammate 也能继续派生（agent_spawn + team_spawn 同步配备）
+        subTools.push(makeSpawnTool({ ...deps, depth: childDepth, spawnCounter }));
+        subTools.push(makeTeamSpawnTool({ ...deps, team: deps.team, depth: childDepth, spawnCounter }));
+      }
+
+      const budget = {
+        maxSteps: clamp(Number(input?.max_steps) || deps.subBudget.defaultSteps, 1, deps.subBudget.maxSteps),
+        maxTokens: clamp(Number(input?.max_tokens) || deps.subBudget.defaultTokens, 1000, deps.subBudget.maxTokens),
+      };
+
+      spawnCounter.count++;
+      const extraSystem = [
+        DEFENSE_PREAMBLE,
+        SUB_EXTRA_SYSTEM,
+        TEAMMATE_SYSTEM(name),
+        ...(presetPrompt ? [presetPrompt] : []),
+        ...(typeof input?.system_prompt === 'string' && input.system_prompt.trim()
+          ? [input.system_prompt.slice(0, SYSTEM_LIMIT)]
+          : []),
+      ].join('\n\n');
+
+      deps.team.registerTeammate(name, subId);
+      ctx.emit({
+        type: 'team.teammate_spawned',
+        payload: { name, agentId: subId, depth: childDepth, goalPreview: goal.slice(0, 200), budget },
+      });
+
+      const loop = new AgentLoop(deps.llm, {
+        runId: ctx.runId,
+        agentId: subId,
+        goal,
+        tools: subTools,
+        budget,
+        signal: ctx.signal,
+        workspaceDir: ctx.workspaceDir,
+        extraSystem,
+        onEvent: ev => ctx.emit(ev),
+        summarize: deps.summarize,
+        evidenceStore: deps.evidenceStore,
+        // 步边界收件：teammate 运行中可收到 team_send 消息
+        pollInbox: () => deps.team.drain(subId),
+        ...(deps.hooks ? { hooks: deps.hooks } : {}),
+        ...(deps.approveTool ? { approveTool: deps.approveTool } : {}),
+      });
+
+      // 后台执行：不阻塞调用方循环；终态（含取消/失败）回写名册，team_wait 收割
+      void loop.run().then(result => {
+        if (result.status === 'cancelled' || ctx.signal.aborted) {
+          deps.team.settleTeammate(name, 'failed', { status: 'cancelled', finalContent: '' });
+          ctx.emit({ type: 'team.teammate_failed', payload: { name, agentId: subId, status: 'cancelled' } });
+          return;
+        }
+        if (result.status === 'failed') {
+          deps.team.settleTeammate(name, 'failed', { status: 'failed', finalContent: result.error ?? '' });
+          ctx.emit({ type: 'team.teammate_failed', payload: { name, agentId: subId, status: 'failed', error: result.error } });
+          return;
+        }
+        deps.team.settleTeammate(name, 'completed', {
+          status: result.status,
+          finalContent: result.finalContent,
+          steps: result.steps,
+        });
+        ctx.emit({
+          type: 'team.teammate_completed',
+          payload: { name, agentId: subId, status: result.status, steps: result.steps, tokensIn: result.tokensIn, tokensOut: result.tokensOut },
+        });
+      }).catch(err => {
+        deps.team.settleTeammate(name, 'failed', { status: 'crashed', finalContent: String(err?.message ?? err) });
+        ctx.emit({ type: 'team.teammate_failed', payload: { name, agentId: subId, status: 'crashed', error: String(err?.message ?? err) } });
+      });
+
+      return toolOk(
+        { name, agentId: subId, status: 'running', note: `teammate "${name}" 已在后台启动 — 用 team_wait(["${name}"]) 收割结果，team_send(to="${name}") 发消息` },
+        `🚀 teammate "${name}" 后台启动（不阻塞）`
+      );
+    },
+  };
 }
