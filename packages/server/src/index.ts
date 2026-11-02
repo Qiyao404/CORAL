@@ -47,7 +47,7 @@ import { llmClient } from './services/llm-client.js';
 async function main() {
   console.log('╔═══════════════════════════════════════════╗');
   console.log('║        CORAL — 通用智能体运行时平台        ║');
-  console.log('║        版本: 2.0.0                         ║');
+  console.log('║        版本: 2.3.0                         ║');
   console.log('╚═══════════════════════════════════════════╝');
 
   // 确保必要目录存在

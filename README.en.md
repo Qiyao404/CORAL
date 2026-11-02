@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **Version: v2.2.0** · [Guided tour (DEMO.md)](DEMO.md) · [CHANGELOG](CHANGELOG.md)
+> **Version: v2.3.0** · [Guided tour (DEMO.md)](DEMO.md) · [CHANGELOG](CHANGELOG.md)
 > **Positioning: a local-first, single-command, single-file-storage personal agent runtime**
 
 ---

@@ -702,7 +702,7 @@ export default function SettingsPage() {
           <ConfigItem label={t('settings.platform.sandbox')} value={config?.sandboxMode} />
           <ConfigItem label={t('settings.platform.maxTasks')} value={config?.maxConcurrentTasks} />
           <ConfigItem label={t('settings.platform.maxAgents')} value={config?.maxConcurrentAgentsPerTask} />
-          <ConfigItem label={t('settings.platform.version')} value="CORAL v2.2.0" />
+          <ConfigItem label={t('settings.platform.version')} value="CORAL v2.3.0" />
         </div>
       </Card>
     </div>
