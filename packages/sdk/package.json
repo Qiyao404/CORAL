@@ -1,6 +1,6 @@
 {
   "name": "@coral/sdk",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "description": "CORAL Agent SDK — embed the agent runtime as a library (no HTTP server required)",
   "type": "module",
   "main": "./dist/index.js",

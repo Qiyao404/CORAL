@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **版本：v2.2.0** · [快速导览（DEMO.md）](DEMO.md) · [CHANGELOG](CHANGELOG.md)
+> **版本：v2.3.0** · [快速导览（DEMO.md）](DEMO.md) · [CHANGELOG](CHANGELOG.md)
 > **定位：本地优先、单命令启动、单文件存储的个人级 Agent 运行时**
 
 ---
@@ -199,7 +199,7 @@ npm run dev            # 后端 3001 + 前端 5173
 | 持久化 | SQLite（better-sqlite3，WAL 模式，schema 版本化迁移） |
 | Skill | YAML frontmatter（gray-matter）+ chokidar 热重载 |
 | 进度协议 | 自研 `[CORAL_PROGRESS]` stderr 单行 JSON 协议（Python + Node 双 SDK，见 [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)） |
-| 质量 | Vitest（403 用例）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
+| 质量 | Vitest（427 用例）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
 
 ---
 
