@@ -1,90 +1,148 @@
-# CORAL — A Local-First Personal Agent Runtime
+# CORAL — A Lightweight Personal Agent Runtime
 
 [简体中文](./README.md) | **English**
 
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **Version: v2.0.0-M1 (actively iterating)**
+> **Version: v2.2.0** · [Guided tour (DEMO.md)](DEMO.md) · [CHANGELOG](CHANGELOG.md)
 > **Positioning: a local-first, single-command, single-file-storage personal agent runtime**
 
 ---
 
-## In one sentence
+## Overview
 
-CORAL is an **LLM-native personal agent runtime**: give it a natural-language goal (voice input supported) and the agent plans autonomously, calls tools, reads & writes your local files — fully observable, approval-gated, and interruptible:
+CORAL is an LLM-powered personal agent runtime: it takes a natural-language goal, and the agent plans autonomously, calls tools, and reads/writes local files — with the whole execution observable, approvable, and interruptible.
 
-- **Autonomous planning**: the agent opens with a todo checklist and ticks items off as it works — you watch it live
-- **Tool calls**: 16 built-in tools (file I/O / Word documents / web fetch / long-term memory / sub-agents…) plus a skill ecosystem
-- **Fully observable**: token-by-token streaming + event sourcing (every event persisted — replayable, exportable as a Markdown report)
-- **Live-connected**: SSE / WebSocket dual channels; every step (including approval cards) reaches the browser instantly
-- **Local-first**: SQLite single-file storage, listens on 127.0.0.1 by default, keys never leave your machine, zero cloud dependencies
+- **Autonomous planning**: a task checklist is established before work begins and updated item by item as execution proceeds
+- **Tool calling**: 19 built-in tools (file I/O / Word documents / web access / long-term memory / sub-agents, …) plus a skill ecosystem
+- **Observability**: streaming output and event sourcing (all events persisted; replayable and exportable as Markdown)
+- **Real-time transport**: dual SSE / WebSocket channels — every step (including approval requests) reaches the browser instantly
+- **Local-first**: single-file SQLite storage, listens on 127.0.0.1 by default, keys never leave the machine, zero cloud dependency
 
-> No API key? `npm run dev:server -- --demo` runs the whole pipeline in demo mode (results carry mock markers — never passed off as real output).
+Without an API key, the full pipeline runs in demo mode (`npm run dev:server -- --demo`; outputs carry a mock marker).
 
 ---
 
-## Engineering highlights: battle scars from real models
+## Key Designs
 
-These are the things that separate CORAL from "yet another agent demo" — each one surfaced and fixed during long-running real-model testing (DeepSeek / Kimi):
+Every mechanism below corresponds to a concrete implementation in this repository (modules, event names, and data paths can be located directly in the source); the names of the mechanisms (Fact Gate, Wrap-up Gate, evidence records, habit learning, …) are this project's own.
 
-**1. DSML degradation normalization (provider layer)**
-DeepSeek V3.2 intermittently prints tool calls as `<｜｜DSML｜｜ invoke name="...">` text inside content instead of using the standard tool_calls channel. CORAL normalizes this at the provider layer with **split-based parsing** (immune to full-width/ASCII marker variants); degraded calls still execute and are flagged `degraded`. On the streaming path, a **cursor-withholding algorithm** holds suspected marker prefixes in a buffer until confirmed — no garbage leaks to the user's screen, and the stream is never cut early.
+**1. Degraded tool-call normalization (provider layer)**
+Some models intermittently print tool calls as non-standard marker text inside `content` instead of using the standard `tool_calls` channel. The provider layer performs split-based parsing over both full-width and ASCII marker forms; degraded calls execute as usual and are flagged `degraded`. On the streaming path, suspected marker prefixes are held in a buffer until confirmed non-markers, preventing garbled output and premature stream termination.
 
 **2. Tool-name hallucination auto-correction (alias layer)**
-Models hallucinate nonexistent tool names (`web_fetch`, `fetch_url`…). An alias table plus edit-distance ≤ 2 fuzzy matching auto-corrects to the real tool and tells the model what it was corrected to; uncorrectable calls return `TOOL_NOT_FOUND` with the full available-tool list so the model self-heals next turn.
+Models may call tool names that do not exist. An alias table plus edit-distance (≤2) fuzzy matching auto-corrects to a real tool and tells the model which name actually ran; when correction is impossible, `TOOL_NOT_FOUND` is returned with the full list of available tools so the model can self-heal next turn.
 
-**3. Triple-guaranteed todo checklist (observability)**
-"Autonomous planning" must not depend on model goodwill: ① the system prompt mandates an opening `todo_write`; ② if the model skips it, the engine injects a one-shot reminder (traced as `loop.todo_reminder`); ③ terminal-state auto-close — the model forgot to mark the last item completed? The engine synthesizes a final `todo.updated`, so the UI never shows a spinner on a finished run.
+**3. Triple safeguard for the task checklist**
+Autonomous planning does not depend on model discipline: (1) the system prompt requires a checklist before work starts; (2) if the model skips it, the engine injects a one-time reminder (logged as a `loop.todo_reminder` event); (3) at terminal state the engine closes out stale checklist items itself — the UI never shows "work done but status stale".
 
-**4. Event sourcing + run export**
-Dual-write to the `events` table and EventBus: every LLM call, tool execution, approval, and checklist change is a replayable event; export any run as a Markdown timeline report (`GET /api/runs/:id/export.md`).
+**4. Event sourcing and run export**
+Dual writes to the `events` table and the EventBus: every LLM call, tool execution, approval, and checklist change is a replayable event; a whole run can be exported as a Markdown timeline report in one click (`GET /api/runs/:id/export.md`).
 
 **5. Multi-turn checkpoint continuation**
-The agent checkpoints every step; the next turn in the same session loads the full previous context (files read, tool calls made), and a budget-exhausted run can be **continued** from where it stopped with one click.
+A checkpoint is persisted every step; the next turn of the same session automatically reloads the previous full context; after budget exhaustion, work resumes from the breakpoint.
 
-**6. Context management (long tasks don't collapse)**
-Oversized tool results are clipped automatically and overflowing history is summarized — the goal is never lost. A 16-step Word-analysis task doesn't amnesia out mid-flight.
+**6. Context management**
+Oversized single tool results are clipped automatically, history beyond the limit is summarized automatically, the original goal is always retained — long tasks never fail from context overflow.
 
-**7. Real cancellation / real timeouts / retry taxonomy (M0 foundation)**
-AbortSignal threads through everything (LLM calls, script process-tree kills); errors are classified (transient/permanent/cancelled) with exponential backoff, and streams that already delivered content are never retried (no duplicated output).
+**7. Cancellation and timeout semantics**
+An AbortSignal runs through the entire chain (LLM calls, script process-tree termination); errors are classified as transient/permanent/cancelled with exponential backoff, and streaming calls that already delivered content are never retried (preventing duplicated output).
 
-**8. File-based long-term memory + auto-distillation**
-`memory/` is plain Markdown with four tools (`memory_list/read/write/search`); the agent records preferences and lessons per guidance and distills archives after sessions — you can open and edit it anytime. Transparent and trustworthy.
+**8. File-based long-term memory with auto-distillation**
+The `memory/` directory is plain Markdown exposed through four read/write tools; after a session ends, memories are distilled and archived automatically. Memory is text — edit it directly.
+
+**9. Tool effects contract**
+Every tool declares effect bits in `ToolEffects` (writes filesystem / launches process / accesses network / idempotent); the approval tier is derived from the effect combination by `derivePermission` rather than hand-annotated. Registration validates consistency between declaration and derivation — a declaration can only make approval stricter; annotations looser than the derived floor are automatically tightened at registration. Standard annotations of external MCP tools (readOnly / destructive / idempotent) map into the same contract.
+
+**10. Evidence layer**
+Output exceeding the per-tool result budget (`maxResultSizeChars`) is written whole into `data/evidence/{runId}/` (write-once, cleaned up when the run is deleted) and replaced in context by a "summary preview + record ID" object; when the model needs detail, `evidence_read` fetches it back with offset/limit pagination. The shelving layer archives old results into the evidence layer the same way.
+
+**11. Three-tier context compression with usage warning**
+Single-result clipping (always on) → shelving old tool results (soft watermark, archived to the evidence layer and recoverable) → full LLM summary (hard watermark); a four-level usage warning (normal / warning / critical / blocked).
+
+**12. Fact Gate**
+Before modifying or overwriting an existing file, that file must have been read in this task. `FactGate` scans message history for a successful read of the same path; if absent it returns `FACTS_REQUIRED` (retryable) with investigation instructions. After the same target is blocked three times in a row, it auto-releases and emits a warning event (`tool.fact_gate`) to prevent deadlock. New files are not gated — the permission tier governs them.
+
+**13. Wrap-up Gate**
+Final answers of complex tasks (≥3 write operations or ≥5 tool calls) are audited against a pattern library of rationalization phrasing (bilingual regex set): on hits like "legacy issue / skipped in tests / will fix later", the runtime injects a system-level follow-up demanding the work be done or the unfinished items be listed honestly (`loop.gate_rejected` event); at most two rejections, the third passes with a warning.
+
+**14. Habit learning**
+Every tool call is recorded to an observation log (`data/habits/observations.jsonl`, rotated on overflow); past a threshold, an LLM distills "trigger → action" collaboration habits into `habits.json`. Confidence grows with cross-session repetition (from 0.3, capped at 0.9); habits ≥0.7 are injected into the system prompt automatically; promotion to a skill (generating a SKILL.md) requires confidence ≥0.8 across ≥2 sessions, and habits decay after 30 days without recurrence.
+
+**15. Health self-diagnosis (`coral doctor`)**
+One command triages common failure classes: build freshness, port occupation, data-directory writability, disk watermark, database integrity, model configuration, skill parsing, MCP connection state — each with a repair suggestion.
+
+**16. Artifact tracking and preview**
+Every reply automatically lists the files it generated or modified at the bottom; clicking opens a preview in the right panel: text renders directly, Word extracts full text, PDFs and images render natively in the browser, other formats offer download. Data comes from the event stream — history turns are equally visible.
+
+**17. Independent review and self-evaluation**
+The `dual_review` tool launches two review sub-agents with independent contexts (each receives only the review target and its perspective, never the other's conclusion); on disagreement a third arbiter is appended — consensus passes, undecidable cases return escalate honestly. Every completed run automatically performs a deterministic five-axis score (accuracy / completeness / clarity / actionability / concision, persisted as a `run.self_eval` event); an API can trigger LLM semantic adjudication — axes scored below 5 must cite textual evidence, otherwise the axis falls back to the heuristic result.
+
+**18. Memory trust tiers and decision records**
+Long-term memory written by the agent defaults to `unreviewed` and is marked `reviewed` after user confirmation; overwriting existing memory requires an explicit `overwrite=true`; incomplete retrieval reports honestly instead of falsely claiming "no results". Every session automatically deposits reasoned decisions (what + why) and handoff records (breakpoint / next step / blockers).
+
+**19. Sub-agent security baseline**
+Every sub-agent's system prompt begins with a unified security baseline: identity and instruction set cannot be changed by tool output, external content is always data-to-analyze rather than instructions, suspicious payloads such as zero-width characters are quoted verbatim rather than interpreted, and system prompts and credentials are never leaked. The main loop carries the same untrusted-data discipline.
+
+**20. External command guards (hooks)**
+`data/hooks.json` invokes external commands at 8 lifecycle points (before/after tool calls / wrap-up / submission / session start-end / pre-compaction / notification): they may veto a call, rewrite tool input, escalate to human approval, bounce the final answer, or inject context. Contract: stdin receives JSON, stdout outputs a decision JSON, exit code 2 means deny; a guard on tool calls that itself fails or times out is treated as denial (fail-closed by default), while failures on other events never affect execution; configuration hot-reloads via mtime invalidation. The "Hooks" page in the sidebar provides visual management: per-event add/edit/delete, tool-name regex matching, per-entry enable/disable, real test firing with a sample payload (returning the parsed decision and raw output), and a live stream of the last 100 firing verdicts.
+
+**21. Slash commands and named sub-agents**
+`data/commands/*.md` slash commands: `/research topic` expands into a full task (template placeholders `$ARGUMENTS` / `$1`); `data/agents/*.md` named sub-agents: four seeded specialists (research / review / data / writing) whose descriptions and trigger examples are injected into the main prompt (teaching the main model when to delegate), while bodies load by name with their tool whitelists — capability growth without main-context burden.
+
+**22. Compression-failure cooldown ladder**
+LLM summary failures apply a progressive cooldown of 60s → 300s → 900s; while cooling down, if the hard watermark keeps rising, a deterministic skeleton summary (no LLM, first sentence per item, transcript-preserving) takes over.
+
+**23. ESTOP sentinel, approval memory, and run budget**
+`coral pause` suspends all new tasks via a sentinel file (running tasks unaffected; a corrupted sentinel also counts as paused — fail-safe); approvals may carry `scope=session`, auto-approving the same tool in the same workspace for this server session with an audit trail and one-click clearing; the run budget (token / step caps) is user-adjustable — default 1M tokens, maximum 10M.
+
+**24. Dual-channel tool results**
+A tool's return value used to be one JSON fed to both sides: the model needs it structured, parseable, lean; the UI tool card needs it human-readable — two demands pulling at the same data. `ToolResult` now splits into `data` and `display` channels: `data` goes into model context (structured data), `display` goes only to the UI event stream (a one-line human summary). Take `docx_write`:
+
+- what the model sees: `{ "path": "report.docx", "paragraphs": 42, "note": "…" }`
+- what the UI tool card shows: `Word document report.docx generated (42 paragraphs)`
+
+Display wording no longer eats context budget, and the data channel is no longer polluted by display needs; tools without `display` fall back to a JSON preview of `data` (backward compatible). Eight high-frequency built-in tools (file read/write / list / edit / HTTP / shell / Word read-write) already carry summaries.
+
+**25. Multi-agent team collaboration**
+The `team_*` tool group upgrades one-shot delegation into a collaborating team: `team_spawn` spawns a **background named teammate** (returns immediately, runs in parallel, sharing every safety invariant of `agent_spawn`: tool subsets never exceed the parent set, budget clamping, depth limits, cancellation cascade); `team_send` is direct inter-agent messaging with **step-boundary delivery** — a running agent receives the message before its next LLM request (never lost, never interrupting the current step), drained by the loop after compression and before request assembly; `team_tasks` is a shared task board (`blockedBy` enforced acyclic, `revision` optimistic locking against clobbering, readiness derived from blocker completion); `team_wait` harvests teammates' final answers. Anti-runaway bounds: ≤16 members, ≤256 tasks, ≤16KB per message, names permanently occupied (failed members included, never reused). Suited to parallelizable independent subtasks (multi-path retrieval, cross-checking) — the Router watches the board, not the details; each Worker holds its own context window.
+
+**26. Checkpoint exact replay**
+"Model-visible is recorded": besides the message snapshot, every step's checkpoint carries the **system prompt** actually assembled at that moment and a **model configuration snapshot** (routing info), plus a context-operation audit trail (how many characters shelve/compress each reclaimed). When Time-Travel forks from a historical node, if the source checkpoint carries a system prompt it is **reproduced verbatim** — later changes to profile, habits, or personalization never affect the fork; "what did the model see at any step" can be retrieved as-is (`GET /api/runs/:id/checkpoints` returns a system-prompt preview and model config), and what compression dropped can be reconciled step by step. Old-format checkpoints naturally fall back to on-the-fly reassembly (backward compatible).
 
 ---
 
-## What can it do?
+## Feature Scope
 
-Open the Chat page, describe your goal in one sentence, and the agent **works autonomously**:
+Open the Chat page, describe a goal in one sentence, and the agent works autonomously:
 
-- **Read & write Word docs**: upload a `.docx`; the agent reads it, summarizes, generates new documents (built-in OOXML handling, zero Python dependency)
-- **Read & write your local files**: bind a workspace folder and the agent lists, reads, and edits files — every modification pops a **diff approval card** before touching disk (three permission modes: readonly / ask / auto)
-- **Run commands**: optional shell tool (every execution requires approval) — real scripts, real installs
-- **Web access**: give it any URL and it fetches and reads the article body (zero-dependency readability extraction)
-- **Spawn sub-agents**: long tasks are isolated into independently-contexted sub-agents (depth ≤ 2), keeping the main thread clean
-- **Skill ecosystem**: create skills conversationally, import Anthropic Agent Skills in one click, filesystem-as-registry hot reload
+- **Word documents**: upload `.docx`, read content, summarize key points, generate new documents (built-in OOXML read/write)
+- **Local file I/O**: bind a workspace folder, then list/read/write files — writes show a diff approval card first (three permission tiers: read-only / ask / auto)
+- **Command execution**: optional shell tool (every execution requires approval)
+- **Web access**: fetch any URL and read its main content (zero-dependency readability extraction)
+- **Sub-agents**: long tasks are isolated into independent-context sub-agents automatically (nesting depth ≤ 2)
+- **Skill ecosystem**: conversational skill creation, importing the industry-standard Agent Skills format (SKILL.md), one-command `coral install` of npm / git skill packages, filesystem-as-registry hot reload
+- **Interface language**: one-click Chinese/English switching (sidebar and settings; preference persisted)
 
-Full usage guide / task examples / troubleshooting → [USE.md](./USE.md)
+See [USE.md](./USE.md) for the full usage guide and task examples.
 
 ---
 
-## Quick start
+## Quick Start
+
+**Option 1: single command (recommended)** — integrated build artifacts, self-check, then start:
 
 ```bash
-# 1. Install dependencies (Node.js ≥ 20)
-npm install
-
-# 2. Configure environment (any OpenAI-compatible endpoint works)
-cp .env.example .env
-
-# 3. Start (backend 3001 + frontend 5173)
-npm run dev
+npm install && npm run build && npm start   # coral CLI: self-check (port/db/model) → http://127.0.0.1:3001
 ```
 
+**Option 2: development mode** (split front/back with hot reload):
+
 ```bash
-# No API key? Demo mode runs the whole pipeline (results carry mock markers)
-npm run dev:server -- --demo
+npm install
+cp .env.example .env   # fill in an API key (any OpenAI-compatible endpoint)
+npm run dev            # backend 3001 + frontend 5173
 ```
 
 | Service | Address |
@@ -92,105 +150,183 @@ npm run dev:server -- --demo
 | Web UI (Chat / Skills / Tasks / Settings) | http://localhost:5173 |
 | Backend API | http://localhost:3001/api/health |
 
-Tested against DeepSeek and DashScope (Kimi); OpenRouter / Ollama and any OpenAI-compatible endpoint work out of the box.
+Verified against DeepSeek and DashScope; any OpenAI-compatible endpoint (OpenRouter / Ollama / …) works out of the box.
 
 ---
 
-## Architecture (v2)
+## Architecture Overview
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │  Web UI                                                               │
-│  Chat (live agent session: todo checklist / tool cards / diff         │
-│  approvals / final answer)  Skills (list/edit/import/build)          │
-│  Tasks (v1 DAG)  Settings (models/workspaces/memory)                 │
+│  Chat (agent sessions: todo list / tool cards / diff approvals /      │
+│  artifact preview) Skills (list/edit/import/conversational creation) │
+│  Tasks (v1 DAG orchestration) Settings (model/workspace/memory/budget)│
 └──────────────────────────────┬───────────────────────────────────────┘
                                │ REST + WS + SSE
 ┌──────────────────────────────▼───────────────────────────────────────┐
-│  RunEngine (Free-mode entry: budget guardrails / cancel / dual-write) │
+│  RunEngine (free-mode entry: budget / cancellation / event sourcing)  │
 │  ┌─────────────────────────────────────────────────────────────────┐ │
 │  │  Agent Loop (ReAct main loop)                                   │ │
-│  │  compress check → LLM → tool exec (approval gate) → budget      │ │
-│  │  → checkpoint                                                    │ │
-│  │  ├─ todo guarantees (forced open / skip reminder / final close)  │ │
-│  │  ├─ sub-agents (agent_spawn: own context / tool subset / ≤2)     │ │
-│  │  └─ context management (result clipping + history compression,   │ │
-│  │     goal never lost)                                             │ │
+│  │  compression check → LLM → tool exec (Fact Gate→guards→approval)│ │
+│  │  → budget → checkpoint                                          │ │
+│  │  ├─ todo safeguards (mandatory start / skip reminder / closeout)│ │
+│  │  ├─ fake-final guards (empty answer / pending todos / rhetoric) │ │
+│  │  ├─ sub-agents (agent_spawn: own context / tool subset / ≤2)    │ │
+│  │  └─ context management (clip + shelve + summarize + cooldown)   │ │
 │  └───────────────────────────┬─────────────────────────────────────┘ │
 │                              │ unified Tool interface                 │
 │  ┌───────────────────────────▼─────────────────────────────────────┐ │
-│  │  Tool Registry: 16 built-ins (fs / docx / http / shell / memory /│ │
-│  │  todo / spawn / past_runs) │ Skills (SKILL.md hot reload) │ MCP  │ │
+│  │  Tool Registry: 19 built-in tools (fs / docx / http / shell /   │ │
+│  │  memory / evidence / dual_review …)│ Skills (hot reload)│ MCP   │ │
 │  └───────────────────────────┬─────────────────────────────────────┘ │
-│  providers: OpenAI-compatible (DashScope/DeepSeek/OpenRouter/Ollama)  │
-│             + DSML normalization + tool-name correction + stream      │
-│               withholding                                             │
+│  providers: OpenAI-compatible (DashScope/DeepSeek/OpenRouter/Ollama…)│
+│            + degraded-call normalization + name correction + stream  │
+│              withholding                                              │
 └──────────────────────────────┬───────────────────────────────────────┘
                                │
-   SQLite (WAL single file): runs / events / checkpoints / llm_profiles
-   Event sourcing: per-step checkpoints + full event log, WS/SSE live,
-   replayable & exportable
+   SQLite (single file, WAL): runs / events / checkpoints / llm_profiles / …
+   Event sourcing: per-step checkpoints + full event log, streamed over
+   WS/SSE, replayable and exportable
 ```
 
 ---
 
-## Tech stack
+## Tech Stack
 
 | Layer | Technology |
 |---|------|
 | Frontend | React 19 + Vite 6 + Tailwind 3 + React-Flow + Lucide + Web Speech API (voice input) |
 | Backend | Node.js ≥ 20 + Fastify 5 + TypeScript 5 (strict) + ESM |
-| LLM | openai SDK (any compatible endpoint: DashScope / DeepSeek / OpenRouter / Ollama…), retry-taxonomy transport |
-| Persistence | SQLite (better-sqlite3, WAL, versioned schema migrations) |
+| LLM | openai SDK (any compatible endpoint: DashScope / DeepSeek / OpenRouter / Ollama…), retry-classified transport |
+| Persistence | SQLite (better-sqlite3, WAL mode, versioned schema migrations) |
 | Skills | YAML frontmatter (gray-matter) + chokidar hot reload |
-| Progress protocol | Custom `[CORAL_PROGRESS]` single-line JSON on stderr (Python + Node SDKs, see [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)) |
-| Quality | Vitest (321 tests) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
+| Progress protocol | in-house `[CORAL_PROGRESS]` single-line stderr JSON protocol (Python + Node SDKs, see [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)) |
+| Quality | Vitest (427 cases) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
 
 ---
 
-## Built-in tools (16)
+## Tests & Benchmarks
+
+- **Tests**: 427 cases (Vitest) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
+- **GAIA benchmark**: [docs/GAIA.md](./docs/GAIA.md) — official GAIA benchmark validation split, **83.3%** (60 questions, deterministic exact match). L1 85.7% / L2 90.9% / L3 60.0%.
+- **Performance**: [docs/BENCHMARK.md](./docs/BENCHMARK.md) — context-compression gains (1.2MB history → 169KB, −86%), SQLite WAL and JSONL persistence throughput. Script: `npx tsx scripts/benchmark.mts`.
+
+---
+
+## Model Routing
+
+`POST /api/runs` accepts a `modelProfileId` — each run can independently select an LLM profile, for scenarios like "light model for simple tasks, strong model for hard ones". Routing applies at run level and never touches the global active configuration.
+
+---
+
+## Personalization
+
+Six "learns as you use it" dimensions, **all OFF by default**, toggled individually in Settings:
+
+| Dimension | Capability |
+|---|---|
+| Dynamic interest tags | Extracts interest areas from your questions; answers relate to them where apt |
+| Adaptive interaction style | Learns preferences (length/format/tone) from your corrections; adjusts next time |
+| Work-rhythm awareness | Records active hours; adapts response strategy by time of day |
+| Cross-session knowledge graph | Links concepts discussed across different conversations |
+| Proactive suggestions | Suggests next steps based on current context and historical interests |
+| Implicit preference inference | Infers preferences from rejections/corrections — no manual setup |
+
+Data stays local (`data/personalization/`); one-click wipe.
+
+---
+
+## Built-in Tools (23)
 
 | Tool | Description | Permission |
 |------|------|------|
-| `todo_write` | Visible task checklist (full replace, live ticks in UI) | auto |
-| `fs_list` / `fs_read` / `fs_search` | List / read text / keyword search (binaries skipped with a hint) | auto (read-only) |
-| `fs_write` / `fs_edit` | Write file / precise fragment edit (unified diff, approval-gated) | follows workspace mode |
-| `docx_read` / `docx_write` | Word .docx read/write (pure-stdlib OOXML, zero Python) | read auto / write follows mode |
-| `http_fetch` | Fetch and read any URL | auto |
-| `shell_run` | Run commands (sandboxed env allowlist + process-tree kill) | **always approval** |
-| `memory_list` / `memory_read` / `memory_write` / `memory_search` | Long-term memory quartet (Markdown files) | auto |
-| `agent_spawn` | Spawn a sub-agent (own context / tool subset / depth ≤ 2) | auto |
-| `past_runs` | Search past runs ("how did we do it last time?") | auto |
+| `todo_write` | Visible task checklist (full-replace, live UI updates) | auto |
+| `fs_list` / `fs_read` / `fs_search` | List dir / read text / keyword search (binaries skipped with a note) | auto (read-only) |
+| `fs_write` / `fs_edit` | Write file / exact-snippet edit (unified diff output, approval-gated; editing an existing file requires a prior read — Fact Gate enforced) | per workspace tier |
+| `docx_read` / `docx_write` | Word .docx read/write (pure standard-library OOXML) | read auto / write per tier |
+| `http_fetch` | Fetch any URL and read it | auto |
+| `shell_run` | Run commands (sandboxed env whitelist + process-tree termination) | always approval |
+| `memory_list` / `memory_read` / `memory_write` / `memory_search` / `memory_review` | Long-term memory I/O (Markdown files; writes default create-only, overwrites need explicit `overwrite`; review marks user confirmation) | auto |
+| `agent_spawn` | Spawn a sub-agent (own context / tool subset / depth ≤ 2 / unified security baseline) | auto |
+| `team_spawn` / `team_send` / `team_tasks` / `team_wait` | Multi-agent team: background named teammates / step-boundary direct messages / shared task board (CAS + acyclic DAG) / final-answer harvesting | auto |
+| `past_runs` | Retrieve past runs | auto |
+| `evidence_read` | Fetch evidence records (immutable archive of oversized tool results, paginated) | auto |
+| `dual_review` | Dual independent review with disagreement arbitration | auto |
 
 ---
 
-## Skill ecosystem
+## Skill Ecosystem
 
-### Built-in skills
+### Built-in Skills (34)
 
+#### Documents & Writing
 | Skill | Mode | Description |
 |-------|:--:|------|
-| `summarize-document` | llm_only | Intelligent document summarization |
-| `data-transform` | llm_only | Data format conversion & structuring |
-| `policy-scraper` | script | Policy scraping — *scenario-pack skill, see examples/policy-analysis* |
-| `policy-to-post` | script | Policy → post — *scenario-pack skill, see examples/policy-analysis* |
-| `information-filter` | script | Multi-source filtering (company-profile driven) |
-| `web-reader` | script | Web article extraction (zero-dep readability) |
-| `official-doc-writer` | llm_only | Official document text generation |
-| `official-doc-expander` | hybrid | Expand bullet points into GB/T 9704-2012 official documents |
-| `official-document-generator` | hybrid | Points → AI-assisted expansion → official .docx |
+| `summarize-document` | llm_only | Document summarization |
+| `official-doc-writer` | llm_only | Official document text generation (notices, minutes, …) |
+| `official-doc-expander` | hybrid | Expands outlines into GB/T 9704-2012-compliant official documents |
+| `official-document-generator` | hybrid | Outline → AI-assisted expansion → official document .docx |
+| `email-draft` | llm_only | Email drafting (formal/informal/business/thank-you/follow-up, subject lines included) |
+| `meeting-notes` | llm_only | Meeting minutes (attendees / topics / decisions / action items) |
 
-### Creating a custom skill
+#### Data & Computation
+| Skill | Mode | Description |
+|-------|:--:|------|
+| `data-transform` | llm_only | Data format conversion and structuring |
+| `csv-insight` | llm_only | CSV data analysis |
+| `code-exec` | script | Sandboxed Python execution (computation / conversion / data analysis) |
+| `chart-maker` | llm_only | Data visualization (SVG bar/line/pie) |
+| `excel-writer` | llm_only | Excel generation (openpyxl or CSV) |
 
-**Option 1: conversational UI** (recommended) — "Skill Builder" in the sidebar → describe the need → AI asks clarifying questions → generates a Node script (zero Python dependency) → hot-loaded on save.
+#### Search & Research
+| Skill | Mode | Description |
+|-------|:--:|------|
+| `deep-research` | llm_only | Deep research: sub-question decomposition → multi-source retrieval → cross-verification → cited report |
+| `web-reader` | script | Web main-content extraction (zero-dependency readability) |
+| `web-search` | script | Web search (three-tier backends: Tavily / SearXNG / keyless fallback) |
+| `web-digest` | script | Web summary archiving |
+| `api-finder` | llm_only | API-first strategy (quick-reference for PubChem/Wikipedia/GitHub APIs) |
+| `archive-search` | llm_only | Archive retrieval (government documents / historical databases) |
+| `legal-search` | llm_only | Legal research (Chinese statutes / case law / judicial interpretations) |
+| `pdf-reader` | llm_only | PDF text extraction |
+| `intel-collector` | llm_only | Intelligence collection: gather → distill → incremental archive |
+| `arxiv-daily` | script | arXiv paper digest |
+| `github-repo-report` | script | GitHub repository report |
+| `information-filter` | script | Multi-source information filtering |
+| `policy-scraper` | script | Policy collection (streaming + MD/CSV dual artifacts) |
+| `policy-to-post` | script | Policy-to-post rewriting |
 
-**Option 2: hand-write SKILL.md** (for contributors):
+#### Decision & Quality
+| Skill | Mode | Description |
+|-------|:--:|------|
+| `goal-blueprint` | llm_only | Blueprint planning: goal → self-contained execution plan (dependencies / parallel groups / adversarial review) |
+| `council-review` | llm_only | Council review: four independent perspectives + disagreement arbitration + dissent archive |
+| `decision-ledger` | llm_only | Decision ledger: append-only multi-round comparison + consistency checks + promotion threshold |
+| `answer-check` | llm_only | Answer self-check (units / magnitude / format / common sense) |
+| `prompt-doctor` | llm_only | Prompt review: five-dimension check and revision |
+
+#### Domain & Efficiency
+| Skill | Mode | Description |
+|-------|:--:|------|
+| `geo-calc` | llm_only | Geo computation (capital coordinates + Haversine distance) |
+| `chem-db` | llm_only | Chemistry database lookup (PubChem API + EC/CAS distinction) |
+| `site-sentinel` | llm_only | Site health check (eight-signal post-release smoke test) |
+| `story-board` | llm_only | File-based project management: epic → story → sprint |
+| `schedule-plan` | llm_only | Schedule planning (priority matrix + time-block allocation) |
+| `skill-authoring` | llm_only | Skill authoring standard: dedup / naming / quality self-check |
+
+### Creating Custom Skills
+
+**Option 1: conversational UI** — describe the need on the "Skill Builder" page; the AI asks clarifying questions, then generates (with Node script templates and a submission quality gate); saved to disk, hot-loaded instantly.
+
+**Option 2: hand-write a SKILL.md**:
 
 ```markdown
 ---
 name: my-skill
 version: "1.0.0"
-description: "My custom skill"
+description: "My custom skill description"
 domain: custom
 capabilities: [my_capability]
 input_schema:
@@ -210,92 +346,134 @@ source: user
 
 # My custom skill
 
-You are a professional assistant. Complete the following task based on user input...
+You are a professional assistant. Complete the following task from user input...
 ```
 
-Save to `skills/my-skill/SKILL.md` and it loads automatically. Full spec: [docs/SKILLS-STANDARD.md](./docs/SKILLS-STANDARD.md).
+Save to `skills/my-skill/SKILL.md` and it loads automatically. Full specification: [docs/SKILLS-STANDARD.md](./docs/SKILLS-STANDARD.md).
+
+**Option 3: skill-package installation (`coral install`)** — use skills made by others directly.
+
+The first two options both require the skill to be "at hand": describe it for the AI to generate, or write the SKILL.md yourself. Package distribution solves **reuse** — one skill or a group of skills is packaged as a standard npm package or hosted in a git repository, and anyone installs it into their skill library with one command:
+
+```bash
+coral install npm:some-skill-pack        # npm source: resolve exact version → isolated install → locate skills
+coral install https://github.com/u/repo  # git source (GitHub tree subpaths supported)
+coral install ./path/to/skill-dir        # local directory
+```
+
+- **Package convention**: multi-skill packages put each skill in a first-level `skills/` subdirectory; single-skill packages put `SKILL.md` at the package root; frontmatter is compatible with the common Agent Skills format (defaults map to `llm_only`).
+- **Supply-chain safety**: npm sources install into a temporary directory with `--ignore-scripts` — install/preinstall scripts of external packages **never execute**; only SKILL.md and auxiliary files are migrated, never touching the host `node_modules`.
+- **Conflict policy**: same-name skills are skipped by default; `--overwrite` replaces with the old version backed up into `skills/.history/`.
+- Saved to disk means hot-loaded; equivalent API: `POST /api/skills/import` (source accepts the `npm:` prefix).
 
 ---
 
-## Core capabilities in depth
+## SDK Embedding (`@coral/sdk`)
+
+CORAL has two usage shapes. The **service shape**: run the HTTP service + Web UI, for human interaction. The **library shape**: `import` the kernel directly into your own Node program — for embedding the agent loop into scripts, CI pipelines, bots, or another application, without starting a service and speaking REST just to run one agent task, and without losing types.
+
+Previously only the service shape existed; `packages/sdk` adds the library shape with two entry tiers by embedding depth:
+
+**`runAgent(input)` — stateless single task**. You provide three things: a goal, model access (an OpenAI-compatible `chat` function, req → resp — hence not bound to any provider: gateway, local model, or test stub all work), and optionally tools. It executes the kernel ReAct loop directly with every discipline layer active — Fact Gate, Wrap-up Gate, context compression, evidence records — but writes no database; when the task ends, it ends. Suited to "run an agent on demand inside my code":
+
+```ts
+import { runAgent, toolOk } from '@coral/sdk';
+
+const result = await runAgent({
+  goal: 'Summarize the changes under ./docs',
+  chat: async req => myOpenAiCompatCall(req),   // your own model access
+  tools: [myCustomTool],                          // toolOk({ data }, 'UI summary')
+  onEvent: e => console.log(e.type),              // tool calls / gate rejections / todos …
+});
+// result.status === 'completed'; result.finalContent is the final answer
+```
+
+**`createRuntime(opts)` — stateful runtime**. When a task needs continuity across executions, use this tier: it assembles the full engine (SQLite three-table persistence + filesystem skill registry) — equivalent to embedding the server-side engine. Run records, event streams, checkpoints, and Time-Travel are all available; sharing the data directory with the Web UI, SDK-initiated runs can even be reviewed in the interface.
+
+Design intent of the tiering: lightweight scenarios carry no persistence dependency (`runAgent` never touches SQLite); upgrade to `createRuntime` when continuity is needed — both tiers share the same tool protocol and gate semantics.
+
+---
+
+## Core Capabilities in Depth
 
 ### Agentic Workspace (local file I/O)
-- Multiple workspaces: bind and name several local folders, switch anytime, selection persisted
-- Three permission modes: `readonly` / `ask` (default — diff approval on writes) / `auto`
-- Three-layer path guard: out-of-boundary / sibling-prefix / symlink-escape attempts all blocked
-- Upload-and-use: upload files straight into a workspace from Chat (1MB limit, chunked base64); attachments follow the message semantics (consumed on send, visible on the message)
+- Multiple workspaces: named bindings to local folders, switch anytime, selection persisted
+- Three permission tiers: `readonly` / `ask` (default; writes need approval) / `auto`
+- Triple path guard: out-of-bounds / sibling-prefix / symlink escapes all intercepted
+- File upload: upload files into the workspace from the Chat page; attachments shown with messages
 
-### Long-term memory (file-based)
-- `memory/` directory + Markdown; the agent records preferences, conventions, lessons
-- Auto-distilled after sessions (optional); editable in the Settings UI
-- Memory is text you can open and edit directly — transparent, trustworthy, dependency-free
+### Long-term Memory (file-based)
+- `memory/` directory + Markdown; the agent records autonomously (user preferences, project conventions, lessons learned)
+- Auto-distillation and archiving after sessions (disableable); visual editing in Settings
+- Trust tiers: agent writes default to `unreviewed`; marked `reviewed` after user confirmation
 
 ### Dual execution semantics (v1 DAG orchestration retained)
-- DAG scheduling: goal → planning engine → concurrent multi-skill execution with graceful short-circuit
-- Retry semantics: skill-granularity retries; successful units never re-run
-- Budget guardrails: step/token caps with graceful wrap-up (summary of done vs remaining), one-click continuation
+- DAG scheduling: goal → planning engine → concurrent multi-skill execution with short-circuiting
+- Retry semantics: skill-granular retries; completed nodes never re-run
+- Budget guardrails: step/token dual caps with graceful wrap-up on exhaustion; resumable from breakpoints
 
 ---
 
-## Key API endpoints
+## Key API Endpoints
 
 | Method | Path | Description |
 |------|------|------|
 | GET | `/api/health` · `/api/stats` · `/api/config` | Health / stats / config (keys masked) |
-| POST | `/api/runs` | Start an agent run (goal + sessionId + workspaceId + budget) |
+| POST | `/api/runs` | Start a run (goal + sessionId + workspaceId + budget) |
 | GET | `/api/runs/:id` · `/events` · `/stream` | Detail / event delta / SSE live stream |
-| GET | `/api/runs/:id/export.md` | Export run report (Markdown timeline) |
-| POST | `/api/runs/:id/cancel` · `/approvals/:aid` | Cancel / approval decision |
-| GET/POST/PATCH/DELETE | `/api/workspaces` | Workspace CRUD + file upload |
-| GET/PUT/DELETE | `/api/skills/:name` | Skill query / edit / delete (built-ins need confirmation) |
-| POST | `/api/skills/import` | Import Agent Skills (directory / git URL) |
-| POST | `/api/skill-builder/sessions…` | Conversational skill building |
-| GET/PUT/DELETE | `/api/memory…` | Memory management (Settings UI source) |
+| GET | `/api/runs/:id/export.md` · `/artifacts` | Export run report / artifact list |
+| POST | `/api/runs/:id/cancel` · `/approvals/:aid` | Cancel / approval decision (scope=session supported) |
+| GET/POST/PATCH/DELETE | `/api/workspaces` | Workspace CRUD + file upload / preview |
+| GET/PUT/DELETE | `/api/skills/:name` | Skill query / edit / delete (built-ins need double confirmation) |
+| POST | `/api/skills/import` | Import Agent Skills (directory / git URL / npm:) |
+| POST | `/api/skill-builder/sessions…` | Conversational skill creation |
+| GET/PUT/DELETE | `/api/memory…` | Memory management (same source as Settings UI) |
+| GET/PUT | `/api/settings/run-budget` | Run budget (token / step caps) |
+| GET | `/api/habits` · POST `/api/habits/distill` | Habit learning (list / manual distill / promotion) |
+| GET | `/api/system/gc` · POST `/api/system/gc` | Config self-cleanup (scan / itemized confirm-and-clean) |
+| POST | `/api/prompt-optimize` | Prompt optimization |
 | POST | `/api/tasks` (v1 DAG mode) | Plan → DAG → skill orchestration |
 | WS | `/ws/events` | WebSocket global event stream |
 
 ---
 
-## Project structure
+## Project Structure
 
 ```
 CORAL/
-├── LICENSE · .env.example · README.md · README.en.md · USE.md
-├── docs/                       ← public docs (skill standard / progress protocol / history)
-├── .github/workflows/ci.yml    ← CI: 3 platforms × Node 20/22
-├── scripts/                    ← dev / start / e2e smoke scripts
+├── LICENSE · .env.example · README.md · README.en.md · USE.md · DEMO.md
+├── docs/                       ← public docs (skill standard / progress protocol / benchmarks / architecture history)
+├── .github/workflows/ci.yml    ← CI: three platforms × Node 20/22
+├── scripts/                    ← dev / start / benchmark scripts
 ├── packages/
 │   ├── server/                 ← Fastify backend
 │   │   └── src/
-│   │       ├── kernel/         ← Agent Loop / RunEngine / context mgmt (v2 heart)
-│   │       ├── tools/          ← unified Tool abstraction + 16 built-ins + aliases
-│   │       ├── providers/      ← LLM access (retry taxonomy / DSML normalization)
-│   │       ├── skill-runtime/  ← SKILL.md registry / parsing / import / hot reload
+│   │       ├── kernel/         ← Agent Loop / RunEngine / context management / gates / evidence layer
+│   │       ├── tools/          ← unified Tool abstraction + built-ins + effects contract
+│   │       ├── hooks/          ← external command guards (8 lifecycle events)
+│   │       ├── providers/      ← LLM access (retry classification / degraded-call normalization)
+│   │       ├── skill-runtime/  ← SKILL.md registry / parsing / importing / hot reload / progress protocol
 │   │       ├── scheduler/      ← v1 DAG scheduler (cancel/timeout/retry semantics)
 │   │       ├── planning/       ← v1 planning engine (goal → DAG)
 │   │       ├── store/          ← SQLite + versioned migrations + repositories
 │   │       ├── api/            ← REST routes
 │   │       ├── event/          ← event bus (WS/SSE dual channel)
-│   │       └── services/       ← LLM facade / config / memory / workspace / skill builder
-│   ├── web/                    ← React frontend (Chat live session / DAG viz / memory UI)
-│   └── progress/               ← @coral/progress protocol SDK (Node)
-└── skills/                     ← skills directory (filesystem-as-registry, hot reload)
-    └── _lib/                   ← progress helpers (Python + Node) + readability
+│   │       └── services/       ← LLM facade / config / memory / workspaces / habits / budget
+│   ├── web/                    ← React frontend (chat sessions / DAG visualization / memory UI)
+│   └── progress/               ← @coral/progress progress-protocol SDK (Node)
+└── skills/                     ← skill directory (filesystem as registry, hot reload)
+    └── _lib/                   ← progress-protocol helpers (Python + Node) + readability
 ```
 
 ---
 
-## Progress (v2)
+## Limitations
 
-| Stage | Scope | Status |
-|------|------|:---:|
-| M0 | Foundation: SQLite / real cancel / real timeout / retry semantics / safe defaults / tests + CI | ✅ |
-| M1 | Harness kernel: Agent Loop · sub-agents · Agentic Workspace · long-term memory · dual provider · skill import · Chat sessions · five innovations | ✅ |
-| M2 | Graph mode: DSL + event-driven engine + goal→graph AI compiler + node approvals (patch-and-continue) + resume + Workflow page | ✅ |
-| M3 | MCP bridge (coral mcp serve + external servers) · interval/cron/webhook triggers · progress-protocol SDKs (both languages) | ✅ |
-| M4 | Time-Travel debugger (checkpoint timeline/fork) · five built-in skills · `coral` CLI single command · scenario packs | ✅ |
-
-Quality baseline: Vitest 321 tests green · GitHub Actions three platforms (ubuntu/windows/macos × Node 20/22) · TypeScript strict
+- **Single-user, single-process**: designed for personal local use; no multi-tenancy or concurrent task pools. ESTOP and approval memory are process-level semantics.
+- **Compression is lossy**: context shelving and summarization drop the body of old tool results (recoverable via evidence records); the deterministic fallback summary is lower quality than the LLM summary.
+- **Review and adjudication share one LLM**: the semantic layer of independent review and self-evaluation runs on the same model — weaker independence than human review; the deterministic heuristic layer is unaffected.
+- **Gates are heuristic**: the Wrap-up Gate pattern library and Fact Gate rules cannot cover every phrasing; both have forced-release plus warning to avoid blocking delivery.
+- **MCP stdio execution boundary**: external MCP servers run as local subprocesses; their capability boundary is determined by their own implementations; the platform constrains via annotation mapping and approval tiers.
 
 ---
 
