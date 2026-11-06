@@ -137,4 +137,8 @@ export const zh: Record<string, string> = {
 
   'settings.keyword.placeholder': '输入后回车，或粘贴换行/逗号分隔的多项',
   'settings.keyword.add': '添加',
+  'settings.memory.mergeTargetPlaceholder': '合并到（默认首个所选，已选 {n}）',
+  'settings.memory.mergeButton': '合并所选',
+  'settings.memory.mergeConfirm': '把 {n} 个记忆文件合并为「{target}」？ 内容一条不丢（LLM 只按主题重组），被并入的原文件备份进 .history/ 后移除。',
+  'settings.memory.mergeDone': '✓ 已合并为 {target}（移除 {n} 个原文件，备份在 .history/）',
 };

@@ -12,12 +12,15 @@ import { makePastRunsTool } from '../tools/builtin/past-runs.js';
 import { makeSpawnTool, makeTeamSpawnTool } from '../tools/builtin/spawn.js';
 import { makeTeamSendTool, makeTeamTasksTool, makeTeamWaitTool } from '../tools/builtin/team.js';
 import { TeamService } from './team-service.js';
+import { SearchStore } from '../store/search-store.js';
+import { makeSessionSearchTool } from '../tools/builtin/search.js';
 import { makeMemoryTools, MEMORY_GUIDE } from '../tools/builtin/memory.js';
 import { makeEvidenceReadTool } from '../tools/builtin/evidence.js';
 import { makeDualReviewTool } from '../tools/builtin/dual-review.js';
 import { EvidenceStore } from './evidence.js';
 import { MemoryService, distillMemory } from '../services/memory-service.js';
 import { HabitService } from '../services/habit-service.js';
+import { EvolutionService } from '../services/evolution-service.js';
 import { AgentPresetService } from '../services/agent-presets.js';
 import { SlashCommandService } from '../services/slash-commands.js';
 import { isEstopped, estopReason } from '../services/estop.js';
@@ -110,8 +113,15 @@ export class RunEngine {
   private deps: RunEngineDeps;
   /** 证据记录层：超预算工具结果的不可变存档（data/evidence/{runId}/） */
   private evidence = new EvidenceStore(pathDirname(platformConfig.databasePath));
+  /** 会话全文检索（FTS5）：run 终态索引，session_search 工具的数据源 */
+  private search = new SearchStore();
   /** 习惯学习管线：观察 → 蒸馏 → 置信度 → 晋升技能（data/habits/） */
   private habits = new HabitService(pathDirname(platformConfig.databasePath));
+  /** 运行后蒸馏管线（技能修订/新技能/画像提议 — 至多一次 LLM 调用每 run，fire-and-forget） */
+  private evolution = new EvolutionService(
+    { llm: null as any, skillsDir: platformConfig.skillsDir, registry: null as any },
+    pathDirname(platformConfig.databasePath),
+  );
   /** 具名子代理预设（data/agents/*.md — description 注入主提示，正文按名加载） */
   private agentPresets = new AgentPresetService(pathDirname(platformConfig.databasePath));
   /** 斜杠命令（data/commands/*.md — 用户快捷指令，goal 以 "/" 开头时展开） */
@@ -134,6 +144,8 @@ export class RunEngine {
 
   constructor(deps: RunEngineDeps) {
     this.deps = deps;
+    // 演化管线依赖注入（字段初始化时 deps 尚未就绪，此处补齐）
+    this.evolution.rebind({ llm: deps.llm as any, skillsDir: platformConfig.skillsDir, registry: deps.skillRegistry });
   }
 
   get store(): RunStore {
@@ -156,6 +168,16 @@ export class RunEngine {
   /** 习惯学习管线（API 路由用：列表/蒸馏/晋升/纠偏） */
   get habitService(): HabitService {
     return this.habits;
+  }
+
+  /** 评测/演示隔离：已知自动化会话标识（GAIA/PawBench/评测驱动）→ 记忆写入默认拒 */
+  private isAutomationSession(sessionId?: string): boolean {
+    if (!sessionId) return false;
+    return /^(gaia-eval|pawbench|eval-|benchmark-)/.test(sessionId);
+  }
+
+  get evolutionService(): EvolutionService {
+    return this.evolution;
   }
 
   /** 外部命令守卫（hooks — API/启动接线用） */
@@ -379,7 +401,7 @@ export class RunEngine {
         }
       }
 
-      const { tools, team } = this.buildTools(runId, workspace, runLlm);
+      const { tools, team } = this.buildTools(runId, workspace, runLlm, input.sessionId);
       // 精确重放：模型配置快照（路由优先；否则取当前 active 配置）
       let modelInfo: { model: string; provider?: string; baseUrl?: string; profileId?: string };
       if (input.modelProfileId && routedModel) {
@@ -474,6 +496,49 @@ export class RunEngine {
           ? { error: result.error }
           : { finalContentPreview: result.finalContent.slice(0, 500), steps: result.steps, toolCalls: result.toolCalls, tokensIn: result.tokensIn, tokensOut: result.tokensOut }
       );
+
+      // 会话全文检索：终态时（重）索引本 run 的检索文档（goal + 最终回答 + 消息轨迹）
+      if (result.status === 'completed') {
+        try {
+          this.search.indexRun(runId, input.goal, result.finalContent, result.messages);
+        } catch { /* 索引失败不影响 run */ }
+
+        // 运行后蒸馏管线（fire-and-forget）：技能修订/新技能/画像提议，至多一次 LLM 调用
+        if (result.steps >= 8 && !(this.deps.llm as any).isDemoMode?.()) {
+          try {
+            const evs = this.deps.eventStore.listByRun(runId, 0, 10_000);
+            const skillsUsed = new Set<string>();
+            const skillFailures: Array<{ tool: string; errorPreview: string }> = [];
+            let gateRejections = 0;
+            let subagentFailures = 0;
+            for (const e of evs) {
+              const tool = (e.payload as any)?.tool;
+              if ((e.type === 'tool.call_completed' || e.type === 'tool.call_failed') && typeof tool === 'string' && tool.startsWith('skill_')) {
+                skillsUsed.add(tool.replace(/^skill_/, ''));
+                if (e.type === 'tool.call_failed') {
+                  skillFailures.push({ tool, errorPreview: JSON.stringify((e.payload as any)?.error ?? '').slice(0, 120) });
+                }
+              }
+              if (e.type === 'loop.gate_rejected') gateRejections++;
+              if (e.type === 'subagent.failed' || e.type === 'team.teammate_failed') subagentFailures++;
+            }
+            void this.evolution.considerRun({
+              runId,
+              goal: input.goal,
+              steps: result.steps,
+              toolCalls: result.toolCalls,
+              skillsUsed: [...skillsUsed],
+              skillFailures,
+              gateRejections,
+              subagentFailures,
+              transcriptTail: result.messages
+                .slice(-15)
+                .map(m => `${m.role}: ${String(m.content ?? '').slice(0, 300)}`)
+                .join('\n'),
+            });
+          } catch { /* 信号收集失败不影响 run */ }
+        }
+      }
 
       // M1-11（D18）：会话结束记忆整理 — 仅正常完成时；demo 模式与开关关闭时跳过
       if (result.status === 'completed' && platformConfig.memoryDistillEnabled && !(this.deps.llm as any).isDemoMode?.()) {
@@ -634,7 +699,7 @@ export class RunEngine {
    *  · ask（默认） → fs 全量（写改 approval）+ shell（如启用，approval）
    *  · auto        → fs 权限位提为 auto；shell 保持 approval（D13）
    *  注意：todo_write 的 emit 是构造时注入的闭包（不走 ctx.emit），必须显式路由到本 run 的事件流 */
-  private buildTools(runId: string, workspace: Workspace | null, llmOverride?: any): { tools: Tool[]; team: TeamService } {
+  private buildTools(runId: string, workspace: Workspace | null, llmOverride?: any, sessionId?: string): { tools: Tool[]; team: TeamService } {
     const registry = createDefaultToolRegistry({
       skillRegistry: this.deps.skillRegistry,
       skillExecutor: this.deps.skillExecutor,
@@ -669,14 +734,15 @@ export class RunEngine {
 
     tools.push(makeTodoTool()); // 事件经 ctx.emit → loop 注入 agentId
     tools.push(makePastRunsTool(taskStore as any));
-    tools.push(...makeMemoryTools(new MemoryService(platformConfig.memoryDir)));
+    // 记忆自动归档：注入 LLM（平台自治路由 + 超量整理）
+    tools.push(...makeMemoryTools(new MemoryService(platformConfig.memoryDir), this.deps.llm as any, this.isAutomationSession(sessionId)));
     tools.push(makeEvidenceReadTool(this.evidence));
     tools.push(makeDualReviewTool({ llm: llmOverride ?? this.deps.llm }));;
 
     // M1-4：spawn 工具 — 子预算上限为平台默认的 1/2 量级，spawn 限额 run 级共享
     // Teams：run 级协作内核（任务板 + 邮箱 + 名册）；team_* 工具按代理各配副本
     //（selfName 不同 — teammate 的 team_send 落名是自己，主循环是 'main'）
-    const team = new TeamService(runId, ev => this.emitRunEvent(runId, ev.type, ev.payload ?? {}));
+    const team = new TeamService(runId, ev => this.emitRunEvent(runId, ev.type, ev.payload ?? {}), platformConfig.runMaxTokens);
     const spawn = makeSpawnTool({
       llm: this.deps.llm,
       summarize: async transcript => this.summarizeTranscript(transcript),
@@ -718,6 +784,8 @@ export class RunEngine {
     tools.push(makeTeamSendTool(team, 'main'));
     tools.push(makeTeamTasksTool(team, 'main'));
     tools.push(makeTeamWaitTool(team));
+    // 会话经历回溯：跨全部历史 run 的全文检索（FTS5）
+    tools.push(makeSessionSearchTool(this.search, this.deps.runStore as any));
     return { tools, team };
   }
 

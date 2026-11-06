@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **Version: v2.3.0** · [Guided tour (DEMO.md)](DEMO.md) · [CHANGELOG](CHANGELOG.md)
+> **Version: v2.4.0** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
 > **Positioning: a local-first, single-command, single-file-storage personal agent runtime**
 
 ---
@@ -106,10 +106,26 @@ A tool's return value used to be one JSON fed to both sides: the model needs it 
 Display wording no longer eats context budget, and the data channel is no longer polluted by display needs; tools without `display` fall back to a JSON preview of `data` (backward compatible). Eight high-frequency built-in tools (file read/write / list / edit / HTTP / shell / Word read-write) already carry summaries.
 
 **25. Multi-agent team collaboration**
-The `team_*` tool group upgrades one-shot delegation into a collaborating team: `team_spawn` spawns a **background named teammate** (returns immediately, runs in parallel, sharing every safety invariant of `agent_spawn`: tool subsets never exceed the parent set, budget clamping, depth limits, cancellation cascade); `team_send` is direct inter-agent messaging with **step-boundary delivery** — a running agent receives the message before its next LLM request (never lost, never interrupting the current step), drained by the loop after compression and before request assembly; `team_tasks` is a shared task board (`blockedBy` enforced acyclic, `revision` optimistic locking against clobbering, readiness derived from blocker completion); `team_wait` harvests teammates' final answers. Anti-runaway bounds: ≤16 members, ≤256 tasks, ≤16KB per message, names permanently occupied (failed members included, never reused). Suited to parallelizable independent subtasks (multi-path retrieval, cross-checking) — the Router watches the board, not the details; each Worker holds its own context window.
+The `team_*` tool group upgrades one-shot delegation into a collaborating team: `team_spawn` spawns a **background named teammate** (returns immediately, runs in parallel, sharing every safety invariant of `agent_spawn`: tool subsets never exceed the parent set, budget clamping, depth limits, cancellation cascade); `team_send` is direct inter-agent messaging with **step-boundary delivery** — a running agent receives the message before its next LLM request (never lost, never interrupting the current step), drained by the loop after compression and before request assembly; `team_tasks` is a shared task board (`blockedBy` enforced acyclic, `revision` optimistic locking against clobbering, readiness derived from blocker completion); `team_wait` harvests teammates' final answers. Anti-runaway bounds: ≤16 members, ≤256 tasks, ≤16KB per message, names permanently occupied (failed members included, never reused); a team-token watchdog accumulates every teammate’s consumption — one-time warning at 80%, new spawns rejected at 100%. Suited to parallelizable independent subtasks (multi-path retrieval, cross-checking) — the Router watches the board, not the details; each Worker holds its own context window.
 
 **26. Checkpoint exact replay**
 "Model-visible is recorded": besides the message snapshot, every step's checkpoint carries the **system prompt** actually assembled at that moment and a **model configuration snapshot** (routing info), plus a context-operation audit trail (how many characters shelve/compress each reclaimed). When Time-Travel forks from a historical node, if the source checkpoint carries a system prompt it is **reproduced verbatim** — later changes to profile, habits, or personalization never affect the fork; "what did the model see at any step" can be retrieved as-is (`GET /api/runs/:id/checkpoints` returns a system-prompt preview and model config), and what compression dropped can be reconciled step by step. Old-format checkpoints naturally fall back to on-the-fly reassembly (backward compatible).
+
+**27. Self-evolution loop (post-run distillation + memory governance)**
+Two loops turn every run into fuel for improvement:
+
+**Evolution pipeline**: after a run completes, at most one LLM call produces at most one evolution proposal by priority — (1) skill revision (skills used × negative signals ≥2 → LLM drafts a revision against the failure evidence); (2) new-skill draft (complex tasks distilled into reusable skills, deduplicated); (3) profile additions (≥24h throttle). Proposals never touch anything directly — the Skills and Settings pages review them; accepting applies (old version backed up to `.history/` + hot-reload). Paired with a **version safety net**: every skill's "History" button shows all versions with unified diff vs current, one-click rollback (the current version is auto-backed up before rollback — rollback itself is rollback-able).
+
+**Memory governance system** (four defense layers keeping the library small and valuable):
+- **Admission gate**: before creating a new memory file, an LLM checks admission rules — environment snapshots (rebuildable via fs_list) / conversation recaps (already covered by session_search) / volatile state → rejected with reason; user preferences, corrections, conventions, problem→solution lessons → accepted; user-instructed "remember this" bypasses the gate
+- **Auto-filing**: accepted content is routed by LLM to the closest matching existing file (original preserved + dated section appended), genuinely new topics get new files — no fragmentation
+- **Auto-consolidation**: >15 files triggers LLM topic grouping (target 5-12) + in-group full-preserve merge (every fact kept), originals backed up to `.history/` — verified live: 68 fragmented files → 9 topic files, zero fact loss
+- **Automation isolation**: automated runs (sessionId prefix match: gaia-eval / pawbench / eval- / benchmark-) have memory_write denied by default — evaluation experience never pollutes the personal memory library
+
+Paired with **memory nudges** (every 12 steps during long tasks, max 2) and **manual multi-select merge** (Settings page → LLM full-preserve merge with length-safety check).
+
+**28. Full-text session search (experience recall)**
+FTS5 trigram index (Chinese/English substring matching): at terminal state a run's goal, final answer, and message trail are rebuilt as its search documents; the `session_search` tool searches across ALL past runs and returns highlighted snippets with run locator — "that plan we discussed", "how we fixed that error last time" now hit the original trail instead of relying on distilled memories. Paired trajectory export: `GET /api/runs/:id/export.trajectory.jsonl` emits a training-ready trajectory (metadata with model config and system prompt + per-message lines, the same source as exact replay) for tool-calling model trajectory production.
 
 ---
 
@@ -202,13 +218,13 @@ Verified against DeepSeek and DashScope; any OpenAI-compatible endpoint (OpenRou
 | Persistence | SQLite (better-sqlite3, WAL mode, versioned schema migrations) |
 | Skills | YAML frontmatter (gray-matter) + chokidar hot reload |
 | Progress protocol | in-house `[CORAL_PROGRESS]` single-line stderr JSON protocol (Python + Node SDKs, see [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)) |
-| Quality | Vitest (427 cases) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
+| Quality | Vitest (446 cases) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
 
 ---
 
 ## Tests & Benchmarks
 
-- **Tests**: 427 cases (Vitest) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
+- **Tests**: 446 cases (Vitest) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
 - **GAIA benchmark**: [docs/GAIA.md](./docs/GAIA.md) — official GAIA benchmark validation split, **83.3%** (60 questions, deterministic exact match). L1 85.7% / L2 90.9% / L3 60.0%.
 - **Performance**: [docs/BENCHMARK.md](./docs/BENCHMARK.md) — context-compression gains (1.2MB history → 169KB, −86%), SQLite WAL and JSONL persistence throughput. Script: `npx tsx scripts/benchmark.mts`.
 
@@ -237,7 +253,7 @@ Data stays local (`data/personalization/`); one-click wipe.
 
 ---
 
-## Built-in Tools (23)
+## Built-in Tools (24)
 
 | Tool | Description | Permission |
 |------|------|------|
@@ -250,6 +266,7 @@ Data stays local (`data/personalization/`); one-click wipe.
 | `memory_list` / `memory_read` / `memory_write` / `memory_search` / `memory_review` | Long-term memory I/O (Markdown files; writes default create-only, overwrites need explicit `overwrite`; review marks user confirmation) | auto |
 | `agent_spawn` | Spawn a sub-agent (own context / tool subset / depth ≤ 2 / unified security baseline) | auto |
 | `team_spawn` / `team_send` / `team_tasks` / `team_wait` | Multi-agent team: background named teammates / step-boundary direct messages / shared task board (CAS + acyclic DAG) / final-answer harvesting | auto |
+| `session_search` | Full-text search across all past runs (FTS5, CN/EN; experience recall) | auto |
 | `past_runs` | Retrieve past runs | auto |
 | `evidence_read` | Fetch evidence records (immutable archive of oversized tool results, paginated) | auto |
 | `dual_review` | Dual independent review with disagreement arbitration | auto |
@@ -258,7 +275,7 @@ Data stays local (`data/personalization/`); one-click wipe.
 
 ## Skill Ecosystem
 
-### Built-in Skills (34)
+### Built-in Skills (40)
 
 #### Documents & Writing
 | Skill | Mode | Description |
@@ -288,6 +305,8 @@ Data stays local (`data/personalization/`); one-click wipe.
 | `web-digest` | script | Web summary archiving |
 | `api-finder` | llm_only | API-first strategy (quick-reference for PubChem/Wikipedia/GitHub APIs) |
 | `archive-search` | llm_only | Archive retrieval (government documents / historical databases) |
+| `blocked-page-recovery` | llm_only | Blocked-page recovery ladder (archived copies → same-site API → alternate sources; 403/paywall/WAF fallbacks) |
+| `grounded-citations` | llm_only | Grounded citations: URL + verbatim snippet + confidence tier per key claim |
 | `legal-search` | llm_only | Legal research (Chinese statutes / case law / judicial interpretations) |
 | `pdf-reader` | llm_only | PDF text extraction |
 | `intel-collector` | llm_only | Intelligence collection: gather → distill → incremental archive |
@@ -304,6 +323,7 @@ Data stays local (`data/personalization/`); one-click wipe.
 | `council-review` | llm_only | Council review: four independent perspectives + disagreement arbitration + dissent archive |
 | `decision-ledger` | llm_only | Decision ledger: append-only multi-round comparison + consistency checks + promotion threshold |
 | `answer-check` | llm_only | Answer self-check (units / magnitude / format / common sense) |
+| `systematic-debugging` | llm_only | Four-phase root-cause debugging (reproduce → hypothesize → minimal verify → fix with regression) |
 | `prompt-doctor` | llm_only | Prompt review: five-dimension check and revision |
 
 #### Domain & Efficiency
@@ -314,6 +334,9 @@ Data stays local (`data/personalization/`); one-click wipe.
 | `site-sentinel` | llm_only | Site health check (eight-signal post-release smoke test) |
 | `story-board` | llm_only | File-based project management: epic → story → sprint |
 | `schedule-plan` | llm_only | Schedule planning (priority matrix + time-block allocation) |
+| `weekly-review-planning` | llm_only | Weekly review and next-week planning (evidence from sessions/runs/memory; trigger-friendly) |
+| `document-action-items` | llm_only | Document to action items (obligations/deadlines/tasks, each with verbatim citation) |
+| `price-watch` | llm_only | Price watch (one-shot check or trigger-driven patrols with a running price log) |
 | `skill-authoring` | llm_only | Skill authoring standard: dedup / naming / quality self-check |
 
 ### Creating Custom Skills
@@ -406,6 +429,7 @@ Design intent of the tiering: lightweight scenarios carry no persistence depende
 - `memory/` directory + Markdown; the agent records autonomously (user preferences, project conventions, lessons learned)
 - Auto-distillation and archiving after sessions (disableable); visual editing in Settings
 - Trust tiers: agent writes default to `unreviewed`; marked `reviewed` after user confirmation
+- Four-layer governance: admission gate (environment snapshots / conversation recaps rejected) → auto-filing (topic-matched merge) → auto-consolidation (>15 triggers full-preserve merge down to 5-12) → automation isolation (automated runs denied by default); manual multi-select merge in Settings
 
 ### Dual execution semantics (v1 DAG orchestration retained)
 - DAG scheduling: goal → planning engine → concurrent multi-skill execution with short-circuiting
@@ -421,7 +445,7 @@ Design intent of the tiering: lightweight scenarios carry no persistence depende
 | GET | `/api/health` · `/api/stats` · `/api/config` | Health / stats / config (keys masked) |
 | POST | `/api/runs` | Start a run (goal + sessionId + workspaceId + budget) |
 | GET | `/api/runs/:id` · `/events` · `/stream` | Detail / event delta / SSE live stream |
-| GET | `/api/runs/:id/export.md` · `/artifacts` | Export run report / artifact list |
+| GET | `/api/runs/:id/export.md` · `/export.trajectory.jsonl` · `/artifacts` | Export run report / training trajectory (metadata + messages) / artifact list |
 | POST | `/api/runs/:id/cancel` · `/approvals/:aid` | Cancel / approval decision (scope=session supported) |
 | GET/POST/PATCH/DELETE | `/api/workspaces` | Workspace CRUD + file upload / preview |
 | GET/PUT/DELETE | `/api/skills/:name` | Skill query / edit / delete (built-ins need double confirmation) |
@@ -432,6 +456,7 @@ Design intent of the tiering: lightweight scenarios carry no persistence depende
 | GET | `/api/habits` · POST `/api/habits/distill` | Habit learning (list / manual distill / promotion) |
 | GET | `/api/system/gc` · POST `/api/system/gc` | Config self-cleanup (scan / itemized confirm-and-clean) |
 | POST | `/api/prompt-optimize` | Prompt optimization |
+| GET/POST | `/api/evolution/proposals…` | Evolution proposals (list / human decision: skill revisions · new skills · profile) |
 | POST | `/api/tasks` (v1 DAG mode) | Plan → DAG → skill orchestration |
 | WS | `/ws/events` | WebSocket global event stream |
 
@@ -441,7 +466,7 @@ Design intent of the tiering: lightweight scenarios carry no persistence depende
 
 ```
 CORAL/
-├── LICENSE · .env.example · README.md · README.en.md · USE.md · DEMO.md
+├── LICENSE · .env.example · README.md · README.en.md · USE.md · DEMO.md · DEMO.en.md
 ├── docs/                       ← public docs (skill standard / progress protocol / benchmarks / architecture history)
 ├── .github/workflows/ci.yml    ← CI: three platforms × Node 20/22
 ├── scripts/                    ← dev / start / benchmark scripts

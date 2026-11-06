@@ -137,4 +137,8 @@ export const en: Record<string, string> = {
 
   'settings.keyword.placeholder': 'Type and press Enter, or paste multiple items separated by commas / newlines',
   'settings.keyword.add': 'Add',
+  'settings.memory.mergeTargetPlaceholder': 'Merge into (default: first selected, {n} selected)',
+  'settings.memory.mergeButton': 'Merge selected',
+'settings.memory.mergeConfirm': 'Merge {n} memory files into "{target}"? No fact is dropped (LLM only reorganizes by topic); merged originals are backed up to .history/ then removed.',
+  'settings.memory.mergeDone': '✓ Merged into {target} ({n} originals removed, backed up in .history/)',
 };

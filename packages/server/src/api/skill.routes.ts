@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'fs';
 import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-registry.js';
 import type { SkillExecutor } from '../skill-runtime/skill-executor.js';
 import { resolveArtifactPath } from '../skill-runtime/artifact-path.js';
+import { platformConfig } from '../services/config.js';
 import {
   writeSkillAtomic,
   moveToTrash,
@@ -199,6 +200,42 @@ export function registerSkillRoutes(
     } catch (err: any) {
       return reply.status(500).send({ error: `删除失败: ${err.message}` });
     }
+  });
+
+  // 版本历史（演化提议的安全网）：.history/ 各版本 + 与当前内容的 unified diff
+  app.get('/api/skills/:name/history', async (request, reply) => {
+    const { name } = request.params as any;
+    try {
+      validateSkillName(name);
+    } catch {
+      return reply.status(400).send({ error: 'Skill 名不合法' });
+    }
+    const { listHistory } = await import('../services/skill-history-service.js');
+    const r = listHistory(platformConfig.skillsDir, name);
+    return { skill: name, versions: r.versions, currentChars: r.current.length };
+  });
+
+  // 回滚到指定历史版本（当前版本自动备份进 .history/ — 回滚本身可回滚）
+  app.post('/api/skills/:name/rollback', async (request, reply) => {
+    const { name } = request.params as any;
+    const body = (request.body || {}) as { file?: string };
+    if (typeof body.file !== 'string' || !body.file.trim()) {
+      return reply.status(400).send({ error: '需要 file（.history 内的版本文件名）' });
+    }
+    try {
+      validateSkillName(name);
+    } catch {
+      return reply.status(400).send({ error: 'Skill 名不合法' });
+    }
+    const { rollback } = await import('../services/skill-history-service.js');
+    const r = rollback(platformConfig.skillsDir, name, body.file);
+    if (!r.ok) return reply.status(404).send({ error: r.error });
+    try {
+      await registry.reloadSkill(name);
+    } catch (err: any) {
+      return { ...r, note: `已写盘但热重载失败（下次启动生效）: ${err?.message ?? err}` };
+    }
+    return r;
   });
 
   // 产物下载（FR-C8）：路径经 resolveArtifactPath 校验（防同前缀兄弟目录穿越）

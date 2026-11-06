@@ -1,9 +1,12 @@
 import type { FastifyInstance } from 'fastify';
 import type { RunEngine } from '../kernel/run-engine.js';
+import { buildTrajectoryLines } from '../kernel/trajectory.js';
 
 /**
  * 创新点④：Run 一键导出 Markdown 报告（时间线 + 结论）— 求职演示利器。
  * GET /api/runs/:id/export.md → text/markdown 附件下载。
+ * GET /api/runs/:id/export.trajectory.jsonl → 训练数据口径轨迹（元信息 + 消息流，
+ *   含模型配置与系统提示 — 精确重放同源数据）。
  */
 export function registerRunExportRoutes(app: FastifyInstance, engine: RunEngine): void {
   app.get('/api/runs/:runId/export.md', async (request, reply) => {
@@ -17,6 +20,29 @@ export function registerRunExportRoutes(app: FastifyInstance, engine: RunEngine)
     reply.header('Content-Type', 'text/markdown; charset=utf-8');
     reply.header('Content-Disposition', `attachment; filename="coral-run-${runId}.md"`);
     return md;
+  });
+
+  app.get('/api/runs/:runId/export.trajectory.jsonl', async (request, reply) => {
+    const { runId } = request.params as any;
+    const detail = engine.getRunDetail(runId);
+    if (!detail) return reply.status(404).send({ error: 'run 不存在' });
+    const { run } = detail;
+
+    // 末次 checkpoint（消息 + 精确重放三件套：system / model）
+    const cps = engine.checkpoints.listByRun(runId);
+    const state = cps.length > 0 ? engine.checkpoints.get(runId, cps[cps.length - 1].seq) : null;
+    const lines = buildTrajectoryLines({
+      runId,
+      goal: String(run.goal ?? ''),
+      status: String(run.status ?? ''),
+      messages: (state?.messages ?? []) as any[],
+      system: state?.system,
+      model: state?.model,
+    });
+
+    reply.header('Content-Type', 'application/x-ndjson; charset=utf-8');
+    reply.header('Content-Disposition', `attachment; filename="coral-trajectory-${runId}.jsonl"`);
+    return lines.join('\n') + '\n';
   });
 }
 

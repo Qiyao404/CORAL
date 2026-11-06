@@ -16,7 +16,7 @@ export function registerTriggerRoutes(app: FastifyInstance, triggers: TriggerSer
       name?: string;
       kind?: 'interval' | 'cron' | 'webhook';
       spec?: string;
-      action?: { mode?: 'free' | 'graph'; goal?: string; graph?: string; workspaceId?: string };
+      action?: { mode?: 'free' | 'graph'; goal?: string; graph?: string; workspaceId?: string; sessionId?: string };
     };
     if (typeof body.name !== 'string' || !['interval', 'cron', 'webhook'].includes(body.kind ?? '')) {
       return reply.status(400).send({ error: '需要 name 和 kind（interval/cron/webhook）' });
@@ -30,6 +30,8 @@ export function registerTriggerRoutes(app: FastifyInstance, triggers: TriggerSer
         goal: body.action?.goal ?? '',
         graph: body.action?.graph,
         workspaceId: body.action?.workspaceId,
+        // 续写既有会话（持久 inbox）：fire 不开新对话，投递到该会话续接上下文
+        sessionId: body.action?.sessionId,
       },
     });
     if (!r.ok) return reply.status(400).send({ error: r.message });

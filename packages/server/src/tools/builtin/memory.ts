@@ -1,13 +1,14 @@
 import type { Tool } from '../types.js';
 import { toolOk, toolError } from '../types.js';
 import type { MemoryService } from '../../services/memory-service.js';
+import { routeNewMemory, appendToMemory, autoConsolidate, type LlmChat as RouterLlm } from '../../services/memory-router.js';
 
 /**
  * M1-11（D18）：文件式记忆四工具 — agent 的长期记忆读写。
  * 全部 auto 权限（记忆目录有边界，文件名消毒防穿越）。
  */
 
-export function makeMemoryTools(service: MemoryService): Tool[] {
+export function makeMemoryTools(service: MemoryService, llm?: RouterLlm, automationSession = false): Tool[] {
   const list: Tool = {
     name: 'memory_list',
     description:
@@ -56,7 +57,7 @@ export function makeMemoryTools(service: MemoryService): Tool[] {
     },
     source: 'builtin',
     permission: 'auto',
-    async invoke(input: any) {
+    async invoke(input: any, ctx: any) {
       if (typeof input?.content !== 'string' || !input.content.trim()) {
         return toolError('BAD_INPUT', 'content 必须为非空字符串');
       }
@@ -75,8 +76,45 @@ export function makeMemoryTools(service: MemoryService): Tool[] {
         );
       }
       try {
-        const w = service.write(String(rawName), input.content);
-        return toolOk({ written: w.name, bytes: w.bytes, truncated: w.truncated });
+        // 记忆自动归档：新建文件前由平台路由（主题匹配并入 / 按准入标准拒绝；LLM 不可用时回落原行为）
+        let finalName = String(rawName);
+        let routed: 'create' | 'append' = 'create';
+        if (!service.exists(finalName) && llm) {
+          // 评测隔离：自动化 run（gaia-eval-session 等标识性会话）的 memory_write 默认拒
+          if (automationSession) {
+            return toolError(
+              'MEMORY_AUTOMATION_BLOCKED',
+              '当前为自动化/评测 run，长期记忆写入已隔离（评测经验不污染用户记忆库）。用户交互式会话不受影响。',
+              false
+            );
+          }
+          const decision = await routeNewMemory(service, llm, finalName, input.content);
+          if (decision.action === 'reject') {
+            return toolError(
+              'MEMORY_REJECTED',
+              `长期记忆准入拒绝：${decision.reason ?? '不符合准入标准'}。这类信息（环境快照/对话复述/易失状态）通过 fs_list、session_search 等工具随时可查，不占长期记忆。如果是用户明确交代要记住的，请在 content 开头加 "[user-instructed]" 标记后重试。`,
+              false
+            );
+          }
+          if (decision.action === 'append') {
+            appendToMemory(service, decision.target, input.content, finalName);
+            routed = 'append';
+            finalName = decision.target;
+          } else {
+            finalName = service.exists(decision.target) ? String(rawName) : decision.target;
+          }
+        }
+        const w = routed === 'append'
+          ? { name: finalName, bytes: Buffer.byteLength(input.content, 'utf-8'), truncated: false }
+          : service.write(finalName, input.content);
+        // 写入后检查超量整理（fire-and-forget，失败不影响写入结果）
+        if (llm) void autoConsolidate(service, llm, 15).catch(() => {});
+        return routed === 'append'
+          ? toolOk(
+              { written: w.name, bytes: w.bytes, action: 'append', routedFrom: String(rawName), note: `主题与既有记忆匹配，已并入 ${finalName}（原文保留，新内容作为新小节追加）` },
+              `已并入 ${finalName}（原拟名 ${String(rawName)}，原文保留）`
+            )
+          : toolOk({ written: w.name, bytes: w.bytes, truncated: w.truncated });
       } catch (err: any) {
         return toolError(
           'BAD_NAME',
@@ -148,3 +186,4 @@ You have file-based long-term memory tools (memory_list / memory_read / memory_w
 - When you learn a durable fact (user preference, correction, project convention, useful lesson), record it with memory_write. Read the existing topic file first and merge into it; replacing an existing file requires overwrite=true (create-only guard).
 - When the user explicitly confirms a remembered fact is correct, mark it with memory_review.
 - Never memorize volatile task details or one-off data. When in doubt, skip writing.`;
+

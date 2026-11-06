@@ -14,10 +14,11 @@ import { zh as approvals } from './zh.approvals';
 import { zh as execlog } from './zh.execlog';
 import { zh as settings } from './zh.settings';
 import { zh as hooks } from './zh.hooks';
+import { zh as evo } from './zh.evo';
 
 export const zh: Record<string, string> = Object.assign(
   {},
   app, error, chat, tasks, taskdetail, dashboard,
   skills, skillbuilder, connectors, workflow,
-  timetravel, approvals, execlog, settings, hooks,
+  timetravel, approvals, execlog, settings, hooks, evo,
 );

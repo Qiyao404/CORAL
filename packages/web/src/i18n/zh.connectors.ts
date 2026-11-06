@@ -62,4 +62,6 @@ export const zh: Record<string, string> = {
   'connectors.goalWebhookPlaceholder': '触发时的目标（body 顶层键可用 {{key}} 注入，如 处理告警：{{title}}）',
   'connectors.goalPlaceholder': '触发时要执行的目标（交给 agent 自主完成）',
   'connectors.create': '创建',
+  'connectors.sessionIdPlaceholder': '续写会话 ID（可选，sess_…，留空则每次开新对话）',
+  'connectors.sessionIdHint': '填写会话 ID 后，触发不再开新对话，而是把任务作为新消息投递到该会话（从最近 checkpoint 续接上下文）',
 };

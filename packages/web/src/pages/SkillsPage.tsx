@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Pencil, Trash2, Play, Plus, ShieldAlert, AlertTriangle } from 'lucide-react';
+import { Pencil, Trash2, Play, Plus, ShieldAlert, AlertTriangle, History as HistoryIcon, RotateCcw } from 'lucide-react';
 import { api } from '../api/client';
 import { useI18n } from '../i18n';
+import { EvolutionProposals } from '../components/EvolutionProposals';
 import { Card, Tag, Button, Modal, Drawer, Textarea, Input, EmptyState, Skeleton } from '../components/ui';
 
 const modeLabels: Record<string, string> = {
@@ -41,6 +42,33 @@ export default function SkillsPage() {
   const [editError, setEditError] = useState('');
 
   const [deleting, setDeleting] = useState<any>(null);
+  // 版本历史（演化提议的安全网）：列表 + diff + 回滚
+  const [history, setHistory] = useState<{ name: string; versions: Array<{ file: string; mtime: string; content: string; diff: string }>; currentChars: number } | null>(null);
+  const [historyBusy, setHistoryBusy] = useState<string | null>(null);
+  const [historyMsg, setHistoryMsg] = useState('');
+
+  const openHistory = async (name: string) => {
+    setHistoryMsg('');
+    try {
+      const r = await api.getSkillHistory(name);
+      setHistory({ name, versions: r.versions ?? [], currentChars: r.currentChars ?? 0 });
+    } catch (err: any) {
+      setHistoryMsg(err.message);
+    }
+  };
+  const doRollback = async (name: string, file: string) => {
+    setHistoryBusy(file);
+    setHistoryMsg('');
+    try {
+      const r = await api.rollbackSkill(name, file);
+      setHistoryMsg(t('skills.rollbackDone', { file: r.restoredFrom }) + (r.note ? `（${r.note}）` : ''));
+      await openHistory(name);
+    } catch (err: any) {
+      setHistoryMsg(err.message);
+    } finally {
+      setHistoryBusy(null);
+    }
+  };
   const [deleteConfirmName, setDeleteConfirmName] = useState('');
   const [deleteError, setDeleteError] = useState('');
 
@@ -143,6 +171,8 @@ export default function SkillsPage() {
 
   return (
     <div className="p-8 max-w-7xl mx-auto animate-fade-in-up">
+      {/* 演化提议（技能修订 / 新技能草案）— 运行后蒸馏管线产出，人审落地 */}
+      <EvolutionProposals kinds={['skill_revision', 'skill_new']} />
       <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-heading font-bold text-fg-primary">{t('skills.title')}</h1>
@@ -209,6 +239,7 @@ export default function SkillsPage() {
               </div>
               <div className="flex justify-end gap-2 pt-2 border-t border-glass-border">
                 <Button size="sm" variant="ghost" icon={<Play className="w-4 h-4" />} onClick={() => { setTesting({ name: skill.name, input: '{}' }); setTestResult(null); }}>{t('skills.test')}</Button>
+                <Button size="sm" variant="ghost" icon={<HistoryIcon className="w-4 h-4" />} onClick={() => openHistory(skill.name)}>{t('skills.history')}</Button>
                 <Button size="sm" variant="secondary" icon={<Pencil className="w-4 h-4" />} onClick={() => openEdit(skill)}>{t('skills.edit')}</Button>
                 <Button size="sm" variant="danger" icon={<Trash2 className="w-4 h-4" />} onClick={() => { setDeleting(skill); setDeleteConfirmName(''); setDeleteError(''); }}>{t('skills.delete')}</Button>
               </div>
@@ -308,6 +339,49 @@ export default function SkillsPage() {
           </div>
         )}
       </Drawer>
+
+      {/* 版本历史 Modal（演化提议的安全网：diff 可见 + 一键回滚，回滚前自动备份当前版） */}
+      <Modal
+        open={!!history}
+        onClose={() => setHistory(null)}
+        title={t('skills.historyTitle', { name: history?.name || '' })}
+        width="max-w-3xl"
+        footer={<Button variant="ghost" onClick={() => setHistory(null)}>{t('skills.close')}</Button>}
+      >
+        {historyMsg && <p className="text-xs text-status-success mb-2">{historyMsg}</p>}
+        {history && history.versions.length === 0 && (
+          <p className="text-xs text-fg-muted">{t('skills.historyEmpty')}</p>
+        )}
+        <div className="space-y-3">
+          {history?.versions.map(v => (
+            <div key={v.file} className="rounded-lg border border-glass-border bg-bg-panel/40 p-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="text-xs">
+                  <code className="font-mono text-fg-primary">{v.file}</code>
+                  <span className="text-fg-disabled ml-2">{new Date(v.mtime).toLocaleString()}</span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  disabled={historyBusy === v.file}
+                  icon={<RotateCcw className="w-3.5 h-3.5" />}
+                  onClick={() => doRollback(history.name, v.file)}
+                >
+                  {t('skills.rollback')}
+                </Button>
+              </div>
+              <details className="text-[11px]">
+                <summary className="cursor-pointer text-brand hover:underline">{t('skills.historyDiff')}</summary>
+                <pre className="mt-1.5 max-h-60 overflow-auto whitespace-pre-wrap font-mono text-fg-secondary bg-bg-panel/70 border border-glass-border rounded-lg p-2.5">{v.diff}</pre>
+              </details>
+              <details className="text-[11px] mt-1">
+                <summary className="cursor-pointer text-fg-muted hover:underline">{t('skills.historyFull')}</summary>
+                <pre className="mt-1.5 max-h-60 overflow-auto whitespace-pre-wrap font-mono text-fg-secondary bg-bg-panel/70 border border-glass-border rounded-lg p-2.5">{v.content}</pre>
+              </details>
+            </div>
+          ))}
+        </div>
+      </Modal>
 
       {/* 删除 Modal */}
       <Modal

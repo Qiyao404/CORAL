@@ -14,10 +14,11 @@ import { en as approvals } from './en.approvals';
 import { en as execlog } from './en.execlog';
 import { en as settings } from './en.settings';
 import { en as hooks } from './en.hooks';
+import { en as evo } from './en.evo';
 
 export const en: Record<string, string> = Object.assign(
   {},
   app, error, chat, tasks, taskdetail, dashboard,
   skills, skillbuilder, connectors, workflow,
-  timetravel, approvals, execlog, settings, hooks,
+  timetravel, approvals, execlog, settings, hooks, evo,
 );

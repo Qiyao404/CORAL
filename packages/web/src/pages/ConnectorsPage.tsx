@@ -279,6 +279,7 @@ function AddTriggerForm({ onAdd }: { onAdd: (payload: any) => void }) {
   const [kind, setKind] = useState<'interval' | 'cron' | 'webhook'>('interval');
   const [spec, setSpec] = useState('');
   const [goal, setGoal] = useState('');
+  const [sessionId, setSessionId] = useState('');
 
   return (
     <div className="glass rounded-xl border border-glass-border p-3 space-y-2 text-xs">
@@ -299,7 +300,11 @@ function AddTriggerForm({ onAdd }: { onAdd: (payload: any) => void }) {
       <textarea value={goal} onChange={e => setGoal(e.target.value)}
         placeholder={kind === 'webhook' ? t('connectors.goalWebhookPlaceholder') : t('connectors.goalPlaceholder')}
         className="w-full h-16 glass border border-glass-border rounded-lg px-2 py-1.5 outline-none focus:border-brand/40 resize-none" />
-      <button onClick={() => onAdd({ name, kind, spec: spec || '', action: { mode: 'free', goal } })}
+      <input value={sessionId} onChange={e => setSessionId(e.target.value)}
+        placeholder={t('connectors.sessionIdPlaceholder')}
+        title={t('connectors.sessionIdHint')}
+        className="w-full glass border border-glass-border rounded-lg px-2 py-1.5 font-mono outline-none focus:border-brand/40" />
+      <button onClick={() => onAdd({ name, kind, spec: spec || '', action: { mode: 'free', goal, ...(sessionId.trim() ? { sessionId: sessionId.trim() } : {}) } })}
         className="px-3 py-1.5 rounded-lg bg-brand text-white cursor-pointer hover:bg-brand-hover">{t('connectors.create')}</button>
     </div>
   );

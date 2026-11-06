@@ -71,4 +71,8 @@ export const en: Record<string, string> = {
   'timetravel.toolCallsList': '[calls: {names}]',
   'timetravel.forkOk': '✅ Forked — created a new conversation ({runId}) inheriting everything before #{seq}',
   'timetravel.forkFailed': 'Fork failed: {msg}',
+  'timetravel.replayModel': 'Model at this step',
+  'timetravel.replayOps': '{n} context ops',
+  'timetravel.replayNote': 'fork reproduces the system prompt and model config of that moment verbatim',
+  'timetravel.showSystem': 'View system prompt at this step (first 400 chars)',
 };

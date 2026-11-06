@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { Card, Button, Input, Textarea, Tag, Select, Skeleton } from '../components/ui';
 import { useTheme, type ThemeMode } from '../contexts/ThemeContext';
 import { useI18n, LANGS, type Lang } from '../i18n';
+import { EvolutionProposals } from '../components/EvolutionProposals';
 
 interface LlmProfile {
   profileId: string;
@@ -159,6 +160,33 @@ export default function SettingsPage() {
       setMemoryName(name);
       setMemoryContent(r.content ?? '');
     } catch (err: any) { alert(err.message); }
+  };
+  // 记忆多选合并（LLM 全保留整理）：勾选 ≥2 个文件 → 可选目标名（默认第一个）→ 合并
+  const [mergeSel, setMergeSel] = useState<Set<string>>(new Set());
+  const [mergeTarget, setMergeTarget] = useState('');
+  const [merging, setMerging] = useState(false);
+  const [mergeMsg, setMergeMsg] = useState('');
+  const doMergeMemory = async () => {
+    const names = [...mergeSel];
+    if (names.length < 2) return;
+    const target = mergeTarget.trim() || names[0];
+    if (!confirm(t('settings.memory.mergeConfirm', { n: names.length, target }))) return;
+    setMerging(true);
+    setMergeMsg('');
+    try {
+      const r = await api.mergeMemory(names, mergeTarget.trim() || undefined);
+      setMergeMsg(t('settings.memory.mergeDone', { target: r.merged, n: r.removed.length }));
+      setMergeSel(new Set());
+      setMergeTarget('');
+      const res = await api.listMemory();
+      setMemoryFiles(res.items ?? []);
+      setMemoryName(r.merged);
+      setMemoryContent((await api.getMemory(r.merged)).content ?? '');
+    } catch (err: any) {
+      setMergeMsg('✗ ' + err.message);
+    } finally {
+      setMerging(false);
+    }
   };
   const saveMemoryFile = async () => {
     if (!memoryName) return;
@@ -522,6 +550,10 @@ export default function SettingsPage() {
           </h2>
           {profile && <Tag variant="info">v{profile.version}</Tag>}
         </div>
+        {/* 画像演化提议（运行后蒸馏管线）— 增补点人审后并入 */}
+        <div className="mb-4">
+          <EvolutionProposals kinds={['profile_update']} />
+        </div>
         <p className="text-xs text-fg-muted mb-4 -mt-2">{t('settings.profile.desc')}</p>
         <div className="flex items-center justify-between mb-4">
         </div>
@@ -675,11 +707,48 @@ export default function SettingsPage() {
             {memoryFiles.length === 0 && <p className="text-xs text-fg-muted">{t('settings.memory.empty')}</p>}
             {memoryFiles.map(f => (
               <div key={f.name} className={`flex items-center gap-1 p-2 rounded-lg cursor-pointer text-xs ${memoryName === f.name ? 'bg-brand-soft text-brand' : 'hover:bg-bg-elev/40 text-fg-secondary'}`} onClick={() => openMemoryFile(f.name)}>
+                <input
+                  type="checkbox"
+                  className="accent-brand cursor-pointer shrink-0"
+                  checked={mergeSel.has(f.name)}
+                  onClick={e => e.stopPropagation()}
+                  onChange={e => {
+                    setMergeSel(prev => {
+                      const next = new Set(prev);
+                      if (e.target.checked) next.add(f.name); else next.delete(f.name);
+                      return next;
+                    });
+                    setMergeTarget('');
+                  }}
+                />
                 <FileText className="w-3.5 h-3.5 shrink-0" />
                 <span className="truncate flex-1">{f.name}</span>
                 <button className="text-fg-disabled hover:text-status-danger" onClick={e => { e.stopPropagation(); deleteMemoryFile(f.name); }}>×</button>
               </div>
             ))}
+            {/* 多选合并：LLM 全保留整理（一条不丢，按主题重组），原文件备份进 .history/ 后移除 */}
+            {memoryFiles.length >= 2 && (
+              <div className="pt-2 mt-1 border-t border-glass-border space-y-1.5">
+                <div className="flex gap-1.5 items-center">
+                  <input
+                    value={mergeTarget}
+                    onChange={e => setMergeTarget(e.target.value)}
+                    placeholder={t('settings.memory.mergeTargetPlaceholder', { n: mergeSel.size })}
+                    className="flex-1 bg-bg-panel/50 border border-glass-border rounded-lg px-2 py-1 text-[11px] font-mono text-fg-primary"
+                  />
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={mergeSel.size < 2 || merging}
+                    loading={merging}
+                    onClick={doMergeMemory}
+                  >
+                    {t('settings.memory.mergeButton')}
+                  </Button>
+                </div>
+                {mergeMsg && <p className={`text-[11px] ${mergeMsg.startsWith('✗') ? 'text-status-danger' : 'text-status-success'}`}>{mergeMsg}</p>}
+              </div>
+            )}
           </div>
           <div className="md:col-span-2 space-y-2">
             <div className="flex gap-2 items-center">
@@ -702,7 +771,7 @@ export default function SettingsPage() {
           <ConfigItem label={t('settings.platform.sandbox')} value={config?.sandboxMode} />
           <ConfigItem label={t('settings.platform.maxTasks')} value={config?.maxConcurrentTasks} />
           <ConfigItem label={t('settings.platform.maxAgents')} value={config?.maxConcurrentAgentsPerTask} />
-          <ConfigItem label={t('settings.platform.version')} value="CORAL v2.3.0" />
+          <ConfigItem label={t('settings.platform.version')} value="CORAL v2.4.0" />
         </div>
       </Card>
     </div>

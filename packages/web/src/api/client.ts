@@ -84,6 +84,33 @@ export const api = {
       timeoutMs: 60_000,
     }),
 
+  // 演化提议（技能修订/新技能/画像 — 自进化闭环的人审面）
+  getEvolutionProposals: (status?: 'pending' | 'accepted' | 'rejected') =>
+    request<{ items: Array<{ id: string; kind: 'skill_revision' | 'skill_new' | 'profile_update'; runId: string; skillName?: string; rationale: string; content: unknown; status: string; createdAt: string }>; pending: number }>(
+      `/evolution/proposals${status ? `?status=${status}` : ''}`),
+  decideEvolutionProposal: (id: string, accept: boolean) =>
+    request<{ ok: boolean; message: string }>(`/evolution/proposals/${id}/decide`, {
+      method: 'POST',
+      body: JSON.stringify({ accept }),
+    }),
+
+  // 技能版本历史与回滚（演化提议的安全网）
+  getSkillHistory: (name: string) =>
+    request<{ skill: string; currentChars: number; versions: Array<{ file: string; mtime: string; content: string; diff: string }> }>(`/skills/${name}/history`),
+  rollbackSkill: (name: string, file: string) =>
+    request<{ ok: boolean; restoredFrom: string; backedUpAs: string; note?: string }>(`/skills/${name}/rollback`, {
+      method: 'POST',
+      body: JSON.stringify({ file }),
+    }),
+
+  // 长期记忆多文件合并（LLM 全保留整理，原文件备份进 .history/）
+  mergeMemory: (names: string[], target?: string) =>
+    request<{ merged: string; mergedChars: number; removed: string[]; backupDir: string }>('/memory/merge', {
+      method: 'POST',
+      body: JSON.stringify({ names, ...(target ? { target } : {}) }),
+      timeoutMs: 120_000,
+    }),
+
   // LLM 配置
   listLlmConfigs: () => request<any>('/llm/configs'),
   saveLlmConfig: (payload: {

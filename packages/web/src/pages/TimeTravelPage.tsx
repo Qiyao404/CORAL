@@ -16,7 +16,7 @@ import { useI18n } from '../i18n';
 
 interface RunItem { id: string; goal: string; status: string; mode: string; session_id: string | null; parent_run_id: string | null; fork_from_seq?: number | null; created_at: string }
 interface CpPreviewMsg { role: string; toolName: string | null; contentPreview: string; toolCalls?: string[] }
-interface CpItem { seq: number; kind: string; label: string; createdAt: string; messageCount: number; preview: CpPreviewMsg[] }
+interface CpItem { seq: number; kind: string; label: string; createdAt: string; messageCount: number; preview: CpPreviewMsg[]; model?: { model: string; provider?: string; profileId?: string } | null; systemPreview?: string | null; contextOpsCount?: number }
 
 interface AskItem {
   originalRun: RunItem;
@@ -355,7 +355,22 @@ export default function TimeTravelPage() {
                 })}
               </div>
               {activeCp !== null && activeItem && (
-                <div className="glass rounded-xl border border-brand/30 p-3 space-y-2">
+                <div className="mt-3 glass rounded-xl border border-brand/25 p-3 space-y-2">
+                  {/* 精确重放三件套：该步模型是谁、看到什么系统提示、压缩审计数 */}
+                  <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                    <span className="text-fg-muted">{t('timetravel.replayModel')}</span>
+                    <code className="px-1.5 py-0.5 rounded bg-brand-soft/60 text-brand font-mono">{activeItem.model?.model ?? '—'}</code>
+                    {typeof activeItem.contextOpsCount === 'number' && activeItem.contextOpsCount > 0 && (
+                      <span className="px-1.5 py-0.5 rounded bg-bg-elev text-fg-secondary">{t('timetravel.replayOps', { n: activeItem.contextOpsCount })}</span>
+                    )}
+                    <span className="text-fg-disabled">{t('timetravel.replayNote')}</span>
+                  </div>
+                  {activeItem.systemPreview && (
+                    <details className="text-[11px]">
+                      <summary className="cursor-pointer text-brand hover:underline">{t('timetravel.showSystem')}</summary>
+                      <pre className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap font-mono text-fg-secondary bg-bg-panel/60 border border-glass-border rounded-lg p-2">{activeItem.systemPreview}</pre>
+                    </details>
+                  )}
                   <p className="text-xs text-fg-secondary">{t('timetravel.newInstrA')}<b>{t('timetravel.newConvWord')}</b>{t('timetravel.newInstrB', { seq: activeCp })}</p>
                   <textarea value={instruction} onChange={e => setInstruction(e.target.value)} placeholder={t('timetravel.instructionPlaceholder')} className="w-full h-16 glass border border-glass-border rounded-lg p-2 text-xs outline-none focus:border-brand/40 resize-none" />
                   <div className="flex items-center gap-2 flex-wrap">
