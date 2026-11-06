@@ -12,15 +12,20 @@
 
 ## Overview
 
-CORAL is an LLM-powered personal agent runtime: it takes a natural-language goal, and the agent plans autonomously, calls tools, and reads/writes local files — with the whole execution observable, approvable, and interruptible.
+CORAL is an LLM-powered personal agent runtime: it takes a natural-language goal, and the agent plans autonomously, calls tools, and reads/writes local files — fully observable, approvable, and interruptible, and it **gets better with use**.
 
-- **Autonomous planning**: a task checklist is established before work begins and updated item by item as execution proceeds
-- **Tool calling**: 19 built-in tools (file I/O / Word documents / web access / long-term memory / sub-agents, …) plus a skill ecosystem
-- **Observability**: streaming output and event sourcing (all events persisted; replayable and exportable as Markdown)
-- **Real-time transport**: dual SSE / WebSocket channels — every step (including approval requests) reaches the browser instantly
-- **Local-first**: single-file SQLite storage, listens on 127.0.0.1 by default, keys never leave the machine, zero cloud dependency
+- **Autonomous planning**: a checklist before work starts, updated live; long tasks get periodic nudges to persist reusable knowledge
+- **Tool calling**: 24 built-in tools (files / Word / web / long-term memory / sub-agents / multi-agent teams / full-text search, …) + a 40-skill ecosystem
+- **Deterministic discipline**: Fact Gate (read-before-write), Wrap-up Gate (rhetoric audit), tool effects contract (approval tiers derived from effects), external command guards (8 lifecycle points, pluggable)
+- **Self-evolution loop**: post-run distillation drafts skill revisions / new-skill proposals / profile additions from real experience — all human-reviewed before landing; version history + diff + one-click rollback
+- **Memory governance**: admission gate (environment snapshots / conversation recaps rejected) → auto-filing → full-preserve consolidation → automation isolation — four defense layers keeping the library small and valuable
+- **Experience recall**: `session_search` full-text search across ALL past conversations (FTS5, CN/EN) — "that plan we discussed" hits the original trail
+- **Multi-agent teams**: background named teammates running in parallel, step-boundary messaging, acyclic task board (CAS + optimistic locking), team-token watchdog
+- **Exact replay**: every checkpoint carries the system prompt + model config; Time-Travel forks reproduce historical context verbatim
+- **Observability**: streaming + event sourcing (fully persisted, replayable, exportable as Markdown or training-ready JSONL trajectories)
+- **Local-first**: single-file SQLite, listens on 127.0.0.1 by default, keys never leave the machine, zero cloud dependency; bilingual UI (CN/EN one-click)
 
-Without an API key, the full pipeline runs in demo mode (`npm run dev:server -- --demo`; outputs carry a mock marker).
+Without an API key, the full pipeline runs in demo mode (`npm run dev:server -- --demo`). `@coral/sdk` lets you `import` the kernel loop directly into your own program without running a server.
 
 ---
 
@@ -136,9 +141,14 @@ Open the Chat page, describe a goal in one sentence, and the agent works autonom
 - **Word documents**: upload `.docx`, read content, summarize key points, generate new documents (built-in OOXML read/write)
 - **Local file I/O**: bind a workspace folder, then list/read/write files — writes show a diff approval card first (three permission tiers: read-only / ask / auto)
 - **Command execution**: optional shell tool (every execution requires approval)
-- **Web access**: fetch any URL and read its main content (zero-dependency readability extraction)
-- **Sub-agents**: long tasks are isolated into independent-context sub-agents automatically (nesting depth ≤ 2)
-- **Skill ecosystem**: conversational skill creation, importing the industry-standard Agent Skills format (SKILL.md), one-command `coral install` of npm / git skill packages, filesystem-as-registry hot reload
+- **Web access**: fetch any URL and read its main content; blocked pages automatically walk a recovery ladder (archived copies → same-site API → alternate sources)
+- **Multi-agent teams**: `team_spawn` background named teammates in parallel, step-boundary messaging, shared task board (acyclic DAG + optimistic locking), `team_wait` harvesting — team-token watchdog prevents runaway
+- **Experience recall**: `session_search` full-text search across all past conversations — "that plan we discussed" hits the original trail and final answer
+- **Self-evolution**: post-run distillation drafts skill revisions from failures, new skills from complex tasks, profile additions from conversations — all human-reviewed; version history + diff + one-click rollback
+- **Long-term memory**: four-layer governance (admission gate → auto-filing → consolidation → automation isolation) keeps the library small and valuable; memory is plain editable Markdown
+- **Scheduled tasks**: cron / interval / webhook triggers; with a session ID, recurring tasks land on the same conversation line forming a continuous record
+- **Skill ecosystem**: 40 built-in skills + conversational creation + `coral install` npm/git packages + evolution proposals for continuous improvement
+- **SDK embedding**: `@coral/sdk` `runAgent()` runs the kernel loop without a server; `createRuntime()` brings full persistence
 - **Interface language**: one-click Chinese/English switching (sidebar and settings; preference persisted)
 
 See [USE.md](./USE.md) for the full usage guide and task examples.
@@ -188,13 +198,16 @@ Verified against DeepSeek and DashScope; any OpenAI-compatible endpoint (OpenRou
 │  │  → budget → checkpoint                                          │ │
 │  │  ├─ todo safeguards (mandatory start / skip reminder / closeout)│ │
 │  │  ├─ fake-final guards (empty answer / pending todos / rhetoric) │ │
-│  │  ├─ sub-agents (agent_spawn: own context / tool subset / ≤2)    │ │
-│  │  └─ context management (clip + shelve + summarize + cooldown)   │ │
+│  │  ├─ sub-agents + team (background mates / step-boundary msg /   │ │
+│  │  │  task board / watchdog)                                       │ │
+│  │  ├─ context management (clip + shelve + summarize + cooldown)   │ │
+│  │  └─ post-run distillation (skill revision / new skill / profile  │ │
+│  │     proposals → human review → hot reload)                       │ │
 │  └───────────────────────────┬─────────────────────────────────────┘ │
 │                              │ unified Tool interface                 │
 │  ┌───────────────────────────▼─────────────────────────────────────┐ │
-│  │  Tool Registry: 19 built-in tools (fs / docx / http / shell /   │ │
-│  │  memory / evidence / dual_review …)│ Skills (hot reload)│ MCP   │ │
+│  │  Tool Registry: 24 built-in tools (fs / docx / http / shell /   │ │
+│  │  memory / team / session_search / evidence …)│ Skills (40)│ MCP  │ │
 │  └───────────────────────────┬─────────────────────────────────────┘ │
 │  providers: OpenAI-compatible (DashScope/DeepSeek/OpenRouter/Ollama…)│
 │            + degraded-call normalization + name correction + stream  │
