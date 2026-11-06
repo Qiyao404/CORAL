@@ -50,4 +50,11 @@ export const en: Record<string, string> = {
   'skills.saveFailed': 'Failed to save',
   'skills.deleteBuiltinConfirm': 'Deleting a built-in skill requires typing the name "{name}" to confirm',
   'skills.deleteFailed': 'Failed to delete',
+  'skills.history': 'History',
+  'skills.historyTitle': '{name} — Version History',
+  'skills.historyEmpty': 'No historical versions yet (accepted evolution proposals and rollbacks archive to .history/ automatically)',
+  'skills.historyDiff': 'Diff vs current (- old + new)',
+  'skills.historyFull': 'View full version',
+  'skills.rollback': 'Roll back to this version',
+  'skills.rollbackDone': 'Rolled back to {file} (current version auto-backed up; rollback itself is rollback-able)',
 };

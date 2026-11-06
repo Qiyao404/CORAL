@@ -67,6 +67,8 @@ export interface AgentLoopOptions {
    * 由 run-engine 注入 TeamService 的 drain 闭包（主循环 'main'，子代理各 agentId）。
    */
   pollInbox?: () => Array<{ from: string; content: string }> | Promise<Array<{ from: string; content: string }>>;
+  /** 记忆 nudge 周期（步）：长任务进行中提醒持久化可复用知识；默认 12，0 = 关闭，最多提醒 2 次 */
+  memoryNudgeEvery?: number;
   /** 多轮续接：本会话此前的对话历史（含上一轮的 goal/工具结果/最终回答），种子在新 goal 之前 */
   initialHistory?: ChatMessage[];
   tools: Tool[];
@@ -155,6 +157,8 @@ export class AgentLoop {
   private systemPrompt = '';
   // 上下文操作审计线（收纳/压缩），checkpoint 携带最近 20 条
   private contextOps: Array<{ step: number; kind: 'shelve' | 'compress' | 'deterministic'; reclaimedChars: number; keptMessages: number }> = [];
+  // 记忆 nudge 周期（步）；0 = 关闭。run() 内按选项初始化
+  private memoryNudgeEvery = 12;
 
   constructor(
     private llm: LoopLLM,
@@ -222,6 +226,10 @@ export class AgentLoop {
     //（"自主规划·全程可观测"是核心卖点，不能依赖模型自觉）
     let todoWritten = false;
     let todoNudged = false;
+    // 记忆 nudge：长任务进行中周期性提醒持久化可复用知识（默认每 12 步，最多 2 次；0 = 关闭）
+    let memoryWritten = false;
+    let memoryNudgeCount = 0;
+    this.memoryNudgeEvery = this.options.memoryNudgeEvery ?? 12;
     // 用户实测（fork 场景）：模型回"I'll write..."式过渡话且不带工具调用 → 被误判
     // 为最终回答提前收尾（fork run 因此没产出文档）。narration 续跑：此类回答入历史继续循环
     let narrationContinues = 0;
@@ -567,6 +575,9 @@ export class AgentLoop {
             const resolved = resolveToolName(call.name, this.options.tools);
             if (resolved?.tool.name === 'todo_write') todoWritten = true;
           }
+          // 记忆 nudge 数据源：本 run 内是否已写过记忆（含别名纠正后的判定）
+          const effectiveForMemory = tool ?? resolveToolName(call.name, this.options.tools)?.tool;
+          if (effectiveForMemory?.name === 'memory_write') memoryWritten = true;
 
           this.emit('tool.call_started', {
             step: steps,
@@ -626,6 +637,24 @@ export class AgentLoop {
               'The user watches this checklist live.',
           });
           this.emit('loop.todo_reminder', { step: steps });
+        }
+
+        // 记忆持久化提醒（周期性，最多两次）：长任务进行中还没写过记忆 → 提醒把已获得的
+        // 可复用知识当场落盘（事中提醒，弥补会话结束蒸馏的遗漏）。仅记忆工具存在时提醒。
+        if (
+          this.memoryNudgeEvery > 0 && !memoryWritten && memoryNudgeCount < 2 &&
+          steps > 0 && steps % this.memoryNudgeEvery === 0 && toolMap.has('memory_write')
+        ) {
+          memoryNudgeCount++;
+          messages.push({
+            role: 'user',
+            content:
+              '[system] Checkpoint reminder: if this task has already produced durable, reusable knowledge ' +
+              '(user preference, correction worth remembering, project convention, or a hard-won lesson), ' +
+              'persist it NOW with memory_write (read the existing topic file first and merge into it). ' +
+              'End-of-session distillation may miss details you already have in hand.',
+          });
+          this.emit('loop.memory_nudge', { step: steps, nudge: memoryNudgeCount });
         }
 
         // 预算检查（工具轮结束后、下一轮 LLM 调用前）

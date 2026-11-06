@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import { existsSync, readFileSync, statSync, writeFileSync, renameSync } from 'fs';
 import { join, dirname, resolve } from 'path';
-import { platformConfig } from '../services/config.js';
+import { platformConfig, PROJECT_ROOT } from '../services/config.js';
 
 /**
  * Hooks 系统 — 把运行时内部纪律（效果契约/事实门/收工门）变成**用户可扩展**的开放接口：
@@ -295,7 +295,7 @@ export class HookService {
     return new Promise(resolve => {
       let child;
       try {
-        child = spawn(command, { shell: true, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+        child = spawn(command, { shell: true, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, cwd: PROJECT_ROOT });
       } catch (err: any) {
         return resolve({ exitCode: null, durationMs: 0, decision: 'error', reason: `无法启动: ${err?.message ?? err}`, stdoutTail: '', stderrTail: '', timedOut: false });
       }
@@ -332,6 +332,9 @@ export class HookService {
           shell: true,
           stdio: ['pipe', 'pipe', 'pipe'],
           windowsHide: true,
+          // 守卫命令以仓库根为 cwd——相对路径命令（node guards/x.mjs）可移植，
+          // 不再依赖服务进程的启动目录（修复：此前继承 packages/server 导致相对路径失效）
+          cwd: PROJECT_ROOT,
         });
       } catch (err: any) {
         return resolve_({ decision: 'deny', reason: `hook 无法启动: ${err?.message ?? err}`, failed: true });

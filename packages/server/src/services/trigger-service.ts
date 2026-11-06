@@ -19,6 +19,11 @@ export interface TriggerAction {
   goal: string;
   graph?: string;      // mode=graph 时的 YAML
   workspaceId?: string;
+  /**
+   * 续写既有会话（持久 inbox 语义）：提供时 fire 不开新对话，而是把 goal 作为
+   * 新消息投递到该会话——从其最近 checkpoint 续接上下文（cron 报告/巡检落同一对话线）。
+   */
+  sessionId?: string;
 }
 
 export interface ScheduleRow {
@@ -145,6 +150,10 @@ export class TriggerService {
     if (!input.action?.goal?.trim()) return { ok: false, message: 'action.goal 必填' };
     if (input.action.mode === 'graph' && !input.action.graph?.trim()) {
       return { ok: false, message: 'graph 模式需要 action.graph（YAML）' };
+    }
+    // 续写会话：sessionId 形如 sess_xxx（软校验 — 不存在时 fire 会开新对话线，创建期不阻断）
+    if (input.action.sessionId && !/^[a-zA-Z0-9_-]{4,64}$/.test(input.action.sessionId)) {
+      return { ok: false, message: 'action.sessionId 格式非法（4-64 位字母/数字/-/_）' };
     }
 
     const id = input.kind === 'webhook' ? `hook_${nanoid(12)}` : `sch_${nanoid(10)}`;

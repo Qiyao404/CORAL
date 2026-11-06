@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **版本：v2.3.0** · [快速导览（DEMO.md）](DEMO.md) · [CHANGELOG](CHANGELOG.md)
+> **版本：v2.4.0** · [快速导览（DEMO.md）](DEMO.md) · [CHANGELOG](CHANGELOG.md)
 > **定位：本地优先、单命令启动、单文件存储的个人级 Agent 运行时**
 
 ---
@@ -106,10 +106,26 @@ LLM 摘要失败采用 60s → 300s → 900s 递进冷却；冷却期间硬水�
 展示措辞不再挤占上下文预算，数据通道也不再被展示需求污染；未提供 `display` 的工具自动回退到 `data` 的 JSON 预览（向后兼容）。8 个高频内置工具（文件读写 / 目录 / 编辑 / HTTP / shell / Word 读写）已携带摘要。
 
 **25. 多代理团队协作**
-`team_*` 工具组把一次性委托升级为可协作的团队：`team_spawn` 派生**后台具名 teammate**（立即返回、并行执行，与 `agent_spawn` 共享全部安全不变量：工具子集不超父集、预算钳制、深度限制、取消级联）；`team_send` 是代理间直接消息，投递语义为**步边界**——运行中的代理在下一轮请求前收到（不丢、不打断当前步骤），由循环在压缩之后、请求组装之前排空收件箱；`team_tasks` 是共享任务板（`blockedBy` 强制无环、`revision` 乐观锁防覆盖冲突、就绪态由阻塞完成度派生）；`team_wait` 收割 teammate 的最终回答。防失控边界：成员 ≤16、任务 ≤256、单消息 ≤16KB、名字永久占用（含失败成员，不复用）。适合可并行的独立子任务（多路检索、交叉验证）——Router 只看板不看细节，各 Worker 独立持有自己的上下文窗口。
+`team_*` 工具组把一次性委托升级为可协作的团队：`team_spawn` 派生**后台具名 teammate**（立即返回、并行执行，与 `agent_spawn` 共享全部安全不变量：工具子集不超父集、预算钳制、深度限制、取消级联）；`team_send` 是代理间直接消息，投递语义为**步边界**——运行中的代理在下一轮请求前收到（不丢、不打断当前步骤），由循环在压缩之后、请求组装之前排空收件箱；`team_tasks` 是共享任务板（`blockedBy` 强制无环、`revision` 乐观锁防覆盖冲突、就绪态由阻塞完成度派生）；`team_wait` 收割 teammate 的最终回答。防失控边界：成员 ≤16、任务 ≤256、单消息 ≤16KB、名字永久占用（含失败成员，不复用）；整队 token 预算看门狗——全部 teammate 消耗累计计入（80% 一次性预警、100% 拒绝新 spawn）。适合可并行的独立子任务（多路检索、交叉验证）——Router 只看板不看细节，各 Worker 独立持有自己的上下文窗口。
 
 **26. Checkpoint 精确重放**
 "模型可见即已记录"：每步 checkpoint 除消息快照外，随步携带当时实际组装的**系统提示**与**模型配置快照**（路由信息），以及上下文操作审计线（收纳 / 压缩各自回收了多少字符）。Time-Travel fork 自历史节点回放时，若源 checkpoint 携带系统提示则**一字不差复现**——画像、习惯、个性化的后续变化不影响 fork，任意一步"模型当时看到什么"都可原样取出（`GET /api/runs/:id/checkpoints` 返回系统提示预览与模型配置）；压缩丢掉了什么可以按步对账。旧格式 checkpoint 自然回退到现场重组装（向后兼容）。
+
+**27. 自进化闭环（运行后蒸馏 + 记忆自治）**
+两层闭环让运行成为进化的燃料：
+
+**演化管线**：run 完成后至多一次 LLM 调用，按优先级产出至多一条演化提议——①技能修订（用过技能 × 负信号 ≥2 时对照失败现场起草修订稿）②新技能草案（复杂任务沉淀为可复用技能，与现有技能查重）③画像增补（≥24h 节流）。提议只入库不动现场，技能页/设置页人审后接受才落盘。配套**版本安全网**：每个技能的"历史"按钮展示全部版本与当前内容的 unified diff，一键回滚（回滚前当前版自动备份——回滚本身可回滚）。
+
+**记忆自治系统**（四层防线，让记忆库只存真正有价值的信息）：
+- **准入门槛**：memory_write 新建前由 LLM 按准入标准判断——环境快照（fs_list 可重建）/ 对话复述（session_search 已覆盖）/ 易失状态 → 拒绝并告知原因；用户偏好、纠正、约定、问题→解法教训 → 接收；用户明确说"记住"的跳过门槛
+- **自动归档**：准入通过后由 LLM 匹配主题最相近的既有文件并入（原文保留 + 带日期来源小节追加），新主题才新建——不碎片化
+- **超量整理**：>15 文件触发，LLM 主题分组（目标 5-12）+ 组内全保留合并（每条事实不丢），原文件备份 `.history/`——实测 68 个碎片 → 9 个主题文件零丢失
+- **评测隔离**：自动化 run（sessionId 前缀匹配）的 memory_write 默认拒绝——评测经验不污染个人记忆库
+
+配套**记忆 nudge**（长任务每 12 步提醒当场落盘）与**手动多选合并**（设置页勾选 → LLM 全保留整理 + 长度兜底）。
+
+**28. 会话全文检索（经历回溯）**
+FTS5 trigram 索引（中英混合子串匹配）：run 终态时把目标、最终回答与消息轨迹重建为该 run 的检索文档；`session_search` 工具跨全部历史 run 检索并返回高亮片段与 run 定位——"我们之前讨论过的那个方案""上次那个报错怎么解的"直接命中原始轨迹，不再依赖被蒸馏过的记忆。配套轨迹导出：`GET /api/runs/:id/export.trajectory.jsonl` 输出训练数据口径的完整轨迹（元信息含模型配置与系统提示 + 逐消息流，精确重放同源数据），可直接用于工具调用模型的轨迹生产。
 
 ---
 
@@ -199,13 +215,13 @@ npm run dev            # 后端 3001 + 前端 5173
 | 持久化 | SQLite（better-sqlite3，WAL 模式，schema 版本化迁移） |
 | Skill | YAML frontmatter（gray-matter）+ chokidar 热重载 |
 | 进度协议 | 自研 `[CORAL_PROGRESS]` stderr 单行 JSON 协议（Python + Node 双 SDK，见 [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)） |
-| 质量 | Vitest（427 用例）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
+| 质量 | Vitest（446 用例）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
 
 ---
 
 ## 测试与基准
 
-- **测试**：427 个用例（Vitest），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时 / 外部守卫 / 团队协作等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
+- **测试**：446 个用例（Vitest），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时 / 外部守卫 / 团队协作等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
 - **GAIA 基准**：[docs/GAIA.md](./docs/GAIA.md) —— 官方 GAIA benchmark validation split，**83.3%**（60 题，确定性 exact match）。L1 85.7% / L2 90.9% / L3 60.0%。
 - **性能基准**：[docs/BENCHMARK.md](./docs/BENCHMARK.md) —— 上下文压缩收益（1.2MB 历史 → 169KB，-86%）、SQLite WAL 与 JSONL 持久化吞吐。脚本：`npx tsx scripts/benchmark.mts`。
 
@@ -234,7 +250,7 @@ npm run dev            # 后端 3001 + 前端 5173
 
 ---
 
-## 内置工具清单（23 个）
+## 内置工具清单（24 个）
 
 | 工具 | 说明 | 权限 |
 |------|------|------|
@@ -247,6 +263,7 @@ npm run dev            # 后端 3001 + 前端 5173
 | `memory_list` / `memory_read` / `memory_write` / `memory_search` / `memory_review` | 长期记忆读写（Markdown 文件；写入默认 create-only，覆盖需显式 overwrite；review 标记用户确认） | auto |
 | `agent_spawn` | 派出子代理（独立上下文 / 工具子集 / 深度 ≤ 2 / 统一安全基线） | auto |
 | `team_spawn` / `team_send` / `team_tasks` / `team_wait` | 多代理团队：后台具名 teammate / 步边界直接消息 / 共享任务板（CAS + 无环 DAG）/ 收割最终回答 | auto |
+| `session_search` | 跨全部历史 run 的全文检索（FTS5 中英混合，经历回溯） | auto |
 | `past_runs` | 检索历史运行 | auto |
 | `evidence_read` | 取回证据记录（超大工具结果的不可变存档，支持分页） | auto |
 | `dual_review` | 双独立评审与分歧仲裁 | auto |
@@ -255,7 +272,7 @@ npm run dev            # 后端 3001 + 前端 5173
 
 ## 技能生态
 
-### 内置 Skill 清单（34 个）
+### 内置 Skill 清单（40 个）
 
 #### 文档与写作
 | Skill | 模式 | 说明 |
@@ -285,6 +302,8 @@ npm run dev            # 后端 3001 + 前端 5173
 | `web-digest` | script | 网页摘要归档 |
 | `api-finder` | llm_only | API 优先策略（PubChem/Wikipedia/GitHub 等 API 速查表） |
 | `archive-search` | llm_only | 档案检索（政府文件/历史文档数据库入口） |
+| `blocked-page-recovery` | llm_only | 被封页面恢复阶梯（存档副本→同站 API→换源，403/付费墙/WAF 降级策略） |
+| `grounded-citations` | llm_only | 引用落地：关键论断配来源 URL+逐字片段+置信分级 |
 | `legal-search` | llm_only | 法律法规检索（中国法律/判例/司法解释） |
 | `pdf-reader` | llm_only | PDF 文本提取 |
 | `intel-collector` | llm_only | 情报采集：采集 → 提炼 → 增量归档 |
@@ -301,6 +320,7 @@ npm run dev            # 后端 3001 + 前端 5173
 | `council-review` | llm_only | 多方议事：四个独立视角评审 + 分歧仲裁 + 异议存档 |
 | `decision-ledger` | llm_only | 决策账本：追加式多轮比较 + 一致性检查 + 晋升门槛 |
 | `answer-check` | llm_only | 答案自检（单位/数量级/格式/常识校验） |
+| `systematic-debugging` | llm_only | 四阶段根因调试（复现理解→假设定位→最小验证→修复回归） |
 | `prompt-doctor` | llm_only | 提示词审查：五维检查与修订 |
 
 #### 领域与效率
@@ -311,6 +331,9 @@ npm run dev            # 后端 3001 + 前端 5173
 | `site-sentinel` | llm_only | 站点健康检查（八类信号冒烟测试） |
 | `story-board` | llm_only | 文件式项目推进：epic → story → sprint |
 | `schedule-plan` | llm_only | 日程规划（优先级矩阵 + 时间块分配） |
+| `weekly-review-planning` | llm_only | 周复盘与下周规划（基于会话/任务/记忆证据，可配触发器） |
+| `document-action-items` | llm_only | 文档转行动项（义务/截止/任务三类，逐条带原文引用） |
+| `price-watch` | llm_only | 价格监控（单次查价或触发器周期巡检，价格日志续写） |
 | `skill-authoring` | llm_only | 技能创作规范：查重 / 命名 / 质量自检 |
 
 ### 创建自定义 Skill
@@ -403,6 +426,7 @@ const result = await runAgent({
 - `memory/` 目录 + Markdown，Agent 自主记录（用户偏好、项目约定、经验教训）
 - 会话结束后自动提炼归档（可关闭）；Settings 页可视化编辑
 - 信任分级：Agent 写入默认 `unreviewed`，用户确认后 `reviewed`
+- 自治四层防线：准入门槛（环境快照/对话复述拒收）→ 自动归档（主题匹配并入）→ 超量整理（>15 触发全保留合并至 5-12 个）→ 评测隔离（自动化 run 默认拒）；设置页支持手动多选合并
 
 ### 双执行语义（v1 DAG 编排保留）
 - DAG 调度：goal → 规划引擎 → 多 Skill 并发执行，支持短路
@@ -418,7 +442,7 @@ const result = await runAgent({
 | GET | `/api/health` · `/api/stats` · `/api/config` | 健康 / 统计 / 配置（Key 脱敏） |
 | POST | `/api/runs` | 发起运行（goal + sessionId + workspaceId + 预算） |
 | GET | `/api/runs/:id` · `/events` · `/stream` | 详情 / 事件增量 / SSE 直播 |
-| GET | `/api/runs/:id/export.md` · `/artifacts` | 导出运行报告 / 产物清单 |
+| GET | `/api/runs/:id/export.md` · `/export.trajectory.jsonl` · `/artifacts` | 导出运行报告 / 训练轨迹（元信息+消息流）/ 产物清单 |
 | POST | `/api/runs/:id/cancel` · `/approvals/:aid` | 取消 / 审批决定（支持 scope=session） |
 | GET/POST/PATCH/DELETE | `/api/workspaces` | 工作区 CRUD + 文件上传 / 预览 |
 | GET/PUT/DELETE | `/api/skills/:name` | Skill 查询 / 编辑 / 删除（内置需二次确认） |
@@ -429,6 +453,7 @@ const result = await runAgent({
 | GET | `/api/habits` · POST `/api/habits/distill` | 习惯学习（列表 / 手动蒸馏 / 晋升） |
 | GET | `/api/system/gc` · POST `/api/system/gc` | 配置自清理（扫描 / 逐项确认清理） |
 | POST | `/api/prompt-optimize` | 提示词优化 |
+| GET/POST | `/api/evolution/proposals…` | 演化提议（列表 / 人审裁决：技能修订·新技能·画像） |
 | POST | `/api/tasks`（v1 DAG 模式） | 规划 → DAG → 技能编排 |
 | WS | `/ws/events` | WebSocket 全局事件流 |
 
@@ -438,7 +463,7 @@ const result = await runAgent({
 
 ```
 CORAL/
-├── LICENSE · .env.example · README.md · README.en.md · USE.md · DEMO.md
+├── LICENSE · .env.example · README.md · README.en.md · USE.md · DEMO.md · DEMO.en.md
 ├── docs/                       ← 公开文档（技能规范 / 进度协议 / 基准 / 架构历史）
 ├── .github/workflows/ci.yml    ← CI：三平台 × Node 20/22
 ├── scripts/                    ← dev / start / benchmark 脚本

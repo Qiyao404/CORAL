@@ -71,4 +71,8 @@ export const zh: Record<string, string> = {
   'timetravel.toolCallsList': '[调用: {names}]',
   'timetravel.forkOk': '✅ 已 fork — 生成新对话（{runId}），继承 #{seq} 前的全部成果',
   'timetravel.forkFailed': 'fork 失败: {msg}',
+  'timetravel.replayModel': '该步模型',
+  'timetravel.replayOps': '上下文操作 {n} 次',
+  'timetravel.replayNote': 'fork 将一字不差复现当时的系统提示与模型配置',
+  'timetravel.showSystem': '查看该步的系统提示（前 400 字）',
 };

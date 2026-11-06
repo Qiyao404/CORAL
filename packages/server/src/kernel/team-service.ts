@@ -34,7 +34,7 @@ export interface TeammateHandle {
   name: string;
   agentId: string;
   status: 'running' | 'completed' | 'failed';
-  result?: { status: string; finalContent: string; steps?: number };
+  result?: { status: string; finalContent: string; steps?: number; tokensIn?: number; tokensOut?: number };
 }
 
 export const TEAM_LIMITS = {
@@ -51,11 +51,39 @@ export class TeamService {
   private usedNames = new Set<string>(['main']);
   private teammates = new Map<string, TeammateHandle>();
   private inboxes = new Map<string, TeamMessage[]>();
+  // Watchdog：整队 token 账本（全部 teammate 累计；主循环预算独立）
+  private tokensUsed = 0;
+  private budgetWarned = false;
 
   constructor(
     private runId: string,
     private emit: (ev: { type: string; payload?: Record<string, any> }) => void,
+    /** 整队 token 上限（缺省 1000 万 = 平台默认 run 预算量级；Infinity = 不限） */
+    private budgetTokens: number = 10_000_000,
   ) {}
+
+  /** Watchdog 闸门：新 spawn 前检查整队预算；80% 预警一次性，100% 拒绝 */
+  checkSpawnTokens(): { ok: true; warn?: boolean } | { ok: false; reason: string } {
+    if (this.budgetTokens === Infinity || this.tokensUsed < this.budgetTokens) {
+      const warn = !this.budgetWarned && this.budgetTokens !== Infinity && this.tokensUsed >= this.budgetTokens * 0.8;
+      if (warn) {
+        this.budgetWarned = true;
+        this.emit({
+          type: 'team.budget_warning',
+          payload: { usedTokens: this.tokensUsed, budgetTokens: this.budgetTokens, pct: Math.round((this.tokensUsed / this.budgetTokens) * 100) },
+        });
+      }
+      return { ok: true, ...(warn ? { warn } : {}) };
+    }
+    return {
+      ok: false,
+      reason: `整队 token 预算已耗尽（${this.tokensUsed} / ${this.budgetTokens}）— 先用 team_wait 收割已完成队友的结果，避免继续扩大并行`,
+    };
+  }
+
+  teamUsage(): { usedTokens: number; budgetTokens: number } {
+    return { usedTokens: this.tokensUsed, budgetTokens: this.budgetTokens };
+  }
 
   // ─── 成员注册表 ─────────────────────────────────────────────
 
@@ -85,9 +113,17 @@ export class TeamService {
     if (!t) return;
     t.status = status;
     t.result = result;
+    // Watchdog 账本：teammate 终态时把 token 消耗计入整队预算
+    if (result?.tokensIn || result?.tokensOut) {
+      this.tokensUsed += (result.tokensIn ?? 0) + (result.tokensOut ?? 0);
+    }
     this.emit({
       type: status === 'completed' ? 'team.teammate_completed' : 'team.teammate_failed',
-      payload: { name, agentId: t.agentId, ...(result ? { status: result.status, steps: result.steps } : {}) },
+      payload: {
+        name, agentId: t.agentId,
+        ...(result ? { status: result.status, steps: result.steps } : {}),
+        ...(this.budgetTokens !== Infinity ? { teamTokensUsed: this.tokensUsed } : {}),
+      },
     });
   }
 

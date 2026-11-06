@@ -50,4 +50,11 @@ export const zh: Record<string, string> = {
   'skills.saveFailed': '保存失败',
   'skills.deleteBuiltinConfirm': '内置 Skill 删除需要输入名称 "{name}" 进行二次确认',
   'skills.deleteFailed': '删除失败',
+  'skills.history': '历史',
+  'skills.historyTitle': '{name} — 版本历史',
+  'skills.historyEmpty': '暂无历史版本（演化提议接受时与回滚时会自动留档 .history/）',
+  'skills.historyDiff': '与当前版本的差异（- 旧 + 新）',
+  'skills.historyFull': '查看该版本全文',
+  'skills.rollback': '回滚到此版本',
+  'skills.rollbackDone': '已回滚到 {file}（当前版已自动备份，可再次回滚）',
 };

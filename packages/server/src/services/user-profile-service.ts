@@ -114,17 +114,18 @@ export function userProfileToPrompt(profile: UserProfile): string {
   return `## User Profile (learned from conversations — adapt your responses accordingly)\n${parts.join('\n')}`;
 }
 
-/**
- * 从 distill 输出更新个人画像（LLM 提炼的用户特征自动丰富画像）
- */
-export function enrichUserProfileFromDistill(
-  insights: Array<{ field: string; value: string }>
-): boolean {
-  if (insights.length === 0) return false;
+export interface ProfileInsight {
+  field: string;
+  value: string;
+  reason?: string;
+}
+
+/** 应用画像增补点（演化管线"接受"与记忆蒸馏共用；返回是否产生变更） */
+export function applyProfileInsights(insights: Array<ProfileInsight>): boolean {
   const profile = getUserProfile();
   let changed = false;
   for (const { field, value } of insights) {
-    const v = value.trim().slice(0, 200);
+    const v = String(value ?? '').trim().slice(0, 200);
     if (!v) continue;
     switch (field) {
       case 'name':
@@ -168,4 +169,11 @@ export function enrichUserProfileFromDistill(
     writeFileSync(PROFILE_PATH, JSON.stringify(profile, null, 2), 'utf-8');
   }
   return changed;
+}
+
+/** 从 distill 输出更新个人画像（LLM 提炼的用户特征自动丰富画像）— 行为兼容旧签名 */
+export function enrichUserProfileFromDistill(
+  insights: Array<{ field: string; value: string }>
+): boolean {
+  return applyProfileInsights(insights);
 }

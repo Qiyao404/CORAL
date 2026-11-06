@@ -1,6 +1,6 @@
 {
   "name": "coral-agent",
-  "version": "2.3.0",
+  "version": "2.4.0",
   "description": "CORAL — a local-first personal agent runtime (Free ReAct loop + deterministic Graph mode + MCP bridge + triggers)",
   "workspaces": [
     "packages/server",

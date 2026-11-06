@@ -38,6 +38,7 @@ import { registerCompanyProfileRoutes } from './api/company-profile.routes.js';
 import { registerUserProfileRoutes } from './api/company-profile.routes.js';
 import { registerOpsRoutes } from './api/ops.routes.js';
 import { registerHooksRoutes } from './api/hooks.routes.js';
+import { registerEvolutionRoutes } from './api/evolution.routes.js';
 import { seedAgentPresets } from './services/agent-presets.js';
 import { seedSlashCommands } from './services/slash-commands.js';
 import { closeDb } from './store/db.js';
@@ -47,7 +48,7 @@ import { llmClient } from './services/llm-client.js';
 async function main() {
   console.log('╔═══════════════════════════════════════════╗');
   console.log('║        CORAL — 通用智能体运行时平台        ║');
-  console.log('║        版本: 2.3.0                         ║');
+  console.log('║        版本: 2.4.0                         ║');
   console.log('╚═══════════════════════════════════════════╝');
 
   // 确保必要目录存在
@@ -209,6 +210,7 @@ async function main() {
   registerRunRoutes(app, runEngine, graphRunService);
   registerOpsRoutes(app, runEngine, llmClient);
   registerHooksRoutes(app, runEngine.hooks);
+  registerEvolutionRoutes(app, runEngine.evolutionService);
   registerMcpRoutes(app, mcpClient);
 
   // M3-5：触发器 — fire 即创建 run（free/graph 均可），60s 调度循环
@@ -225,7 +227,12 @@ async function main() {
           workspaceId: action.workspaceId,
         });
       }
-      return runEngine.startRun({ goal: action.goal, workspaceId: action.workspaceId });
+      // 持久 inbox 语义：触发器带 sessionId 时不开新对话，续写既有会话（checkpoint 续接）
+      return runEngine.startRun({
+        goal: action.goal,
+        workspaceId: action.workspaceId,
+        ...(action.sessionId ? { sessionId: action.sessionId, continueSession: true } : {}),
+      });
     },
   });
   triggerService.startLoop();

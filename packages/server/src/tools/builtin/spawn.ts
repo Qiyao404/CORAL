@@ -288,6 +288,12 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
       if (!goal) return toolError('BAD_INPUT', 'goal 必填');
       if (goal.length > GOAL_LIMIT) return toolError('BAD_INPUT', `goal 过长（${goal.length}，上限 ${GOAL_LIMIT}）`);
 
+      // Watchdog：整队 token 预算闸门（80% 预警一次性 / 100% 拒绝新 spawn）
+      const budgetCheck = deps.team.checkSpawnTokens();
+      if (!budgetCheck.ok) {
+        return toolError('TEAM_BUDGET_EXCEEDED', budgetCheck.reason, false);
+      }
+
       // 名字：合法性 + 永久占用（含失败 — 不复用）
       const claim = deps.team.claimName(String(input?.name ?? ''));
       if (!claim.ok) return toolError('TEAM_NAME_REJECTED', claim.error, false);
@@ -378,7 +384,7 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
           return;
         }
         if (result.status === 'failed') {
-          deps.team.settleTeammate(name, 'failed', { status: 'failed', finalContent: result.error ?? '' });
+          deps.team.settleTeammate(name, 'failed', { status: 'failed', finalContent: result.error ?? '', tokensIn: result.tokensIn, tokensOut: result.tokensOut });
           ctx.emit({ type: 'team.teammate_failed', payload: { name, agentId: subId, status: 'failed', error: result.error } });
           return;
         }
@@ -386,6 +392,8 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
           status: result.status,
           finalContent: result.finalContent,
           steps: result.steps,
+          tokensIn: result.tokensIn,
+          tokensOut: result.tokensOut,
         });
         ctx.emit({
           type: 'team.teammate_completed',

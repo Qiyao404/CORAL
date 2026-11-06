@@ -62,4 +62,6 @@ export const en: Record<string, string> = {
   'connectors.goalWebhookPlaceholder': 'Goal when triggered (top-level body keys can be injected via {{key}}, e.g. Handle alert: {{title}})',
   'connectors.goalPlaceholder': 'Goal to execute when triggered (the agent completes it autonomously)',
   'connectors.create': 'Create',
+  'connectors.sessionIdPlaceholder': 'Continue session ID (optional, sess_…, empty = new conversation each fire)',
+  'connectors.sessionIdHint': 'With a session ID, the trigger delivers the task into that existing conversation instead of starting a new one (continues from its latest checkpoint)',
 };
