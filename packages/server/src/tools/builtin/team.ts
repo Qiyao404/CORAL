@@ -117,7 +117,7 @@ export function makeTeamTasksTool(team: TeamService, selfName: string): Tool {
   };
 }
 
-export function makeTeamWaitTool(team: TeamService): Tool {
+export function makeTeamWaitTool(team: TeamService, selfNameRef?: string): Tool {
   return {
     name: 'team_wait',
     description:
@@ -137,6 +137,8 @@ export function makeTeamWaitTool(team: TeamService): Tool {
     effects: { idempotent: true },
 
     async invoke(input: any): Promise<ToolResult> {
+      // 防护：不允许等待自己（必然空转到超时）
+      const selfName = (selfNameRef !== undefined) ? selfNameRef : '';
       let names: string[];
       const raw = Array.isArray(input?.agents) ? input.agents.map(String) : [];
       if (raw.length === 0 || raw.includes('all')) {

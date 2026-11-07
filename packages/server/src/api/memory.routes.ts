@@ -5,6 +5,9 @@ import { platformConfig } from '../services/config.js';
 /**
  * 创新点③：记忆查看/编辑 API — 透明性卖点可视化（Settings 页记忆卡）。
  */
+// memory merge 互斥锁：合并期间（LLM 调用数秒）阻止并发 merge/edit 防数据丢失
+let mergeLock = false;
+
 export function registerMemoryRoutes(app: FastifyInstance): void {
   const service = () => new MemoryService(platformConfig.memoryDir);
 
@@ -16,6 +19,9 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
   // 多文件合并为一（LLM 全保留整理）：内容一条不丢，仅按主题重组；被并入的原文件
   // 备份进 memory/.history/ 后移除——条目变少、信息不减
   app.post('/api/memory/merge', async (request, reply) => {
+    if (mergeLock) return reply.status(409).send({ error: '合并正在进行中，请稍后再试' });
+    mergeLock = true;
+    try {
     const body = (request.body || {}) as { names?: string[]; target?: string };
     const svc = service();
     const names = Array.isArray(body.names) ? body.names.map(n => svc.sanitizeName(String(n))) : [];
@@ -72,6 +78,9 @@ export function registerMemoryRoutes(app: FastifyInstance): void {
       }
     }
     return { merged: target, mergedChars: merged.length, removed: backedUp, backupDir: '.history/' };
+    } finally {
+      mergeLock = false;
+    }
   });
 
   app.get('/api/memory/:name', async (request, reply) => {

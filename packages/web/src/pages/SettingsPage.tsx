@@ -177,11 +177,13 @@ export default function SettingsPage() {
       const r = await api.mergeMemory(names, mergeTarget.trim() || undefined);
       setMergeMsg(t('settings.memory.mergeDone', { target: r.merged, n: r.removed.length }));
       setMergeSel(new Set());
-      setMergeTarget('');
+      // 不再每次勾选都清空 target（用户可能已输入自定义名）
       const res = await api.listMemory();
       setMemoryFiles(res.items ?? []);
       setMemoryName(r.merged);
-      setMemoryContent((await api.getMemory(r.merged)).content ?? '');
+      try {
+        setMemoryContent((await api.getMemory(r.merged)).content ?? '');
+      } catch { /* 二段请求失败不影响成功提示（合并已落盘） */ }
     } catch (err: any) {
       setMergeMsg('✗ ' + err.message);
     } finally {
@@ -718,7 +720,7 @@ export default function SettingsPage() {
                       if (e.target.checked) next.add(f.name); else next.delete(f.name);
                       return next;
                     });
-                    setMergeTarget('');
+                    // 不再每次勾选都清空 target（用户可能已输入自定义名）
                   }}
                 />
                 <FileText className="w-3.5 h-3.5 shrink-0" />

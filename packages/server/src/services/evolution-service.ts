@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync } from 'fs';
 import { join, resolve, dirname } from 'path';
 import { validateSkillName } from '../skill-runtime/skill-writer.js';
 import { applyProfileInsights, type ProfileInsight } from './user-profile-service.js';
@@ -86,14 +86,18 @@ export class EvolutionService {
   private load(): void {
     try {
       if (existsSync(this.storePath)) {
-        this.proposals = JSON.parse(readFileSync(this.storePath, 'utf-8'));
+        const parsed = JSON.parse(readFileSync(this.storePath, 'utf-8'));
+      this.proposals = Array.isArray(parsed) ? parsed : []; // 非数组（文件损坏）按空处理
       }
     } catch { this.proposals = []; }
   }
 
   private persist(): void {
+    // 原子写：先写 tmp 再 rename（崩溃时不会留下截断的 JSON）
     mkdirSync(dirname(this.storePath), { recursive: true });
-    writeFileSync(this.storePath, JSON.stringify(this.proposals, null, 2), 'utf-8');
+    const tmp = this.storePath + '.tmp';
+    writeFileSync(tmp, JSON.stringify(this.proposals, null, 2), 'utf-8');
+    renameSync(tmp, this.storePath);
   }
 
   private readState(): Record<string, unknown> {
@@ -105,7 +109,9 @@ export class EvolutionService {
 
   private writeState(s: Record<string, unknown>): void {
     mkdirSync(dirname(this.statePath), { recursive: true });
-    writeFileSync(this.statePath, JSON.stringify(s, null, 2), 'utf-8');
+    const tmp = this.statePath + '.tmp';
+    writeFileSync(tmp, JSON.stringify(s, null, 2), 'utf-8');
+    renameSync(tmp, this.statePath);
   }
 
   list(status?: 'pending' | 'accepted' | 'rejected'): EvolutionProposal[] {

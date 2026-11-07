@@ -221,16 +221,11 @@ export class TeamService {
     if (typeof input.expectedRevision === 'number' && input.expectedRevision !== task.revision) {
       return { ok: false, error: `版本冲突：任务 ${task.id} 当前 revision=${task.revision}（你基于 ${input.expectedRevision}）— 请重读后再改` };
     }
-    if (input.status) {
-      const order = ['pending', 'in_progress', 'completed', 'deleted'];
-      if (!order.includes(input.status)) return { ok: false, error: `非法状态: ${input.status}` };
-      task.status = input.status;
+    // 先做全部校验，校验通过后再统一应用（此前先改再校验，失败时改动已生效但 revision 未变 → 乐观锁错位）
+    const order = ['pending', 'in_progress', 'completed', 'deleted'];
+    if (input.status && !order.includes(input.status)) {
+      return { ok: false, error: `非法状态: ${input.status}` };
     }
-    if (input.owner !== undefined) {
-      if (input.owner === null) delete task.owner;
-      else task.owner = String(input.owner);
-    }
-    if (typeof input.description === 'string') task.description = input.description.slice(0, 2000);
     if (Array.isArray(input.addBlockedBy) && input.addBlockedBy.length > 0) {
       const known = new Set(this.tasks.map(t => t.id));
       const unknown = input.addBlockedBy.map(String).filter(b => !known.has(b));
@@ -239,7 +234,16 @@ export class TeamService {
       if (this.wouldCycle(task.id, merged)) {
         return { ok: false, error: '新增依赖会形成环（任务图必须无环）' };
       }
-      task.blockedBy = merged;
+    }
+    // 全部校验通过 → 原子应用
+    if (input.status) task.status = input.status;
+    if (input.owner !== undefined) {
+      if (input.owner === null) delete task.owner;
+      else task.owner = String(input.owner);
+    }
+    if (typeof input.description === 'string') task.description = input.description.slice(0, 2000);
+    if (Array.isArray(input.addBlockedBy) && input.addBlockedBy.length > 0) {
+      task.blockedBy = [...new Set([...task.blockedBy, ...input.addBlockedBy.map(String)])];
     }
     task.revision++;
     this.emit({ type: 'team.task_updated', payload: { id: task.id, revision: task.revision, status: task.status, owner: task.owner } });
@@ -254,7 +258,7 @@ export class TeamService {
       .map(t => {
         const blockersPending = t.blockedBy
           .map(b => byId.get(b))
-          .filter(b => b && b.status !== 'completed')
+          .filter(b => b && b.status !== 'completed' && b.status !== 'deleted')
           .map(b => b!.id);
         return { ...t, ready: blockersPending.length === 0, blockersPending };
       });

@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, copyFileSync, unlinkSync } from 'fs';
-import { join, resolve } from 'path';
+import { join, resolve, basename } from 'path';
 import type { MemoryService } from './memory-service.js';
 
 /**
@@ -66,13 +66,11 @@ export async function routeNewMemory(
       `Reply JSON only: {"action":"append"|"create"|"reject","target":"<exact existing filename, or a new kebab-case .md name>","reason":"<one short sentence>"}`;
     const res = await llm.chat({ messages: [{ role: 'user', content: prompt }], jsonMode: true, maxTokens: 16384 });
     const parsed = safeJson(res.content);
-    if (!parsed || typeof parsed.target !== 'string' || !parsed.target.trim()) {
-      // reject 时 target 可为空——单独检查
-      if (parsed?.action === 'reject' && typeof parsed.reason === 'string') {
-        return { action: 'reject', target: '', reason: parsed.reason.slice(0, 300) };
-      }
-      return fallback;
+    // reject 优先判定（在 target 校验之前——reject 的 target 可为空或占位符）
+    if (parsed?.action === 'reject' && typeof parsed.reason === 'string') {
+      return { action: 'reject', target: '', reason: parsed.reason.slice(0, 300) };
     }
+    if (!parsed || typeof parsed.target !== 'string' || !parsed.target.trim()) return fallback;
     const target = svc.sanitizeName(parsed.target) ?? proposedName;
     if (parsed.action === 'append' && svc.exists(target)) {
       return { action: 'append', target, reason: parsed.reason };
@@ -115,7 +113,7 @@ export async function mergeInto(
     throw new Error('合并结果疑似丢内容（长度异常），已放弃写盘');
   }
   svc.write(target, merged);
-  // 其余原文件备份进 .history/ 后删除
+  // 其余原文件备份进 .history/ 后删除（basename 防穿越 — 只操作记忆目录内的文件）
   const { mkdirSync: mk, copyFileSync: cp, unlinkSync: ul, existsSync: ex } = { mkdirSync, copyFileSync, unlinkSync, existsSync };
   const root = resolve(svcDirPath(svc));
   const histDir = join(root, '.history');
@@ -123,9 +121,10 @@ export async function mergeInto(
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   for (const n of names) {
     if (n === target) continue;
-    const abs = join(root, n);
-    if (ex(abs)) {
-      cp(abs, join(histDir, `${stamp}--${n}`));
+    const safe = basename(n); // 强制限制在记忆目录内
+    const abs = join(root, safe);
+    if (ex(abs) && safe !== '.consolidate-state.json') {
+      cp(abs, join(histDir, `${stamp}--${safe}`));
       ul(abs);
     }
   }
@@ -171,9 +170,14 @@ export async function autoConsolidate(
     const res = await llm.chat({ messages: [{ role: 'user', content: prompt }], jsonMode: true, maxTokens: 16384 });
     const parsed = safeJson(res.content);
     const groups = Array.isArray(parsed?.groups) ? parsed.groups : [];
+    // 安全校验：sources 和 target 必须都是记忆库内的真实文件（防 LLM 输出路径穿越）
+    const knownFiles = new Set(svc.list().map(f => f.name));
     const valid = groups.filter((g: any) =>
       Array.isArray(g.sources) && g.sources.length > 1 &&
-      typeof g.target === 'string' && (g.sources as string[]).includes(g.target)
+      typeof g.target === 'string' &&
+      knownFiles.has(g.target) &&
+      (g.sources as string[]).every((s: string) => knownFiles.has(s)) &&
+      (g.sources as string[]).includes(g.target)
     ) as Array<{ target: string; sources: string[] }>;
     if (valid.length === 0) return { ran: false, note: '无有效分组建议' };
 

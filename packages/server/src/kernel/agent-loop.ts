@@ -593,8 +593,8 @@ export class AgentLoop {
 
           // 证据记录：超预算的大结果整体落盘，上下文只留摘要+记录 ID
           let content = JSON.stringify(
-            result.ok ? result.data : { error: result.error }
-          );
+            result.ok ? result.data ?? {} : { error: result.error }
+          ) ?? '{}';
           if (this.options.evidenceStore && content.length > evidenceThreshold(this.options.tools, effective?.name ?? call.name)) {
             const rec = this.options.evidenceStore.save(this.options.runId, effective?.name ?? call.name, content);
             content = summarizeForEvidence(rec);
@@ -661,9 +661,19 @@ export class AgentLoop {
         const stepsExhausted = steps >= budget.maxSteps;
         const tokensExhausted = tokensIn + tokensOut >= budget.maxTokens;
         if (stepsExhausted || tokensExhausted) {
-          // 优雅收尾：最后一次不带工具的调用，让模型总结进展（不继续干活）
-          const wrapUp = await this.wrapUp(messages, stepsExhausted ? 'maxSteps' : 'maxTokens');
-          messages.push({ role: 'assistant', content: wrapUp.content });
+          // 优雅收尾：最后一次不带工具的调用，让模型总结进展（不继续干活）。
+          // 收尾 LLM 失败不丢成果——回退到空内容（run 仍以 budget_exceeded 结束而非 failed）
+          let wrapUpContent = '';
+          let wrapUpTokensIn = 0;
+          let wrapUpTokensOut = 0;
+          try {
+            const wrapUp = await this.wrapUp(messages, stepsExhausted ? 'maxSteps' : 'maxTokens');
+            wrapUpContent = wrapUp?.content ?? '';
+            wrapUpTokensIn = wrapUp?.usage?.inputTokens ?? 0;
+            wrapUpTokensOut = wrapUp?.usage?.outputTokens ?? 0;
+          } catch { /* 收尾失败不丢成果 */ }
+
+          messages.push({ role: 'assistant', content: wrapUpContent });
           this.closeTodos('stopped');
           this.emit('loop.budget_exceeded', {
             reason: stepsExhausted ? 'maxSteps' : 'maxTokens',
@@ -671,14 +681,16 @@ export class AgentLoop {
             tokensIn,
             tokensOut,
           });
+          // budget_exceeded 也落 checkpoint（续接会话不丢最终总结）
+          this.checkpoint(steps, messages);
           return {
             status: 'budget_exceeded',
-            finalContent: wrapUp.content,
+            finalContent: wrapUpContent,
             messages,
             steps,
             toolCalls: toolCallCount,
-            tokensIn: tokensIn + wrapUp.usage.inputTokens,
-            tokensOut: tokensOut + wrapUp.usage.outputTokens,
+            tokensIn: tokensIn + wrapUpTokensIn,
+            tokensOut: tokensOut + wrapUpTokensOut,
           };
         }
       }

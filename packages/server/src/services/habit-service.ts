@@ -160,7 +160,7 @@ export class HabitService {
   private saveStore(store: HabitStore): void {
     this.ensureDir();
     store.habits = store.habits.slice(0, MAX_HABITS);
-    writeFileSync(this.habitsPath, JSON.stringify(store, null, 2), 'utf-8');
+    const tmp = this.habitsPath + '.tmp'; writeFileSync(tmp, JSON.stringify(store, null, 2), 'utf-8'); renameSync(tmp, this.habitsPath);
   }
 
   list(): Habit[] {
