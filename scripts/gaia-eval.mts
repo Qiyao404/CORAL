@@ -131,19 +131,23 @@ async function api(path: string, init?: RequestInit): Promise<any> {
 }
 
 const PROMPT = (q: string) =>
-  `${q}\n\n---\nUse your tools (skill_web-search for search, http_fetch for pages, and your own knowledge) to find the answer. ` +
-  `Think step by step, verify facts, and end your reply with a line exactly of the form:\nFinal Answer: <short answer>\n` +
-  `The short answer must be only a word, number, name or short phrase (no explanation, no unit unless essential).\n` +
-  `Disciplines: (1) ANY arithmetic, counting or combinatorial calculation MUST be computed and verified with code ` +
-  `(skill_code-exec) — never rely on mental math, even if the problem seems small. ` +
-  `(2) For "how many pages/times does X mention Y" questions: first pin the EXACT document version ` +
-  `(verify its page count), then map every claimed occurrence to a specific printed page of that exact version — ` +
-  `mentions found in other versions, references or annexes do not count, and a fully verified count of zero is a valid answer. ` +
-  `Prefer PROGRAMMATIC whole-document counting: fetch the document file once and count per-page occurrences with code ` +
-  `(skill_code-exec) instead of browsing pages one by one; after two independent confirmations of a count, commit to it. ` +
-  `Interpret "mentions X" strictly: count the EXACT phrase as asked (not a related single word) in PROSE body text — ` +
-  `labels inside figures/charts/axes are not mentions unless the question is explicitly about figures. ` +
-  `(3) Preserve the source's original precision — do not round numbers or truncate decimals.`;
+  `${q}\n\n---\nSTRATEGY (follow this tool-first pipeline aggressively — you have a FULL platform, use it):\n` +
+  `1. ANALYZE the question: identify what type of answer is needed (number, name, list, comparison). Break it into sub-questions if complex.\n` +
+  `2. SEARCH: use skill_web-search (NOT just http_fetch on a guessed URL). Try multiple query formulations if the first fails.\n` +
+  `3. READ: for any URL that fails or shows a paywall/bot-wall, IMMEDIATELY use skill_blocked-page-recovery — it has a proven ladder (Wayback → archive.today → same-site API → alternate source).\n` +
+  `4. EXTRACT DATA: when you need to count, filter, or compute from large documents, download the data and use skill_code-exec to process it programmatically — NEVER manually browse pages one by one.\n` +
+  `5. CALCULATE: ALL arithmetic (even simple addition) MUST go through skill_code-exec. Mental math is FORBIDDEN. This includes unit conversions, combinatorial enumeration, constraint satisfaction, and optimization.\n` +
+  `6. PARALLELIZE: if the question has independent sub-parts (e.g., "find A and B"), use team_spawn to dispatch background teammates in parallel — each with its own focused context. Then team_wait to harvest.\n` +
+  `7. VERIFY: before submitting, run skill_answer-check (units, magnitude, format, common sense). If a count seems wrong or too low, check if you missed the "exact phrase vs related word" distinction.\n` +
+  `8. VERIFY AGAIN: re-derive the answer from a DIFFERENT source or method. If two independent approaches disagree, investigate before committing.\n` +
+  `\nADDITIONAL DISCIPLINES:\n` +
+  `- Preserve the source's original precision — do not round or truncate.\n` +
+  `- "Mentions X" means the EXACT phrase in PROSE text (not figure labels, not related words).\n` +
+  `- A verified count of zero IS a valid answer — do not force a positive count.\n` +
+  `- Use evidence_read to paginate through large tool results you've already fetched.\n` +
+  `- If you have past experience with similar questions, use session_search to recall approaches that worked.\n` +
+  `\nEnd your reply with a line exactly of the form:\nFinal Answer: <short answer>\n` +
+  `The short answer must be only a word, number, name or short phrase (no explanation, no unit unless essential).`;
 
 async function ensureWorkspace(dir: string): Promise<string> {
   const existing = await api('/api/workspaces');
