@@ -47,8 +47,8 @@ export default function SkillsPage() {
   const [historyBusy, setHistoryBusy] = useState<string | null>(null);
   const [historyMsg, setHistoryMsg] = useState('');
 
-  const openHistory = async (name: string) => {
-    setHistoryMsg('');
+  const openHistory = async (name: string, keepMsg = false) => {
+    if (!keepMsg) setHistoryMsg('');
     try {
       const r = await api.getSkillHistory(name);
       setHistory({ name, versions: r.versions ?? [], currentChars: r.currentChars ?? 0 });
@@ -61,8 +61,9 @@ export default function SkillsPage() {
     setHistoryMsg('');
     try {
       const r = await api.rollbackSkill(name, file);
-      setHistoryMsg(t('skills.rollbackDone', { file: r.restoredFrom }) + (r.note ? `（${r.note}）` : ''));
-      await openHistory(name);
+      const msg = t('skills.rollbackDone', { file: r.restoredFrom }) + (r.note ? `（${r.note}）` : '');
+      await openHistory(name, true); // true = 保留成功消息不被 openHistory 清空
+      setHistoryMsg(msg);            // openHistory 完成后再设（不被覆盖）
     } catch (err: any) {
       setHistoryMsg(err.message);
     } finally {
@@ -74,15 +75,21 @@ export default function SkillsPage() {
 
   const loadSeq = useRef(0);
   const loadSkills = () => {
-    const mySeq = ++loadSeq.current; // 审查 P3：筛选竞态守卫
+    const mySeq = ++loadSeq.current; // 审查 P3：筛选竞态守卫（catch/finally 也要检查）
     setLoading(true);
     api.listSkills(filter ? { source: filter } : undefined)
       .then(res => {
         if (mySeq !== loadSeq.current) return;
         setSkills(res.items || []);
       })
-      .catch(() => setSkills([]))
-      .finally(() => setLoading(false));
+      .catch(() => {
+        if (mySeq !== loadSeq.current) return; // 旧请求失败不清空新筛选的结果
+        setSkills([]);
+      })
+      .finally(() => {
+        if (mySeq !== loadSeq.current) return; // 旧请求不提前关新请求的 loading
+        setLoading(false);
+      });
   };
 
   useEffect(loadSkills, [filter]);

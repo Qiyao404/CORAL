@@ -105,7 +105,10 @@ const MAX_TOKENS_CAP = 1_000_000_000;
 
 /** 数值预算 → 循环预算：≤0 视为无上限 */
 function loopBudgetValue(v: number | undefined, fallback: number): number {
-  const n = v ?? fallback;
+  // NaN 防护：NaN <= 0 为 false → NaN 穿透 → 循环中一切比较失效（预算/守卫全关）
+  const n = typeof v === 'number' && Number.isFinite(v) ? v
+    : typeof fallback === 'number' && Number.isFinite(fallback) ? fallback
+    : 10_000_000;
   return n <= 0 ? Infinity : n;
 }
 
@@ -140,7 +143,7 @@ export class RunEngine {
   /** runId → 会话/目标（习惯观察的上下文标注） */
   private runMeta = new Map<string, { sessionId: string; goal: string }>();
   /** callId → 工具输入预览（观察在 call_completed 时落笔，需要 started 的输入） */
-  private pendingObs = new Map<string, { tool: string; inputPreview: string; agentId: string }>();
+  private pendingObs = new Map<string, { tool: string; inputPreview: string; agentId: string; runId: string }>();
 
   constructor(deps: RunEngineDeps) {
     this.deps = deps;
@@ -237,8 +240,10 @@ export class RunEngine {
     });
 
     const controller = createAbortController(runId);
+    // 斜杠展开后的 goal 传给 executeRun（此前传的是原始 input.goal — 展开结果从未到达模型）
+    const execInput = { ...input, goal };
     // 异步执行（与 v1 executeTask 同风格：调用方立即拿到 runId）
-    void this.executeRun(runId, input, workspace, controller.signal).catch(err => {
+    void this.executeRun(runId, execInput, workspace, controller.signal).catch(err => {
       console.error(`[RunEngine] run ${runId} 执行异常:`, err);
     });
 
@@ -564,7 +569,10 @@ export class RunEngine {
     } finally {
       this.releaseSeq(runId);
       this.runMeta.delete(runId);
-      this.pendingObs.clear();
+      // 按 runId 精准清理——clear() 会误杀其他并发 run 的观察记录
+      for (const [cid, obs] of this.pendingObs) {
+        if (obs.runId === runId) this.pendingObs.delete(cid);
+      }
       this.rejectAllApprovals(runId); // 挂起的审批随 run 结束一并落定（防泄漏/悬挂）
       releaseAbortController(runId);
     }
@@ -621,6 +629,7 @@ export class RunEngine {
           tool: String(payload.tool ?? ''),
           inputPreview: String(payload.inputPreview ?? ''),
           agentId,
+          runId, // 并发 run 隔离：finally 块按 runId 精准清理，不动其他 run 的观察
         });
         return;
       }

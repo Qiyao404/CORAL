@@ -294,11 +294,6 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
         return toolError('TEAM_BUDGET_EXCEEDED', budgetCheck.reason, false);
       }
 
-      // 名字：合法性 + 永久占用（含失败 — 不复用）
-      const claim = deps.team.claimName(String(input?.name ?? ''));
-      if (!claim.ok) return toolError('TEAM_NAME_REJECTED', claim.error, false);
-      const name = String(input?.name).trim().toLowerCase();
-
       if (spawnCounter.count >= maxSpawns) {
         return toolError('SPAWN_LIMIT', `本 run 的 sub-agent 数量已达上限（${maxSpawns}，含 agent_spawn 与 team_spawn 共用计数）`, false);
       }
@@ -322,6 +317,11 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
       const subset = pickSubset(deps.baseTools, toolsFilter);
       if ('error' in subset) return toolError('BAD_TOOLS', subset.error);
 
+      // 名字：所有可失败校验已通过，此时才 claim（失败即永久烧名的坑已修）
+      const claim = deps.team.claimName(String(input?.name ?? ''));
+      if (!claim.ok) return toolError('TEAM_NAME_REJECTED', claim.error, false);
+      const name = String(input?.name).trim().toLowerCase();
+
       const childDepth = deps.depth + 1;
       const subId = `mate-${name}-${nanoid(4)}`;
 
@@ -329,7 +329,7 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
       // teammate 自己的协作工具副本（selfName = 自己的名字 — 消息落名正确）
       subTools.push(makeTeamSendTool(deps.team, name));
       subTools.push(makeTeamTasksTool(deps.team, name));
-      subTools.push(makeTeamWaitTool(deps.team));
+      subTools.push(makeTeamWaitTool(deps.team, name));
       if (childDepth < maxDepth) {
         // 深度未到顶：teammate 也能继续派生（agent_spawn + team_spawn 同步配备）
         subTools.push(makeSpawnTool({ ...deps, depth: childDepth, spawnCounter }));
@@ -379,7 +379,7 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
       // 后台执行：不阻塞调用方循环；终态（含取消/失败）回写名册，team_wait 收割
       void loop.run().then(result => {
         if (result.status === 'cancelled' || ctx.signal.aborted) {
-          deps.team.settleTeammate(name, 'failed', { status: 'cancelled', finalContent: '' });
+          deps.team.settleTeammate(name, 'failed', { status: 'cancelled', finalContent: '', tokensIn: result.tokensIn, tokensOut: result.tokensOut });
           ctx.emit({ type: 'team.teammate_failed', payload: { name, agentId: subId, status: 'cancelled' } });
           return;
         }

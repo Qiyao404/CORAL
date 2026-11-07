@@ -61,6 +61,11 @@ export function makeMemoryTools(service: MemoryService, llm?: RouterLlm, automat
       if (typeof input?.content !== 'string' || !input.content.trim()) {
         return toolError('BAD_INPUT', 'content 必须为非空字符串');
       }
+      // 评测隔离：自动化 run 的所有 memory_write（含覆盖）默认拒
+      if (automationSession) {
+        return toolError('MEMORY_AUTOMATION_BLOCKED',
+          '当前为自动化/评测 run，长期记忆写入已隔离。用户交互式会话不受影响。', false);
+      }
       // 健壮性（用户实测反馈）：模型常用 topic/filename 误作参数名 — 接受别名
       const rawName = input?.name ?? input?.topic ?? input?.filename;
       if (rawName === undefined || rawName === null || String(rawName).trim() === '') {

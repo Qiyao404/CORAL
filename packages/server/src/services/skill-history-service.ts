@@ -32,15 +32,16 @@ export function listHistory(skillsDir: string, skillName: string): { versions: S
       .sort((a, b) => statSync(join(histDir, b)).mtimeMs - statSync(join(histDir, a)).mtimeMs)
       .slice(0, MAX_VERSIONS);
     for (const f of files) {
-      const content = readFileSync(join(histDir, f), 'utf-8');
-      // diff 语义：历史版本 → 当前内容（"+" 行即"当前比那个版本多出/改成的样子"）
-      const diff = unifiedDiff(content, current, `SKILL.md (${f} → current)`, 3);
-      versions.push({
-        file: f,
-        mtime: new Date(statSync(join(histDir, f)).mtimeMs).toISOString(),
-        content,
-        diff: diff || '(与当前版本无差异)',
-      });
+      try {
+        const content = readFileSync(join(histDir, f), 'utf-8');
+        const diff = unifiedDiff(content, current, `SKILL.md (${f} → current)`, 3);
+        versions.push({
+          file: f,
+          mtime: new Date(statSync(join(histDir, f)).mtimeMs).toISOString(),
+          content,
+          diff: diff || '(与当前版本无差异)',
+        });
+      } catch { /* 并发删除/权限问题 → 跳过该版本，不影响其余 */ }
     }
   }
   return { versions, current };
@@ -61,7 +62,7 @@ export function rollback(skillsDir: string, skillName: string, historyFile: stri
   mkdirSync(histDir, { recursive: true });
   if (existsSync(currentPath)) {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-    backedUpAs = `pre-rollback-${stamp}.md`;
+    backedUpAs = `pre-rollback-${stamp}-${Date.now().toString(36).slice(-4)}.md`;
     copyFileSync(currentPath, join(histDir, backedUpAs));
   }
   writeFileSync(currentPath, restoring, 'utf-8');

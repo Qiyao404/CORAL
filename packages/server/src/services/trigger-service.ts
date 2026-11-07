@@ -112,7 +112,13 @@ export class TriggerService {
 
   startLoop(intervalMs = 60_000): void {
     if (this.timer) return;
-    this.timer = setInterval(() => void this.tick(), intervalMs);
+    // tick 内部数据库操作可能抛异常（SQLite 锁/损坏行）——必须捕获，
+    // 否则 setInterval 回调里的未处理 rejection 会击穿 Node.js 进程
+    this.timer = setInterval(() => {
+      this.tick().catch(err => {
+        console.warn(`[触发器] tick 异常（不影响调度循环）: ${err?.message ?? err}`);
+      });
+    }, intervalMs);
     this.timer.unref?.();
   }
 

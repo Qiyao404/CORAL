@@ -88,7 +88,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
       sessionId: sessionId || undefined,
       status: status || undefined,
       mode: mode || undefined,
-      limit: hasSession ? 500 : (parseInt(limit) || 50),
+      limit: hasSession ? 500 : (Math.min(parseInt(limit) || 50, 500)),
       offset: parseInt(offset) || 0,
     });
     if (hasSession !== 'true') return base;
@@ -109,7 +109,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
     if (!run) return reply.status(404).send({ error: 'run 不存在' });
 
     const after = parseInt(afterSeq) || 0;
-    const items = engine.events.listByRun(runId, after, parseInt(limit) || 500);
+    const items = engine.events.listByRun(runId, after, Math.min(parseInt(limit) || 50, 500));
     return {
       runId,
       afterSeq: after,
@@ -412,6 +412,11 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
     }, 25000);
 
     request.raw.on('close', () => {
+      clearInterval(heartbeat);
+      eventBus.off('*', handler);
+    });
+    // 半开连接：socket error 也要清理（否则 handler 泄漏）
+    request.raw.on('error', () => {
       clearInterval(heartbeat);
       eventBus.off('*', handler);
     });
