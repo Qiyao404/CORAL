@@ -146,6 +146,14 @@ const PROMPT = (q: string) =>
   `- A verified count of zero IS a valid answer — do not force a positive count.\n` +
   `- Use evidence_read to paginate through large tool results you've already fetched.\n` +
   `- If you have past experience with similar questions, use session_search to recall approaches that worked.\n` +
+  `\nCRITICAL SPELLING RULE: When your answer comes from decoded text, extracted quotes, or cipher decryption, ` +
+  `preserve the EXACT original spelling — NEVER auto-correct unusual or non-dictionary words to standard forms. ` +
+  `If the decoded text says "Ploybius" (not the standard "Polybius"), the answer is "Ploybius".\n` +
+  `\nCRITICAL API RULE: For counting items on well-known platforms, use their official APIs instead of HTML parsing:\n` +
+  `- Wikipedia: use the MediaWiki API (action=parse&prop=images) to list images, not manual HTML counting\n` +
+  `- OpenReview: use the REST API (api.openreview.net/notes) to query papers/datasets, not web browsing\n` +
+  `- Any site with an API: check if api-finder skill has the endpoint, then call it directly with code\n` +
+  `Manual page-by-page browsing is FORBIDDEN when an API endpoint exists.\n` +
   `\nEnd your reply with a line exactly of the form:\nFinal Answer: <short answer>\n` +
   `The short answer must be only a word, number, name or short phrase (no explanation, no unit unless essential).`;
 
