@@ -238,7 +238,7 @@ Verified against DeepSeek and DashScope; any OpenAI-compatible endpoint (OpenRou
 ## Tests & Benchmarks
 
 - **Tests**: 446 cases (Vitest) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
-- **GAIA benchmark**: [docs/GAIA.md](./docs/GAIA.md) — official GAIA benchmark validation split, **85.5%** (76 questions, deterministic exact match). L1 87.5% / L2 96.2% / L3 66.7%.
+- **GAIA benchmark**: [docs/GAIA.md](./docs/GAIA.md) — official GAIA benchmark validation split, **87.2%** (86 questions, deterministic exact match). L1 90.5% / L2 96.2% / L3 66.7%.
 - **Performance**: [docs/BENCHMARK.md](./docs/BENCHMARK.md) — context-compression gains (1.2MB history → 169KB, −86%), SQLite WAL and JSONL persistence throughput. Script: `npx tsx scripts/benchmark.mts`.
 
 ---

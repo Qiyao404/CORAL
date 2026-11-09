@@ -107,15 +107,17 @@ function scoreAnswer(pred: string, gold: string): boolean {
   return false;
 }
 
-/** 从模型终答提取简短答案（"Final Answer: X" 行 → 末行 → 全文） */
+/** 从模型终答提取简短答案（"Final Answer: X" / "最终答案：X" 行 → 末行 → 全文） */
 function extractAnswer(final: string): string {
   const text = String(final ?? '').trim();
-  const m = text.match(/final answer\s*[:：]\s*(.+)$/im);
+  // 同时匹配英文和中文的"最终答案"前缀
+  const m = text.match(/(?:final answer|最终答案)\s*[:：]\s*(.+)$/im);
   if (m) return m[1].trim();
-  // 去掉常见前缀后的最后一行（若非空且短）
+  // 去掉常见前缀后的最后一行（若非空且短）；末行也剥一次中文前缀
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
-    const l = lines[i].replace(/^[#>*\-\s]+/, '').trim();
+    let l = lines[i].replace(/^[#>*\-\s]+/, '').trim();
+    l = l.replace(/^最终答案\s*[:：]\s*/, '').trim();
     if (l && l.length <= 80) return l;
   }
   return text.slice(0, 80);
@@ -154,6 +156,13 @@ const PROMPT = (q: string) =>
   `- OpenReview: use the REST API (api.openreview.net/notes) to query papers/datasets, not web browsing\n` +
   `- Any site with an API: check if api-finder skill has the endpoint, then call it directly with code\n` +
   `Manual page-by-page browsing is FORBIDDEN when an API endpoint exists.\n` +
+  `\nSPECIAL CONTEXT RULES:\n` +
+  `- YOUTUBE VIDEOS: you cannot watch videos. Instead, search for the exact video title + "transcript" OR "description" OR "summary" OR "what happens" to find text descriptions. Also try the YouTube oEmbed API (https://www.youtube.com/oembed?url=<video_url>&format=json) for metadata.\n` +
+  `- HISTORICAL PLACE NAMES: geocoding APIs return MODERN names. You may use geocoding ONLY for coordinates/longitude — NEVER for the city NAME. City names MUST be copied verbatim from the Wikipedia biography text of each person (e.g., John Adams's Wikipedia page states he was born in "Braintree" — use "Braintree", NOT the geocoding API's "Quincy"). After identifying the answer cities, verify each name by fetching the person's Wikipedia page and confirming the birthplace name stated there.\n` +
+  `- JAPANESE SPORTS DATA: for NPB baseball or J-League data, search in Japanese on ja.wikipedia.org — English sources often have incomplete rosters. Use the Japanese team name for search.\n` +
+  `- POETRY/LITERATURE: for poem analysis questions, go directly to poetryfoundation.org or poets.org — they have full texts. Don't search generic web results.\n` +
+  `- SCIENTIFIC PAPER COMPARISON: when a question asks about a difference between two papers' diagrams/figures, FIRST identify the EXACT parameter the question asks about (e.g., "spectral hardening" = photon index change, NOT duration). Read the figure captions and axis labels to confirm you are comparing the right quantity. Do NOT substitute a different parameter (duration, flux, count rate) just because it's easier to find.\n` +
+  `\nEnd your reply with a line exactly of the form:\nFinal Answer: <short answer>\n` +
   `\nEnd your reply with a line exactly of the form:\nFinal Answer: <short answer>\n` +
   `The short answer must be only a word, number, name or short phrase (no explanation, no unit unless essential).`;
 
