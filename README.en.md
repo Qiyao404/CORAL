@@ -288,7 +288,7 @@ Data stays local (`data/personalization/`); one-click wipe.
 
 ## Skill Ecosystem
 
-### Built-in Skills (40)
+### Built-in Skills (41)
 
 #### Documents & Writing
 | Skill | Mode | Description |
@@ -313,6 +313,7 @@ Data stays local (`data/personalization/`); one-click wipe.
 | Skill | Mode | Description |
 |-------|:--:|------|
 | `deep-research` | llm_only | Deep research: sub-question decomposition → multi-source retrieval → cross-verification → cited report |
+| `research-discipline` | llm_only | Research discipline: API-first counting, historical verification, multi-source parameter identification, precision assurance methodology |
 | `web-reader` | script | Web main-content extraction (zero-dependency readability) |
 | `web-search` | script | Web search (three-tier backends: Tavily / SearXNG / keyless fallback) |
 | `web-digest` | script | Web summary archiving |

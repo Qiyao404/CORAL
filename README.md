@@ -283,7 +283,7 @@ npm run dev            # 后端 3001 + 前端 5173
 
 ## 技能生态
 
-### 内置 Skill 清单（40 个）
+### 内置 Skill 清单（41 个）
 
 #### 文档与写作
 | Skill | 模式 | 说明 |
@@ -308,6 +308,7 @@ npm run dev            # 后端 3001 + 前端 5173
 | Skill | 模式 | 说明 |
 |-------|:--:|------|
 | `deep-research` | llm_only | 深度调研：子问题分解 → 多源检索 → 交叉验证 → 带引用报告 |
+| `research-discipline` | llm_only | 研究纪律：API 优先计数、历史考据、多源比较参数识别、精度保障的方法学 |
 | `web-reader` | script | 网页正文抽取（零依赖 readability） |
 | `web-search` | script | 联网搜索（Tavily / SearXNG / 免 key 降级通道） |
 | `web-digest` | script | 网页摘要归档 |
