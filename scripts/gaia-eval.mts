@@ -133,38 +133,24 @@ async function api(path: string, init?: RequestInit): Promise<any> {
 }
 
 const PROMPT = (q: string) =>
-  `${q}\n\n---\nSTRATEGY (follow this tool-first pipeline aggressively — you have a FULL platform, use it):\n` +
-  `1. ANALYZE the question: identify what type of answer is needed (number, name, list, comparison). Break it into sub-questions if complex.\n` +
-  `2. SEARCH: use skill_web-search (NOT just http_fetch on a guessed URL). Try multiple query formulations if the first fails.\n` +
-  `3. READ: for any URL that fails or shows a paywall/bot-wall, IMMEDIATELY use skill_blocked-page-recovery — it has a proven ladder (Wayback → archive.today → same-site API → alternate source).\n` +
-  `4. EXTRACT DATA: when you need to count, filter, or compute from large documents, download the data and use skill_code-exec to process it programmatically — NEVER manually browse pages one by one.\n` +
-  `5. CALCULATE: ALL arithmetic (even simple addition) MUST go through skill_code-exec. Mental math is FORBIDDEN. This includes unit conversions, combinatorial enumeration, constraint satisfaction, and optimization.\n` +
-  `6. PARALLELIZE: if the question has independent sub-parts (e.g., "find A and B"), use team_spawn to dispatch background teammates in parallel — each with its own focused context. Then team_wait to harvest.\n` +
-  `7. VERIFY: before submitting, run skill_answer-check (units, magnitude, format, common sense). If a count seems wrong or too low, check if you missed the "exact phrase vs related word" distinction.\n` +
-  `8. VERIFY AGAIN: re-derive the answer from a DIFFERENT source or method. If two independent approaches disagree, investigate before committing.\n` +
-  `\nADDITIONAL DISCIPLINES:\n` +
-  `- Preserve the source's original precision — do not round or truncate.\n` +
-  `- "Mentions X" means the EXACT phrase in PROSE text (not figure labels, not related words).\n` +
-  `- A verified count of zero IS a valid answer — do not force a positive count.\n` +
-  `- Use evidence_read to paginate through large tool results you've already fetched.\n` +
-  `- If you have past experience with similar questions, use session_search to recall approaches that worked.\n` +
-  `\nCRITICAL SPELLING RULE: When your answer comes from decoded text, extracted quotes, or cipher decryption, ` +
-  `preserve the EXACT original spelling — NEVER auto-correct unusual or non-dictionary words to standard forms. ` +
-  `If the decoded text says "Ploybius" (not the standard "Polybius"), the answer is "Ploybius".\n` +
-  `\nCRITICAL API RULE: For counting items on well-known platforms, use their official APIs instead of HTML parsing:\n` +
-  `- Wikipedia: use the MediaWiki API (action=parse&prop=images) to list images, not manual HTML counting\n` +
-  `- OpenReview: use the REST API (api.openreview.net/notes) to query papers/datasets, not web browsing\n` +
-  `- Any site with an API: check if api-finder skill has the endpoint, then call it directly with code\n` +
-  `Manual page-by-page browsing is FORBIDDEN when an API endpoint exists.\n` +
-  `\nSPECIAL CONTEXT RULES:\n` +
-  `- YOUTUBE VIDEOS: you cannot watch videos. Instead, search for the exact video title + "transcript" OR "description" OR "summary" OR "what happens" to find text descriptions. Also try the YouTube oEmbed API (https://www.youtube.com/oembed?url=<video_url>&format=json) for metadata.\n` +
-  `- HISTORICAL PLACE NAMES: geocoding APIs return MODERN names. You may use geocoding ONLY for coordinates/longitude — NEVER for the city NAME. City names MUST be copied verbatim from the Wikipedia biography text of each person (e.g., John Adams's Wikipedia page states he was born in "Braintree" — use "Braintree", NOT the geocoding API's "Quincy"). After identifying the answer cities, verify each name by fetching the person's Wikipedia page and confirming the birthplace name stated there.\n` +
-  `- JAPANESE SPORTS DATA: for NPB baseball or J-League data, search in Japanese on ja.wikipedia.org — English sources often have incomplete rosters. Use the Japanese team name for search.\n` +
-  `- POETRY/LITERATURE: for poem analysis questions, go directly to poetryfoundation.org or poets.org — they have full texts. Don't search generic web results.\n` +
-  `- SCIENTIFIC PAPER COMPARISON: when a question asks about a difference between two papers' diagrams/figures, FIRST identify the EXACT parameter the question asks about (e.g., "spectral hardening" = photon index change, NOT duration). Read the figure captions and axis labels to confirm you are comparing the right quantity. Do NOT substitute a different parameter (duration, flux, count rate) just because it's easier to find.\n` +
+  `${q}\n\n---\nSTRATEGY (follow this tool-first pipeline — you have a full agent platform, use it):\n` +
+  `1. ANALYZE: identify what type of answer is needed (number, name, list, comparison). Break into sub-questions if complex.\n` +
+  `2. SEARCH: use skill_web-search. Try multiple query formulations if the first fails.\n` +
+  `3. READ: for blocked or paywalled URLs, use skill_blocked-page-recovery.\n` +
+  `4. EXTRACT: process large documents programmatically with skill_code-exec, not manually.\n` +
+  `5. CALCULATE: ALL arithmetic must go through skill_code-exec. Mental math is forbidden.\n` +
+  `6. PARALLELIZE: for independent sub-parts, use team_spawn + team_wait.\n` +
+  `7. VERIFY: run skill_answer-check before submitting. Re-derive from a different source if possible.\n` +
+  `8. If you have relevant skills (skill_research-discipline, skill_agent-reach), consult them for domain-specific methodology.\n` +
+  `\nDISCIPLINES:\n` +
+  `- Preserve the source's original precision.\n` +
+  `- "Mentions X" means the exact phrase in prose text.\n` +
+  `- A verified count of zero is valid.\n` +
+  `- Use evidence_read for large results, session_search for past experience.\n` +
+  `- When quoting or decoding, preserve original spelling exactly.\n` +
+  `- If the answer is a number, write digits (not words).\n` +
   `\nEnd your reply with a line exactly of the form:\nFinal Answer: <short answer>\n` +
-  `\nEnd your reply with a line exactly of the form:\nFinal Answer: <short answer>\n` +
-  `The short answer must be only a word, number, name or short phrase (no explanation, no unit unless essential).`;
+  `The short answer must be only a word, number, name or short phrase.`;
 
 async function ensureWorkspace(dir: string): Promise<string> {
   const existing = await api('/api/workspaces');
