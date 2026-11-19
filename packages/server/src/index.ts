@@ -239,7 +239,7 @@ async function main() {
   registerTriggerRoutes(app, triggerService);
   registerWorkspaceRoutes(app);
   registerWorkspaceFileRoutes(app);
-  registerMemoryRoutes(app);
+  registerMemoryRoutes(app, { getSearch: () => runEngine.searchStore, getEvolution: () => runEngine.evolutionService });
   registerRunExportRoutes(app, runEngine);
 
   // WebSocket 事件推送

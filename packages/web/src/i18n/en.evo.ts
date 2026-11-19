@@ -9,4 +9,10 @@ export const en: Record<string, string> = {
   'evo.reject': 'Reject',
   'evo.expand': 'View full draft',
   'evo.collapse': 'Collapse',
+  'evo.experienceTitle': 'Experience entry',
+  'evo.confidence': 'Confidence',
+  'evo.cue': 'Applies when',
+  'evo.lesson': 'Lesson',
+  'evo.evidence': 'Run evidence',
+  'evo.kindMemory': 'Memory rewrite',
 };

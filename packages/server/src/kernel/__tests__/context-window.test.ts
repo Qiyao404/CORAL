@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { clipToolResults, compressIfNeeded } from '../context-window.js';
+import { clipToolResults, compressIfNeeded, deterministicCompress, shelveOldToolResults } from '../context-window.js';
 import type { ChatMessage } from '../../providers/types.js';
 
 const msg = (role: ChatMessage['role'], content: string, extra: Partial<ChatMessage> = {}): ChatMessage =>
@@ -102,5 +102,70 @@ describe('compressIfNeeded（M1-3 二级防护）', () => {
         expect(prev.role === 'assistant' && (prev.toolCalls ?? []).some(c => c.id === (r.messages[i] as any).toolCallId)).toBe(true);
       }
     }
+  });
+});
+
+// ─── A3：压缩路标（有损压缩必须自带回查指引）────────────────────────────
+
+describe('压缩路标（compression signpost）', () => {
+  it('compressIfNeeded：摘要消息含回查路标（精确值须重新推导）', async () => {
+    const messages = [
+      { role: 'user' as const, content: '任务目标' },
+      ...Array.from({ length: 20 }, (_, i) => ({ role: 'tool' as const, content: `x`.repeat(200) + i, toolName: 't' })),
+      { role: 'assistant' as const, content: 'recent' },
+    ];
+    const r = await compressIfNeeded(messages, {
+      maxTotalChars: 2000, keepRecent: 3,
+      summarize: async () => '概要：做了些事，数值 12345',
+    });
+    expect(r.compressed).toBe(true);
+    const summaryMsg = r.messages.find(m => m.content.includes('概要'));
+    expect(summaryMsg).toBeTruthy();
+    expect(summaryMsg!.content).toContain('compression signpost');
+    expect(summaryMsg!.content).toContain('re-derive');
+    // 路标在摘要之后、原始任务之前（模型读到摘要立刻看到警示）
+    const idxSign = summaryMsg!.content.indexOf('[compression signpost]');
+    const idxSummary = summaryMsg!.content.indexOf('概要');
+    const idxTask = summaryMsg!.content.indexOf('[The original task');
+    expect(idxSummary).toBeLessThan(idxSign);
+    expect(idxSign).toBeLessThan(idxTask);
+  });
+
+  it('deterministicCompress：骨架消息声明"只保留前 160 字符、非忠实摘要"', () => {
+    const messages = [
+      { role: 'user' as const, content: 'goal' },
+      ...Array.from({ length: 30 }, (_, i) => ({ role: 'tool' as const, content: 'y'.repeat(300) + i })),
+      { role: 'assistant' as const, content: 'recent' },
+    ];
+    const r = deterministicCompress(messages, { maxTotalChars: 1500, keepRecent: 3 });
+    expect(r.compressed).toBe(true);
+    expect(r.messages[0].content).toContain('NOT a faithful summary');
+  });
+
+  it('shelveOldToolResults：有归档 → 指明何时回查；无归档 → 声明不可恢复', () => {
+    const mk = () => [
+      { role: 'user' as const, content: 'g' },
+      ...Array.from({ length: 6 }, () => ({ role: 'tool' as const, content: 'z'.repeat(2000) })),
+      { role: 'assistant' as const, content: 'r' },
+    ];
+    // 有归档
+    const withArchive = shelveOldToolResults(mk(), 10_000, {
+      archive: () => 'ev-test123',
+    });
+    expect(withArchive.shelved).toBeGreaterThan(0);
+    const stub1 = withArchive.messages.find(m => m.role === 'tool')!.content;
+    expect(stub1).toContain('ev-test123');
+    expect(stub1).toContain('evidence_read 回查');
+    // 无归档
+    const noArchive = shelveOldToolResults(mk(), 10_000, {});
+    const stub2 = noArchive.messages.find(m => m.role === 'tool')!.content;
+    expect(stub2).toContain('不可恢复');
+    expect(stub2).toContain('重新执行工具');
+  });
+
+  it('clipToolResults：截断标记含"精确值须收窄查询重取"提示', () => {
+    const long = { role: 'tool' as const, content: 'a'.repeat(50_000) };
+    const r = clipToolResults([long]);
+    expect(r[0].content).toContain('narrow the query or re-run');
   });
 });

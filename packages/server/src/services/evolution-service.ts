@@ -20,7 +20,35 @@ import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-regist
  * 一致——agent 可以提议，人决定采纳。
  */
 
-export type ProposalKind = 'skill_revision' | 'skill_new' | 'profile_update';
+export type ProposalKind = 'skill_revision' | 'skill_new' | 'profile_update' | 'memory_rewrite';
+
+/**
+ * 经验条目结构（cue/lesson/evidence/confidence）：让每条提议自带
+ * "什么场景适用、教训是什么、轨迹里凭什么、有多大把握"——用户审核时
+ * 不必读全文即可判断，也为未来的按条检索/淘汰保留结构。
+ */
+export interface ExperienceEntry {
+  /** 触发线索：什么任务场景/症状下该想起这条经验 */
+  cue: string;
+  /** 核心教训：具体应该怎么调整做法 */
+  lesson: string;
+  /** 轨迹证据：观察依据来自哪次执行的什么现象 */
+  evidence: string;
+  /** LLM 自评置信度 0-1（仅供人审参考，非客观度量） */
+  confidence: number;
+}
+
+/** LLM 原始输出 → 合法经验条目（字段截断 + 置信度夹取；缺关键字段返回 null） */
+function sanitizeExperience(raw: any): ExperienceEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const cue = typeof raw.cue === 'string' ? raw.cue.trim().slice(0, 200) : '';
+  const lesson = typeof raw.lesson === 'string' ? raw.lesson.trim().slice(0, 300) : '';
+  const evidence = typeof raw.evidence === 'string' ? raw.evidence.trim().slice(0, 300) : '';
+  if (!cue || !lesson) return null; // 触发线索与教训是骨架，缺一不立
+  let confidence = Number(raw.confidence);
+  if (!Number.isFinite(confidence)) confidence = 0.5;
+  return { cue, lesson, evidence: evidence || '(轨迹尾部观察)', confidence: Math.min(1, Math.max(0, confidence)) };
+}
 
 export interface EvolutionProposal {
   id: string;
@@ -32,6 +60,8 @@ export interface EvolutionProposal {
   rationale: string;
   /** skill_*：完整 SKILL.md 文本；profile_update：insights 数组 */
   content: string | Array<ProfileInsight>;
+  /** 经验条目（skill_* 提议携带；存量提议与画像提议无此字段） */
+  experience?: ExperienceEntry;
   status: 'pending' | 'accepted' | 'rejected';
   createdAt: string;
   decidedAt?: string;
@@ -66,10 +96,10 @@ export class EvolutionService {
   private storePath: string;
   private statePath: string;
   private proposals: EvolutionProposal[] = [];
-  private deps: { llm: LlmChat; skillsDir: string; registry: FilesystemSkillRegistry };
+  private deps: { llm: LlmChat; skillsDir: string; registry: FilesystemSkillRegistry; memoryDir?: string };
 
   constructor(
-    deps: { llm: LlmChat; skillsDir: string; registry: FilesystemSkillRegistry },
+    deps: { llm: LlmChat; skillsDir: string; registry: FilesystemSkillRegistry; memoryDir?: string },
     dataDir: string,
   ) {
     this.deps = deps;
@@ -79,8 +109,8 @@ export class EvolutionService {
   }
 
   /** 依赖补绑（宿主字段初始化先于构造注入时使用） */
-  rebind(deps: { llm: LlmChat; skillsDir: string; registry: FilesystemSkillRegistry }): void {
-    this.deps = deps;
+  rebind(deps: { llm: LlmChat; skillsDir: string; registry: FilesystemSkillRegistry; memoryDir?: string }): void {
+    this.deps = { ...this.deps, ...deps };
   }
 
   private load(): void {
@@ -171,6 +201,32 @@ export class EvolutionService {
     ).length;
   }
 
+  /**
+   * 记忆改写提议（离线对账 Dreaming 的产物入口）：审计发现记忆条目与历史轨迹
+   * 矛盾时调用。同一文件同时最多一条未决（重复审计不刷屏）。仍走人审闸门。
+   */
+  proposeMemoryRewrite(input: {
+    file: string;
+    current: string;
+    proposed: string;
+    evidence: string;
+    rationale: string;
+    experience?: ExperienceEntry;
+  }): EvolutionProposal | null {
+    if (this.pendingCount('memory_rewrite', input.file) > 0) return null;
+    return this.addProposal({
+      kind: 'memory_rewrite', runId: 'dream-audit', skillName: input.file,
+      rationale: input.rationale.slice(0, 500),
+      content: input.proposed,
+      experience: input.experience ?? {
+        cue: `记忆条目 ${input.file} 的内容`,
+        lesson: '与历史执行轨迹矛盾的记忆必须改写，否则会级联误导后续会话',
+        evidence: input.evidence.slice(0, 300),
+        confidence: 0.7,
+      },
+    });
+  }
+
   private addProposal(p: Omit<EvolutionProposal, 'id' | 'status' | 'createdAt'>): EvolutionProposal {
     const proposal: EvolutionProposal = {
       ...p,
@@ -208,7 +264,7 @@ export class EvolutionService {
       `Gate rejections: ${input.gateRejections}, subagent failures: ${input.subagentFailures}\n\n` +
       `== Transcript tail ==\n${transcript.slice(0, 2500)}\n\n` +
       `== Current SKILL.md ==\n${current.slice(0, 6000)}\n\n` +
-      `Return JSON: {"rationale": "1-2 sentences on what to fix and why", "revisedSkillMd": "the complete revised SKILL.md text (keep frontmatter fields; improve instructions/edge cases that caused failures)"}.` +
+      `Return JSON: {"rationale": "1-2 sentences on what to fix and why", "revisedSkillMd": "the complete revised SKILL.md text (keep frontmatter fields; improve instructions/edge cases that caused failures)", "experience": {"cue": "the task situation/symptom where this lesson applies (e.g. 'counting tasks on wikis that expose an API')", "lesson": "the concrete adjustment to make (e.g. 'prefer the platform API over HTML parsing')", "evidence": "what was observed in THIS run that supports it", "confidence": 0.0-1.0}}.` +
       ` Keep the skill's language (Chinese stays Chinese). Only revise if you can identify a concrete improvement; otherwise return {"rationale": "skip"}.`;
     const res = await this.deps.llm.chat({ messages: [{ role: 'user', content: prompt }], jsonMode: true, maxTokens: 6000 });
     const parsed = safeJson(res.content);
@@ -218,6 +274,7 @@ export class EvolutionService {
       kind: 'skill_revision', runId: input.runId, skillName,
       rationale: String(parsed.rationale ?? '').slice(0, 500),
       content: parsed.revisedSkillMd,
+      ...(sanitizeExperience(parsed.experience) ? { experience: sanitizeExperience(parsed.experience)! } : {}),
     });
     return true;
   }
@@ -231,7 +288,7 @@ export class EvolutionService {
       `== Steps: ${input.steps}, tool calls: ${input.toolCalls} ==\n` +
       `== Transcript tail ==\n${transcript.slice(0, 3500)}\n\n` +
       `Existing skills (do NOT duplicate): ${[...existing].join(', ')}\n\n` +
-      `Return JSON: {"name": "kebab-case-name", "rationale": "why this deserves to be a skill (1-2 sentences)", "skillMd": "complete SKILL.md with frontmatter (name/version/description/domain/capabilities/input_schema/execution_mode: llm_only/status: stable/tags/source: user) and a Chinese instruction body"}.` +
+      `Return JSON: {"name": "kebab-case-name", "rationale": "why this deserves to be a skill (1-2 sentences)", "skillMd": "complete SKILL.md with frontmatter (name/version/description/domain/capabilities/input_schema/execution_mode: llm_only/status: stable/tags/source: user) and a Chinese instruction body", "experience": {"cue": "the task situation where this skill applies", "lesson": "the working approach distilled from this run", "evidence": "what in THIS run showed the approach works or hurts", "confidence": 0.0-1.0}}.` +
       ` If the task is a one-off not worth persisting, return {"rationale": "skip"}.`;
     const res = await this.deps.llm.chat({ messages: [{ role: 'user', content: prompt }], jsonMode: true, maxTokens: 6000 });
     const parsed = safeJson(res.content);
@@ -244,6 +301,7 @@ export class EvolutionService {
       kind: 'skill_new', runId: input.runId, skillName: name,
       rationale: String(parsed.rationale ?? '').slice(0, 500),
       content: String(parsed.skillMd),
+      ...(sanitizeExperience(parsed.experience) ? { experience: sanitizeExperience(parsed.experience)! } : {}),
     });
     return true;
   }
@@ -303,6 +361,29 @@ export class EvolutionService {
         p.status = 'accepted'; p.decidedAt = new Date().toISOString();
         this.persist();
         return { ok: true, message: applied ? '画像已更新' : '画像无需变更（可能已存在）' };
+      }
+      if (p.kind === 'memory_rewrite') {
+        // 离线对账产物：改写前备份原文件进 memory/.history/（改写也是可回退的）
+        if (!this.deps.memoryDir) return { ok: false, message: '未配置记忆目录，无法落盘' };
+        const { MemoryService } = await import('./memory-service.js');
+        const svc = new MemoryService(this.deps.memoryDir);
+        const name = p.skillName!;
+        if (!svc.exists(name)) {
+          p.status = 'rejected'; p.decidedAt = new Date().toISOString();
+          this.persist();
+          return { ok: false, message: `记忆文件 ${name} 已不存在（可能已被整理/删除），提议作废` };
+        }
+        const { mkdirSync: mk, copyFileSync: cp } = { mkdirSync, copyFileSync };
+        const histDir = join(resolve(this.deps.memoryDir), '.history');
+        mk(histDir, { recursive: true });
+        cp(
+          join(resolve(this.deps.memoryDir), name),
+          join(histDir, `${new Date().toISOString().replace(/[:.]/g, '-')}.md`),
+        );
+        svc.write(name, String(p.content));
+        p.status = 'accepted'; p.decidedAt = new Date().toISOString();
+        this.persist();
+        return { ok: true, message: `记忆 ${name} 已按对账结果改写（原文件备份 .history/）` };
       }
     }
     p.status = 'rejected'; p.decidedAt = new Date().toISOString();

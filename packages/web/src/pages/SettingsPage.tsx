@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, Monitor, Palette, Brain, FileText, FolderOpen, User, Type, Languages } from 'lucide-react';
+import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, MoonStar, Monitor, Palette, Brain, FileText, FolderOpen, User, Type, Languages } from 'lucide-react';
 import { api } from '../api/client';
 import { Card, Button, Input, Textarea, Tag, Select, Skeleton } from '../components/ui';
 import { useTheme, type ThemeMode } from '../contexts/ThemeContext';
@@ -103,6 +103,8 @@ export default function SettingsPage() {
   const [wsMessage, setWsMessage] = useState('');
   // 创新③：长期记忆
   const [memoryFiles, setMemoryFiles] = useState<Array<{ name: string; size: number; modifiedAt: string }>>([]);
+  // 使用统计（命中/疑似误导/陈旧 — 只标记不处置，处置权留给人）
+  const [memoryUsage, setMemoryUsage] = useState<Record<string, { useCount: number; misleads: number; idleDays: number | null; flagged: boolean; stale: boolean }>>({});
   const [memoryName, setMemoryName] = useState('');
   const [memoryContent, setMemoryContent] = useState('');
 
@@ -127,8 +129,23 @@ export default function SettingsPage() {
   const loadMemory = async () => {
     try {
       const res = await api.listMemory();
-      setMemoryFiles(res.items ?? []);
+      setMemoryFiles(res.items ?? []); setMemoryUsage(Object.fromEntries((res.usage ?? []).map((u: any) => [u.name, u])));
     } catch { /* 静默 */ }
+  };
+  const reloadMemoryFiles = loadMemory;
+  // 离线对账（Dreaming）：对照历史轨迹核对记忆 — 矛盾生成改写提议（进演化队列人审）
+  const [auditBusy, setAuditBusy] = useState(false);
+  const [auditMsg, setAuditMsg] = useState('');
+  const runMemoryAudit = async () => {
+    setAuditBusy(true);
+    setAuditMsg('');
+    try {
+      const r = await api.auditMemory();
+      setAuditMsg(r.skipped
+        ? r.skipped
+        : t('settings.memory.auditDone', { a: r.audited, c: r.contradictory, p: r.proposals }));
+    } catch (err: any) { setAuditMsg(err.message); }
+    finally { setAuditBusy(false); }
   };
   const loadWorkspaces = async () => {
     try {
@@ -179,7 +196,7 @@ export default function SettingsPage() {
       setMergeSel(new Set());
       // 不再每次勾选都清空 target（用户可能已输入自定义名）
       const res = await api.listMemory();
-      setMemoryFiles(res.items ?? []);
+      setMemoryFiles(res.items ?? []); setMemoryUsage(Object.fromEntries((res.usage ?? []).map((u: any) => [u.name, u])));
       setMemoryName(r.merged);
       try {
         setMemoryContent((await api.getMemory(r.merged)).content ?? '');
@@ -194,13 +211,13 @@ export default function SettingsPage() {
     if (!memoryName) return;
     try {
       await api.saveMemory(memoryName, memoryContent);
-      setMemoryFiles((await api.listMemory()).items ?? []);
+      await reloadMemoryFiles();
       alert(t('settings.memory.saved'));
     } catch (err: any) { alert(err.message); }
   };
   const deleteMemoryFile = async (name: string) => {
     if (!confirm(t('settings.memory.deleteConfirm', { name }))) return;
-    try { await api.deleteMemory(name); if (memoryName === name) { setMemoryName(''); setMemoryContent(''); } setMemoryFiles((await api.listMemory()).items ?? []); }
+    try { await api.deleteMemory(name); if (memoryName === name) { setMemoryName(''); setMemoryContent(''); } await reloadMemoryFiles(); }
     catch (err: any) { alert(err.message); }
   };
 
@@ -554,7 +571,7 @@ export default function SettingsPage() {
         </div>
         {/* 画像演化提议（运行后蒸馏管线）— 增补点人审后并入 */}
         <div className="mb-4">
-          <EvolutionProposals kinds={['profile_update']} />
+          <EvolutionProposals kinds={['profile_update', 'memory_rewrite']} />
         </div>
         <p className="text-xs text-fg-muted mb-4 -mt-2">{t('settings.profile.desc')}</p>
         <div className="flex items-center justify-between mb-4">
@@ -700,34 +717,59 @@ export default function SettingsPage() {
       <Card className="mb-6">
         <h2 className="font-heading font-semibold text-fg-primary mb-1 flex items-center gap-2">
           <Brain className="w-5 h-5" /> {t('settings.memory.title')}
+          {/* 离线对账（Dreaming）：记忆库 ↔ 历史轨迹核对，矛盾只提议改写（人审闸门） */}
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto"
+            disabled={auditBusy}
+            onClick={runMemoryAudit}
+            icon={<MoonStar className="w-3.5 h-3.5" />}
+          >
+            {auditBusy ? t('settings.memory.auditRunning') : t('settings.memory.audit')}
+          </Button>
         </h2>
         <p className="text-xs text-fg-muted mb-4">
           {t('settings.memory.desc')}
         </p>
+        {auditMsg && <p className="text-xs text-status-success mb-3">{auditMsg}</p>}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="space-y-1.5 md:col-span-1">
             {memoryFiles.length === 0 && <p className="text-xs text-fg-muted">{t('settings.memory.empty')}</p>}
-            {memoryFiles.map(f => (
-              <div key={f.name} className={`flex items-center gap-1 p-2 rounded-lg cursor-pointer text-xs ${memoryName === f.name ? 'bg-brand-soft text-brand' : 'hover:bg-bg-elev/40 text-fg-secondary'}`} onClick={() => openMemoryFile(f.name)}>
-                <input
-                  type="checkbox"
-                  className="accent-brand cursor-pointer shrink-0"
-                  checked={mergeSel.has(f.name)}
-                  onClick={e => e.stopPropagation()}
-                  onChange={e => {
-                    setMergeSel(prev => {
-                      const next = new Set(prev);
-                      if (e.target.checked) next.add(f.name); else next.delete(f.name);
-                      return next;
-                    });
-                    // 不再每次勾选都清空 target（用户可能已输入自定义名）
-                  }}
-                />
-                <FileText className="w-3.5 h-3.5 shrink-0" />
-                <span className="truncate flex-1">{f.name}</span>
-                <button className="text-fg-disabled hover:text-status-danger" onClick={e => { e.stopPropagation(); deleteMemoryFile(f.name); }}>×</button>
+            {memoryFiles.map(f => {
+              const u = memoryUsage[f.name];
+              return (
+              <div key={f.name} className={`p-2 rounded-lg cursor-pointer text-xs ${memoryName === f.name ? 'bg-brand-soft text-brand' : 'hover:bg-bg-elev/40 text-fg-secondary'}`} onClick={() => openMemoryFile(f.name)}>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    className="accent-brand cursor-pointer shrink-0"
+                    checked={mergeSel.has(f.name)}
+                    onClick={e => e.stopPropagation()}
+                    onChange={e => {
+                      setMergeSel(prev => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(f.name); else next.delete(f.name);
+                        return next;
+                      });
+                      // 不再每次勾选都清空 target（用户可能已输入自定义名）
+                    }}
+                  />
+                  <FileText className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate flex-1">{f.name}</span>
+                  <button className="text-fg-disabled hover:text-status-danger" onClick={e => { e.stopPropagation(); deleteMemoryFile(f.name); }}>×</button>
+                </div>
+                {/* 使用统计徽标：命中 N 次 / 疑似误导 / 久未使用（只标记 — 处置权在人） */}
+                {(u?.useCount > 0 || u?.flagged || u?.stale) && (
+                  <div className="flex items-center gap-1 mt-1 ml-5 flex-wrap">
+                    {u.useCount > 0 && <span className="text-[10px] px-1.5 py-px rounded bg-bg-elev/60 text-fg-muted">{t('settings.memory.usedTimes', { n: u.useCount })}</span>}
+                    {u.flagged && <span className="text-[10px] px-1.5 py-px rounded bg-red-500/10 text-red-400">{t('settings.memory.flagged')}</span>}
+                    {u.stale && <span className="text-[10px] px-1.5 py-px rounded bg-amber-500/10 text-amber-400">{t('settings.memory.stale', { d: u.idleDays ?? 0 })}</span>}
+                  </div>
+                )}
               </div>
-            ))}
+              );
+            })}
             {/* 多选合并：LLM 全保留整理（一条不丢，按主题重组），原文件备份进 .history/ 后移除 */}
             {memoryFiles.length >= 2 && (
               <div className="pt-2 mt-1 border-t border-glass-border space-y-1.5">

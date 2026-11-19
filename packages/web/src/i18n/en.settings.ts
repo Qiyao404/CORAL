@@ -141,4 +141,10 @@ export const en: Record<string, string> = {
   'settings.memory.mergeButton': 'Merge selected',
 'settings.memory.mergeConfirm': 'Merge {n} memory files into "{target}"? No fact is dropped (LLM only reorganizes by topic); merged originals are backed up to .history/ then removed.',
   'settings.memory.mergeDone': '✓ Merged into {target} ({n} originals removed, backed up in .history/)',
+  'settings.memory.usedTimes': 'Used {n}x',
+  'settings.memory.flagged': 'Possibly misleading',
+  'settings.memory.stale': 'Idle {d}d',
+  'settings.memory.audit': 'Offline audit',
+  'settings.memory.auditRunning': 'Auditing…',
+  'settings.memory.auditDone': 'Audit done: {a} entries checked, {c} contradictions found, {p} rewrite proposals pending',
 };

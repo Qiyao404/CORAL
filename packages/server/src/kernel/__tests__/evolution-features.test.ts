@@ -325,6 +325,57 @@ describe('演化管线（技能修订 / 新技能 / 画像提议）', () => {
     expect(svc.list('pending').length).toBe(0);
   });
 
+  it('经验条目结构化：LLM 返回 cue/lesson/evidence/confidence → 提议携带结构化字段（非法值被消毒）', async () => {
+    const skillsDir = join(dir, 'skills6');
+    mkdirSync(join(skillsDir, 'api-skill'), { recursive: true });
+    writeFileSync(join(skillsDir, 'api-skill', 'SKILL.md'), '---\nname: api-skill\ndescription: d\n---\n\n旧版', 'utf-8');
+    const { svc } = makeEvolution(async () => ({
+      content: JSON.stringify({
+        rationale: '计数场景应优先 API',
+        revisedSkillMd: '---\nname: api-skill\ndescription: d\n---\n\n新版：计数优先走 API',
+        experience: {
+          cue: '在提供公开 API 的平台上做计数任务',
+          lesson: '优先调平台 API 而非解析 HTML',
+          evidence: '本 run 中手动翻页计数被门禁打回',
+          confidence: 7.3, // 非法：>1，应夹取为 1
+        },
+      }),
+    }), skillsDir);
+
+    await svc.considerRun({
+      runId: 'r6', goal: '统计页面数量', steps: 9, toolCalls: 8,
+      skillsUsed: ['api-skill'],
+      skillFailures: [{ tool: 'skill_api-skill', errorPreview: 'E1' }, { tool: 'skill_api-skill', errorPreview: 'E2' }],
+      gateRejections: 0, subagentFailures: 0, transcriptTail: '...',
+    });
+
+    const pending = svc.list('pending');
+    expect(pending.length).toBe(1);
+    const exp = pending[0].experience!;
+    expect(exp.cue).toContain('API');
+    expect(exp.lesson).toContain('API');
+    expect(exp.evidence).toContain('门禁');
+    expect(exp.confidence).toBe(1); // 7.3 → 夹取 1
+  });
+
+  it('经验条目缺 cue/lesson → 不挂 experience 字段（提议仍成立，向后兼容）', async () => {
+    const skillsDir = join(dir, 'skills7');
+    mkdirSync(join(skillsDir, 's7'), { recursive: true });
+    writeFileSync(join(skillsDir, 's7', 'SKILL.md'), '---\nname: s7\ndescription: d\n---\n\n旧版', 'utf-8');
+    const { svc } = makeEvolution(async () => ({
+      content: JSON.stringify({ rationale: 'x', revisedSkillMd: '---\nname: s7\ndescription: d\n---\n\n新版内容足够长'.repeat(3) }),
+    }), skillsDir);
+    await svc.considerRun({
+      runId: 'r7', goal: 'g', steps: 9, toolCalls: 8,
+      skillsUsed: ['s7'],
+      skillFailures: [{ tool: 'skill_s7', errorPreview: 'E1' }, { tool: 'skill_s7', errorPreview: 'E2' }],
+      gateRejections: 0, subagentFailures: 0, transcriptTail: '...',
+    });
+    const pending = svc.list('pending');
+    expect(pending.length).toBe(1);
+    expect(pending[0].experience).toBeUndefined();
+  });
+
   it('负信号不足且复杂度不够 → 不发起任何蒸馏', async () => {
     const skillsDir = join(dir, 'skills5');
     mkdirSync(skillsDir, { recursive: true });

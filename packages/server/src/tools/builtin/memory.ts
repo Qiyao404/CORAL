@@ -32,9 +32,11 @@ export function makeMemoryTools(service: MemoryService, llm?: RouterLlm, automat
     },
     source: 'builtin',
     permission: 'auto',
-    async invoke(input: any) {
+    async invoke(input: any, ctx: any) {
       const r = service.read(String(input?.name ?? ''));
       if (!r) return toolError('NOT_FOUND', `记忆文件不存在: ${input?.name}`);
+      // 使用追踪：命中即上报（run-engine 记账：useCount / 失败归因 misleads）
+      try { ctx?.emit?.({ type: 'memory.read', payload: { name: service.sanitizeName(String(input?.name ?? '')) ?? '' } }); } catch { /* 追踪不伤读取 */ }
       return toolOk({ content: r.content, truncated: r.truncated, size: r.size, trust: r.trust });
     },
   };
@@ -164,10 +166,15 @@ export function makeMemoryTools(service: MemoryService, llm?: RouterLlm, automat
     },
     source: 'builtin',
     permission: 'auto',
-    async invoke(input: any) {
+    async invoke(input: any, ctx: any) {
       const query = String(input?.query ?? '').trim();
       if (!query) return toolError('BAD_INPUT', 'query 必填');
       const r = service.search(query);
+      // 使用追踪：命中文件上报（去重；与 memory.read 同通道记账）
+      try {
+        const hitFiles = [...new Set(r.matches.map(m => m.file))];
+        if (hitFiles.length > 0) ctx?.emit?.({ type: 'memory.search_hit', payload: { files: hitFiles } });
+      } catch { /* 追踪不伤检索 */ }
       return toolOk({
         matches: r.matches,
         scannedFiles: r.scannedFiles,

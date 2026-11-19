@@ -1,19 +1,55 @@
 import type { FastifyInstance } from 'fastify';
 import { MemoryService } from '../services/memory-service.js';
+import { MemoryUsageService } from '../services/memory-usage-service.js';
+import { auditMemory } from '../services/dream.js';
 import { platformConfig } from '../services/config.js';
+import type { SearchStore } from '../store/search-store.js';
+import type { EvolutionService } from '../services/evolution-service.js';
 
 /**
  * 创新点③：记忆查看/编辑 API — 透明性卖点可视化（Settings 页记忆卡）。
+ * GET /api/memory 附带使用统计（命中次数 / 疑似误导 / 陈旧度 — 只标记不处置）。
+ * POST /api/memory/audit 离线对账：记忆库 ↔ 历史轨迹核对，矛盾生成改写提议（人审闸门）。
  */
 // memory merge 互斥锁：合并期间（LLM 调用数秒）阻止并发 merge/edit 防数据丢失
 let mergeLock = false;
+// 对账互斥锁：审计是多文件 LLM 批处理，防止重复点击并发跑两轮
+let auditLock = false;
 
-export function registerMemoryRoutes(app: FastifyInstance): void {
+export function registerMemoryRoutes(
+  app: FastifyInstance,
+  deps: { getSearch: () => SearchStore; getEvolution: () => EvolutionService } = {
+    getSearch: () => null as any,
+    getEvolution: () => null as any,
+  },
+): void {
   const service = () => new MemoryService(platformConfig.memoryDir);
+  const usage = () => new MemoryUsageService(platformConfig.memoryDir);
 
   app.get('/api/memory', async () => {
-    const files = service().list();
-    return { items: files, dir: platformConfig.memoryDir };
+    const svc = service();
+    const files = svc.list();
+    return { items: files, dir: platformConfig.memoryDir, usage: usage().stats(svc) };
+  });
+
+  // 离线对账（Dreaming）：空闲时对照原始轨迹核对记忆条目 — 只提议，改写走人审
+  app.post('/api/memory/audit', async (_request, reply) => {
+    if (auditLock) return reply.status(409).send({ error: '对账正在进行中，请稍后再试' });
+    auditLock = true;
+    try {
+      const { llmClient } = await import('../services/llm-client.js');
+      const result = await auditMemory({
+        svc: service(),
+        llm: llmClient as any,
+        search: deps.getSearch(),
+        evolution: deps.getEvolution(),
+      });
+      return result;
+    } catch (err: any) {
+      return reply.status(502).send({ error: `对账失败: ${err?.message ?? err}` });
+    } finally {
+      auditLock = false;
+    }
   });
 
   // 多文件合并为一（LLM 全保留整理）：内容一条不丢，仅按主题重组；被并入的原文件

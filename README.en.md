@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **Version: v2.4.0** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
+> **Version: v2.5.0** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
 > **Positioning: a local-first, single-command, single-file-storage personal agent runtime**
 
 ---
@@ -18,8 +18,9 @@ CORAL is an LLM-powered personal agent runtime: it takes a natural-language goal
 - **Tool calling**: 24 built-in tools (files / Word / web / long-term memory / sub-agents / multi-agent teams / full-text search, …) + a 40-skill ecosystem
 - **Deterministic discipline**: Fact Gate (read-before-write), Wrap-up Gate (rhetoric audit), tool effects contract (approval tiers derived from effects), external command guards (8 lifecycle points, pluggable)
 - **Self-evolution loop**: post-run distillation drafts skill revisions / new-skill proposals / profile additions from real experience — all human-reviewed before landing; version history + diff + one-click rollback
-- **Memory governance**: admission gate (environment snapshots / conversation recaps rejected) → auto-filing → full-preserve consolidation → automation isolation — four defense layers keeping the library small and valuable
+- **Long-term memory**: full lifecycle governance — admission gate → auto-filing → consolidation → automation isolation → usage tracking (hit count / possibly-misleading / stale badges) → offline audit (cross-check against run history, rewrites go through human review); memory is plain editable Markdown
 - **Experience recall**: `session_search` full-text search across ALL past conversations (FTS5, CN/EN) — "that plan we discussed" hits the original trail
+- **Runtime convergence**: tiered budget reminders at 70%/85% of steps (consolidate / stop exploring and deliver); compression summaries carry recall signposts; runs resumed with history get a verify-before-side-effects note
 - **Multi-agent teams**: background named teammates running in parallel, step-boundary messaging, acyclic task board (CAS + optimistic locking), team-token watchdog
 - **Exact replay**: every checkpoint carries the system prompt + model config; Time-Travel forks reproduce historical context verbatim
 - **Observability**: streaming + event sourcing (fully persisted, replayable, exportable as Markdown or training-ready JSONL trajectories)
@@ -132,6 +133,16 @@ Paired with **memory nudges** (every 12 steps during long tasks, max 2) and **ma
 **28. Full-text session search (experience recall)**
 FTS5 trigram index (Chinese/English substring matching): at terminal state a run's goal, final answer, and message trail are rebuilt as its search documents; the `session_search` tool searches across ALL past runs and returns highlighted snippets with run locator — "that plan we discussed", "how we fixed that error last time" now hit the original trail instead of relying on distilled memories. Paired trajectory export: `GET /api/runs/:id/export.trajectory.jsonl` emits a training-ready trajectory (metadata with model config and system prompt + per-message lines, the same source as exact replay) for tool-calling model trajectory production.
 
+**29. Runtime convergence guidance & memory lifecycle**
+Six incremental mechanisms covering loss-stopping within a single run, compression fidelity, and the full memory lifecycle:
+
+- **Progressive budget reminders**: at 70% of the step budget a convergence hint is appended to the latest tool result (merge parallel operations, stop divergent exploration); at 85% a delivery hint (stop exploring, answer from what you already have). Unlimited budgets use absolute step thresholds (20/40) and never hard-stop. Reminders are appended to the newest tool result instead of rewriting the system-prompt prefix (any prefix change invalidates the entire session's prefix cache); each tier fires once, and the final in-budget round is left alone.
+- **Compression signposts**: every lossy-compression artifact (full summary / deterministic skeleton / shelving stub) carries a recall pointer — stating which kinds of information (exact numbers, file paths, IDs) may have been distorted and how to recover them (re-run the tool or `evidence_read`); stubs without an archive honestly state "original unrecoverable". Summaries no longer look omniscient.
+- **Structured experience entries**: skill-revision and new-skill proposals carry a four-field experience entry (applies-when / lesson / run evidence / confidence) — a reviewer can judge "what situation, what change, on what grounds" without reading the full draft; fields are sanitized (confidence clamped, lengths capped), legacy proposals remain compatible.
+- **Memory usage tracking**: `memory_read` / `memory_search` hits are recorded (count / last used / idle days); a memory read during a run that ends failed gets one "possibly misleading" mark (weak attribution — recorded, never auto-disposed). The Settings page memory list shows badges: used N times / possibly misleading (≥2) / idle ≥30 days — disposal always stays with the user.
+- **Offline memory audit**: one click in Settings checks each memory entry against the search projection of historical runs (FTS5) — an LLM rules consistent / contradictory / unverifiable (missing evidence is NOT contradiction, preventing false positives); contradictions produce rewrite proposals in the evolution queue (at most one pending per file) with verbatim evidence quotes for human review; accepting backs up the original to `.history/` before rewriting.
+- **Recovery note**: runs that resume with history (Time-Travel fork / session continuation) and have a workspace bound get a system note injected after the goal — history is a snapshot, not the present: verify the current real state before any externally-visible side effect (writing files, sending messages, creating issues/PRs), and never blindly repeat an action that may already have been applied; the note persists in checkpoints.
+
 ---
 
 ## Feature Scope
@@ -231,13 +242,13 @@ Verified against DeepSeek and DashScope; any OpenAI-compatible endpoint (OpenRou
 | Persistence | SQLite (better-sqlite3, WAL mode, versioned schema migrations) |
 | Skills | YAML frontmatter (gray-matter) + chokidar hot reload |
 | Progress protocol | in-house `[CORAL_PROGRESS]` single-line stderr JSON protocol (Python + Node SDKs, see [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)) |
-| Quality | Vitest (446 cases) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
+| Quality | Vitest (477 cases) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
 
 ---
 
 ## Tests & Benchmarks
 
-- **Tests**: 446 cases (Vitest) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
+- **Tests**: 477 cases (Vitest) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
 - **GAIA benchmark**: [docs/GAIA.md](./docs/GAIA.md) — official GAIA benchmark validation split, **87.1%** (85 questions, deterministic exact match). L1 90.2% / L2 96.2% / L3 66.7%.
 - **Performance**: [docs/BENCHMARK.md](./docs/BENCHMARK.md) — context-compression gains (1.2MB history → 169KB, −86%), SQLite WAL and JSONL persistence throughput. Script: `npx tsx scripts/benchmark.mts`.
 

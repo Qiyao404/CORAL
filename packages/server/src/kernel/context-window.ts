@@ -26,7 +26,7 @@ export function clipToolResults(messages: ChatMessage[], options: Partial<ClipOp
       ...m,
       content:
         m.content.slice(0, head) +
-        `\n\n[...工具结果过长，已截断（原 ${m.content.length} 字符，保留头部 ${head} + 尾部 ${tail}）...]` +
+        `\n\n[...工具结果过长，已截断（原 ${m.content.length} 字符，保留头部 ${head} + 尾部 ${tail}）${CLIP_SIGNPOST}...]` +
         m.content.slice(-tail),
     };
   });
@@ -100,6 +100,7 @@ export function deterministicCompress(
     role: 'user',
     content:
       `[Earlier conversation skeleton — deterministic fallback compression of ${middle.length} messages]\n${skeleton}\n` +
+      `${SKELETON_SIGNPOST}\n` +
       `[The original task is as follows]\n${first.content}`,
   };
   return { messages: [summaryMessage, ...recent], compressed: true, summary: skeleton };
@@ -175,15 +176,36 @@ export function shelveOldToolResults(
     if (m.content.includes('"evidenceId"')) continue; // 已是摘要态
     const head = m.content.slice(0, 240);
     const archivedId = options.archive?.(m.toolName ?? 'unknown', m.content) ?? null;
-    const stub =
-      `[...旧工具结果已收纳（${m.toolName ?? 'tool'}，原 ${m.content.length} 字符）头摘: ${head}...` +
-      (archivedId ? ` 完整内容见证据记录 ${archivedId}（evidence_read 可取回）...]` : '...]');
+    const stub = archivedId
+      ? `[...旧工具结果已收纳（${m.toolName ?? 'tool'}，原 ${m.content.length} 字符）头摘: ${head}... ` +
+        `完整内容见证据记录 ${archivedId}：引用精确数值/路径/ID 前必须 evidence_read 回查，不要凭头摘转述...]`
+      : `[...旧工具结果已收纳（${m.toolName ?? 'tool'}，原 ${m.content.length} 字符）头摘: ${head}... ` +
+        `原文未归档、不可恢复 — 需要精确值时请重新执行工具，不要凭头摘转述...]`;
     reclaimedChars += m.content.length - stub.length;
     out[i] = { ...m, content: stub };
     shelved++;
   }
   return { messages: out, shelved, reclaimedChars };
 }
+
+/**
+ * 压缩路标（compression signpost）：所有有损压缩的产物必须自带"回查指引"。
+ * 摘要写得越平滑，模型越容易误以为自己掌握了全部事实而跳过回查 —
+ * 路标显式声明哪些类型的信息可能已失真、以及该用什么手段取回。
+ */
+export const COMPRESSION_SIGNPOST =
+  '[compression signpost] Details above were folded by lossy compression. Exact numbers, file paths, IDs and raw tool outputs ' +
+  'may have been altered or dropped. Before relying on any specific value for your final answer, re-derive it from the source ' +
+  '(re-run the tool, or evidence_read if an evidence ID is referenced) — do not trust this summary for precise values.';
+
+/** 确定性骨架的路标（信息损失更大：只保留了逐条前 160 字符） */
+const SKELETON_SIGNPOST =
+  '[compression signpost] This is a first-160-chars-per-message skeleton, NOT a faithful summary — most details are gone. ' +
+  'Treat it only as a map of what happened; re-run tools for anything you must quote exactly.';
+
+/** 单条截断的路标（clip：头尾保留、中段丢弃） */
+const CLIP_SIGNPOST =
+  '[middle truncated — if the omitted part contains values you must quote exactly, narrow the query or re-run the tool]';
 
 export interface CompressResult {
   messages: ChatMessage[];
@@ -233,6 +255,7 @@ export async function compressIfNeeded(
     role: 'user',
     content:
       `[Earlier conversation summary — after compression of ${middle.length} messages]\n${summary}\n` +
+      `${COMPRESSION_SIGNPOST}\n` +
       `[The original task is as follows]\n${first.content}`,
   };
 

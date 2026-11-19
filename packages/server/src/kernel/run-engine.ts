@@ -19,6 +19,7 @@ import { makeEvidenceReadTool } from '../tools/builtin/evidence.js';
 import { makeDualReviewTool } from '../tools/builtin/dual-review.js';
 import { EvidenceStore } from './evidence.js';
 import { MemoryService, distillMemory } from '../services/memory-service.js';
+import { MemoryUsageService } from '../services/memory-usage-service.js';
 import { HabitService } from '../services/habit-service.js';
 import { EvolutionService } from '../services/evolution-service.js';
 import { AgentPresetService } from '../services/agent-presets.js';
@@ -122,7 +123,7 @@ export class RunEngine {
   private habits = new HabitService(pathDirname(platformConfig.databasePath));
   /** 运行后蒸馏管线（技能修订/新技能/画像提议 — 至多一次 LLM 调用每 run，fire-and-forget） */
   private evolution = new EvolutionService(
-    { llm: null as any, skillsDir: platformConfig.skillsDir, registry: null as any },
+    { llm: null as any, skillsDir: platformConfig.skillsDir, registry: null as any, memoryDir: platformConfig.memoryDir },
     pathDirname(platformConfig.databasePath),
   );
   /** 具名子代理预设（data/agents/*.md — description 注入主提示，正文按名加载） */
@@ -135,6 +136,10 @@ export class RunEngine {
   private budgetSettings = new RunBudgetSettingsService(pathDirname(platformConfig.databasePath));
   /** 个性化服务（6 维度"越用越懂你"，全部默认关，设置页开关控制） */
   private personalization = new PersonalizationService(pathDirname(platformConfig.databasePath));
+  /** 记忆使用追踪：read/search 命中记账；失败 run 的读取做误导弱归因（只记录不处置） */
+  private memoryUsage = new MemoryUsageService(platformConfig.memoryDir);
+  /** runId → 本 run 内读过/检索命中的记忆文件（终态时统一记账） */
+  private memoryReadsByRun = new Map<string, Set<string>>();
 
   /** hooks 的 loop 注入形态（结构化包装 — kernel 不 import 具体服务） */
   private loopHooks = {
@@ -148,7 +153,7 @@ export class RunEngine {
   constructor(deps: RunEngineDeps) {
     this.deps = deps;
     // 演化管线依赖注入（字段初始化时 deps 尚未就绪，此处补齐）
-    this.evolution.rebind({ llm: deps.llm as any, skillsDir: platformConfig.skillsDir, registry: deps.skillRegistry });
+    this.evolution.rebind({ llm: deps.llm as any, skillsDir: platformConfig.skillsDir, registry: deps.skillRegistry, memoryDir: platformConfig.memoryDir });
   }
 
   get store(): RunStore {
@@ -181,6 +186,11 @@ export class RunEngine {
 
   get evolutionService(): EvolutionService {
     return this.evolution;
+  }
+
+  /** 会话全文检索库（离线对账等 API 侧复用 — 同一 FTS5 表） */
+  get searchStore(): SearchStore {
+    return this.search;
   }
 
   /** 外部命令守卫（hooks — API/启动接线用） */
@@ -346,6 +356,8 @@ export class RunEngine {
   }
 
   private async executeRun(runId: string, input: StartRunInput, workspace: Workspace | null, signal: AbortSignal): Promise<void> {
+    // 终态登记（finally 的记忆使用记账用 — 异常/取消路径也要有终态）
+    let outcomeStatus: string | undefined;
     try {
       // 多轮续接：同会话上一轮的完整对话（checkpoint 事件溯源回放）；
       // M4-1 fork：显式 initialHistory 优先（Time-Travel 从任意 checkpoint 回放）
@@ -431,6 +443,9 @@ export class RunEngine {
         signal,
         workspaceDir: workspace?.dir,
         initialHistory,
+        // 恢复指令（Recovery Note）：带历史恢复执行（fork/会话续接）且可能产生
+        // 外部副作用（绑定了工作区）时注入 — 副作用前先核对真实状态，不重复已应用动作
+        ...(initialHistory && workspace ? { recoveryNote: true } : {}),
         // 精确重放：fork 携带历史系统提示时一字不差复现（优先于现场组装）
         ...(input.forkSystem ? { exactSystem: input.forkSystem } : {}),
         modelInfo,
@@ -460,6 +475,7 @@ export class RunEngine {
       });
 
       const result = await loop.run();
+      outcomeStatus = result.status;
       if (signal.aborted) {
         this.markCancelled(runId);
         return;
@@ -501,6 +517,16 @@ export class RunEngine {
           ? { error: result.error }
           : { finalContentPreview: result.finalContent.slice(0, 500), steps: result.steps, toolCalls: result.toolCalls, tokensIn: result.tokensIn, tokensOut: result.tokensOut }
       );
+
+      // 记忆使用记账：本 run 读过/命中过的文件 — 命中计数；failed 收尾的读取
+      // 做误导弱归因（只记录：失败未必是记忆的锅，处置权留给人）
+      const memReads = this.memoryReadsByRun.get(runId);
+      if (memReads && memReads.size > 0) {
+        try {
+          this.memoryUsage.recordUse([...memReads]);
+          if (result.status === 'failed') this.memoryUsage.recordSuspect([...memReads]);
+        } catch { /* 记账失败不影响 run */ }
+      }
 
       // 会话全文检索：终态时（重）索引本 run 的检索文档（goal + 最终回答 + 消息轨迹）
       if (result.status === 'completed') {
@@ -564,11 +590,22 @@ export class RunEngine {
         this.markCancelled(runId);
         return;
       }
+      outcomeStatus = 'failed';
       this.deps.runStore.update(runId, { status: 'failed', error: { message: err?.message ?? String(err) }, endReason: 'failed' });
       this.emitRunEvent(runId, 'run.failed', { error: err?.message ?? String(err) });
     } finally {
       this.releaseSeq(runId);
       this.runMeta.delete(runId);
+      // 记忆使用记账：本 run 读过/命中过的文件 — 命中计数；failed 收尾的读取做
+      // 误导弱归因（只记录：失败未必是记忆的锅，处置权留给人）
+      const memReads = this.memoryReadsByRun.get(runId);
+      if (memReads && memReads.size > 0) {
+        try {
+          this.memoryUsage.recordUse([...memReads]);
+          if (outcomeStatus === 'failed') this.memoryUsage.recordSuspect([...memReads]);
+        } catch { /* 记账失败不影响 run */ }
+      }
+      this.memoryReadsByRun.delete(runId);
       // 按 runId 精准清理——clear() 会误杀其他并发 run 的观察记录
       for (const [cid, obs] of this.pendingObs) {
         if (obs.runId === runId) this.pendingObs.delete(cid);
@@ -600,7 +637,23 @@ export class RunEngine {
     });
     this.bridgeToBus(stored);
     this.observeForHabits(runId, e.type, payload as any, agentId);
+    this.observeMemoryUse(runId, e.type, payload as any);
     this.bridgeToHooks(runId, e.type, payload as any);
+  }
+
+  /** 记忆使用观察：read/search 命中收集到 run 级集合（终态统一记账，失败时弱归因） */
+  private observeMemoryUse(runId: string, type: string, payload: any): void {
+    try {
+      if (type === 'memory.read' && typeof payload?.name === 'string' && payload.name) {
+        let set = this.memoryReadsByRun.get(runId);
+        if (!set) { set = new Set(); this.memoryReadsByRun.set(runId, set); }
+        set.add(payload.name);
+      } else if (type === 'memory.search_hit' && Array.isArray(payload?.files)) {
+        let set = this.memoryReadsByRun.get(runId);
+        if (!set) { set = new Set(); this.memoryReadsByRun.set(runId, set); }
+        for (const f of payload.files) if (typeof f === 'string' && f) set.add(f);
+      }
+    } catch { /* 观察失败不影响事件流 */ }
   }
 
   /** 观察/通知类钩子桥接（fire-and-forget — 绝不拖慢事件流）：终态→session_end，审批→notification */

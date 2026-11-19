@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Sparkles, Check, X, FileDiff, UserPlus, GitBranch } from 'lucide-react';
+import { Sparkles, Check, X, FileDiff, UserPlus, GitBranch, Lightbulb } from 'lucide-react';
 import { api } from '../api/client';
 import { Card, Button, Tag } from './ui';
 import { useI18n } from '../i18n';
@@ -10,7 +10,14 @@ import { useI18n } from '../i18n';
  * 只展示不代决：接受才落盘（技能旧版备份 .history/，热加载），拒绝归档。
  */
 
-type Kind = 'skill_revision' | 'skill_new' | 'profile_update';
+type Kind = 'skill_revision' | 'skill_new' | 'profile_update' | 'memory_rewrite';
+
+interface Experience {
+  cue: string;
+  lesson: string;
+  evidence: string;
+  confidence: number;
+}
 
 interface Proposal {
   id: string;
@@ -19,6 +26,8 @@ interface Proposal {
   skillName?: string;
   rationale: string;
   content: unknown;
+  /** 经验条目（cue/lesson/evidence/confidence）—— 存量提议可能没有 */
+  experience?: Experience;
   status: string;
   createdAt: string;
 }
@@ -27,6 +36,7 @@ const KIND_ICON: Record<Kind, typeof GitBranch> = {
   skill_revision: FileDiff,
   skill_new: GitBranch,
   profile_update: UserPlus,
+  memory_rewrite: Lightbulb,
 };
 
 export function EvolutionProposals({ kinds }: { kinds: Kind[] }) {
@@ -81,11 +91,29 @@ export function EvolutionProposals({ kinds }: { kinds: Kind[] }) {
                   <div className="flex items-center gap-2 mb-1">
                     <Icon className="w-3.5 h-3.5 text-brand shrink-0" />
                     <span className="text-sm font-medium text-fg-primary">
-                      {p.kind === 'profile_update' ? t('evo.kindProfile') : `${t(p.kind === 'skill_revision' ? 'evo.kindRevision' : 'evo.kindNew')}${p.skillName ? ` · ${p.skillName}` : ''}`}
+                      {p.kind === 'profile_update'
+                        ? t('evo.kindProfile')
+                        : p.kind === 'memory_rewrite'
+                          ? `${t('evo.kindMemory')}${p.skillName ? ` · ${p.skillName}` : ''}`
+                          : `${t(p.kind === 'skill_revision' ? 'evo.kindRevision' : 'evo.kindNew')}${p.skillName ? ` · ${p.skillName}` : ''}`}
                     </span>
                     <span className="text-[11px] text-fg-disabled">{new Date(p.createdAt).toLocaleString()}</span>
                   </div>
                   <p className="text-xs text-fg-secondary">{p.rationale}</p>
+                  {p.experience && (
+                    <div className="mt-2 rounded-md border border-glass-border bg-bg-panel/60 px-2.5 py-2 text-[11px] leading-relaxed">
+                      <div className="flex items-center gap-1.5 mb-1 text-fg-muted">
+                        <Lightbulb className="w-3 h-3 text-amber-400" />
+                        <span>{t('evo.experienceTitle')}</span>
+                        <span className="ml-auto">{t('evo.confidence')}: {Math.round(p.experience.confidence * 100)}%</span>
+                      </div>
+                      <div className="grid grid-cols-[auto_1fr] gap-x-2 gap-y-0.5">
+                        <span className="text-fg-disabled">{t('evo.cue')}</span><span className="text-fg-secondary">{p.experience.cue}</span>
+                        <span className="text-fg-disabled">{t('evo.lesson')}</span><span className="text-fg-secondary">{p.experience.lesson}</span>
+                        <span className="text-fg-disabled">{t('evo.evidence')}</span><span className="text-fg-secondary">{p.experience.evidence}</span>
+                      </div>
+                    </div>
+                  )}
                   {p.kind !== 'profile_update' && (
                     <button
                       type="button"

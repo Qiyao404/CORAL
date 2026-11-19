@@ -141,4 +141,10 @@ export const zh: Record<string, string> = {
   'settings.memory.mergeButton': '合并所选',
   'settings.memory.mergeConfirm': '把 {n} 个记忆文件合并为「{target}」？ 内容一条不丢（LLM 只按主题重组），被并入的原文件备份进 .history/ 后移除。',
   'settings.memory.mergeDone': '✓ 已合并为 {target}（移除 {n} 个原文件，备份在 .history/）',
+  'settings.memory.usedTimes': '使用 {n} 次',
+  'settings.memory.flagged': '疑似误导',
+  'settings.memory.stale': '{d} 天未用',
+  'settings.memory.audit': '离线对账',
+  'settings.memory.auditRunning': '对账中…',
+  'settings.memory.auditDone': '对账完成：核对 {a} 条记忆，发现 {c} 处与历史轨迹矛盾，{p} 条改写提议待审',
 };

@@ -71,6 +71,12 @@ export interface AgentLoopOptions {
   memoryNudgeEvery?: number;
   /** 多轮续接：本会话此前的对话历史（含上一轮的 goal/工具结果/最终回答），种子在新 goal 之前 */
   initialHistory?: ChatMessage[];
+  /**
+   * 恢复指令（Recovery Note）：本 run 带历史恢复执行（fork 回放/会话续接）时置 true —
+   * 注入一条"先核对真实状态、绝不重复已应用副作用"的系统口吻指令。
+   * 历史是快照不是现实：文件可能已被改、外部动作可能已生效 — 恢复后盲重放会重复副作用。
+   */
+  recoveryNote?: boolean;
   tools: Tool[];
   budget: LoopBudget;
   signal: AbortSignal;
@@ -188,6 +194,13 @@ export class AgentLoop {
     );
     let messages: ChatMessage[] = [...seed, { role: 'user' as const, content: goal }];
 
+    // 恢复指令（Recovery Note）：带历史恢复的 run 在 goal 后注入 — 任何有外部
+    // 副作用的动作前先核对真实状态（历史是快照不是现实，盲重放会重复副作用）
+    if (this.options.recoveryNote) {
+      messages.push({ role: 'user', content: RECOVERY_NOTE_TEXT });
+      this.emit('loop.recovery_note', {});
+    }
+
     // hooks：user_prompt_submit（首次调用前）+ session_start（续接历史加载后）。
     // deny = 任务被外部守卫拦下（fail 干净利落）；additionalContext 以系统注记注入。
     if (this.options.hooks) {
@@ -236,6 +249,8 @@ export class AgentLoop {
     let memoryWritten = false;
     let memoryNudgeCount = 0;
     this.memoryNudgeEvery = this.options.memoryNudgeEvery ?? 12;
+    // 渐进预算提醒已触发档位（consolidate/converge 各只触发一次）
+    const nudgedTiers = new Set<string>();
     // 用户实测（fork 场景）：模型回"I'll write..."式过渡话且不带工具调用 → 被误判
     // 为最终回答提前收尾（fork run 因此没产出文档）。narration 续跑：此类回答入历史继续循环
     let narrationContinues = 0;
@@ -571,6 +586,7 @@ export class AgentLoop {
         });
 
         // 逐个执行（保持模型给出的顺序）
+        let lastToolMsgIndex = -1; // 本步最后一条工具结果（渐进预算提醒的挂载点）
         for (const call of response.toolCalls) {
           toolCallCount++;
           const tool = toolMap.get(call.name);
@@ -618,6 +634,7 @@ export class AgentLoop {
             toolName: call.name,
             content,
           });
+          lastToolMsgIndex = messages.length - 1;
 
           this.emit(result.ok ? 'tool.call_completed' : 'tool.call_failed', {
             step: steps,
@@ -625,6 +642,21 @@ export class AgentLoop {
             callId: call.id,
             ok: result.ok,
             error: result.ok ? undefined : result.error,
+          });
+        }
+
+        // 渐进预算提醒：步数分档提醒"收敛"，追加在本步最后一条工具结果末尾
+        //（不改系统提示词前缀 — 前缀一动整条会话的 KV Cache 全失效，反而更贵）。
+        // 每档只触发一次；maxSteps 有限时按 70%/85% 相对阈值，无上限时按绝对步数
+        //（20/40 — 无上限是用户的明确选择，只提醒不硬停）。
+        const nudge = budgetNudgeText(steps, budget, nudgedTiers);
+        if (nudge && lastToolMsgIndex >= 0) {
+          const m = messages[lastToolMsgIndex] as any;
+          m.content = `${m.content}\n\n${nudge.text}`;
+          this.emit('loop.budget_nudge', {
+            step: steps,
+            tier: nudge.tier,
+            ...(nudge.detail ?? {}),
           });
         }
 
@@ -988,4 +1020,87 @@ function isPlanningNarration(content: string): boolean {
   if (!t || t.length > 300) return false; // 长文是正经回答
   if (/^#|\|---|\n- |\n\n/.test(t)) return false; // 标题/表格/列表/多段 = 交付物
   return /^(I'll|I will|Let me|Now I|Next I|First,? I|I'm going to|Now,? let|我来|我将|我会|接下来|让我|现在我来|现在我会|现在我将|现在要|接下来我|马上我|我先)/i.test(t);
+}
+
+// ─── 渐进预算提醒（分档收敛引导）──────────────────────────────────────────
+//
+// 防的是"模型在预算前 29 步不知情地慢悠悠探索，到点被硬截断 — 几十万 token
+// 零产出"。两档提醒让模型在余量尚存时主动收敛，而不是到点猝死。
+// 有限预算：70% 档（合并收敛）+ 85% 档（停止探索、准备交付）；
+// 无上限预算：20/40 绝对步数档（无上限是用户选择，只提醒不硬停）。
+
+/** 无上限预算下的绝对步数阈值（经验值：个人任务通常 8-25 步完成） */
+const BUDGET_NUDGE_FREE_STEPS = { consolidate: 20, converge: 40 };
+
+/** 恢复指令正文（B6）：带历史恢复执行的 run 专用 */
+export const RECOVERY_NOTE_TEXT =
+  '[system] This run resumes with history from an earlier execution. That history is a SNAPSHOT, not the present: ' +
+  'files may have changed, external actions (messages sent, PRs/issues created, files written) may already have been ' +
+  'applied, and the server may have restarted in between. Before ANY action with external side effects — writing or ' +
+  'overwriting files, sending messages or requests, creating issues/PRs, publishing anything — FIRST verify the current ' +
+  'real state (fs_list, fs_read, git status via shell, or re-check the external target). Never blindly repeat an action ' +
+  'that may already have been applied; skip it and report what you found instead.';
+
+export interface BudgetNudge {
+  tier: 'consolidate' | 'converge';
+  text: string;
+  detail?: Record<string, any>;
+}
+
+/**
+ * 计算本步应触发的预算提醒（未到阈值或已触发过 → null）。
+ * fired：已触发档位集合（调用方持有，本函数命中时写入）。
+ */
+export function budgetNudgeText(
+  step: number,
+  budget: LoopBudget,
+  fired: Set<string>,
+): BudgetNudge | null {
+  // ≤0 与 Infinity/NaN 一律按"无上限"处理（run-engine 已翻译，此处兜底 SDK 直连/测试路径）
+  const finite = Number.isFinite(budget.maxSteps) && budget.maxSteps > 0;
+  const ceiling = finite ? budget.maxSteps : Infinity;
+  const consolidateAt = finite
+    ? Math.floor(budget.maxSteps * 0.7)
+    : BUDGET_NUDGE_FREE_STEPS.consolidate;
+  const convergeAt = finite
+    ? Math.floor(budget.maxSteps * 0.85)
+    : BUDGET_NUDGE_FREE_STEPS.converge;
+
+  if (step >= convergeAt && step < ceiling && !fired.has('converge')) {
+    fired.add('converge');
+    return {
+      tier: 'converge',
+      text:
+        '[runtime notice] The step budget is nearly exhausted. CONVERGE NOW: stop opening new ' +
+        'exploratory threads, skip nice-to-have verification, and prepare your final answer from ' +
+        'what you already have. If critical work is still missing, say so explicitly in the final answer.',
+      detail: {
+        maxSteps: finite ? budget.maxSteps : null,
+        step,
+        convergeAt,
+        ...(finite ? { usage: `${Math.round((step / budget.maxSteps) * 100)}%` } : {}),
+      },
+    };
+  }
+  if (
+    step >= consolidateAt &&
+    step < ceiling && // 预算内最后一轮已无"收敛"余地 — 不发噪音
+    !fired.has('consolidate')
+  ) {
+    fired.add('consolidate');
+    return {
+      tier: 'consolidate',
+      text:
+        '[runtime notice] You are well into the step budget for this task. Start consolidating: ' +
+        'merge redundant checks, batch any remaining independent reads into one round, and stop ' +
+        'exploring tangents that do not serve the goal.',
+      detail: {
+        maxSteps: finite ? budget.maxSteps : null,
+        step,
+        consolidateAt,
+        ...(finite ? { usage: `${Math.round((step / budget.maxSteps) * 100)}%` } : {}),
+      },
+    };
+  }
+  return null;
 }

@@ -9,4 +9,10 @@ export const zh: Record<string, string> = {
   'evo.reject': '拒绝',
   'evo.expand': '查看草案全文',
   'evo.collapse': '收起',
+  'evo.experienceTitle': '经验条目',
+  'evo.confidence': '置信度',
+  'evo.cue': '适用场景',
+  'evo.lesson': '核心教训',
+  'evo.evidence': '轨迹依据',
+  'evo.kindMemory': '记忆改写提议',
 };

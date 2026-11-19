@@ -104,6 +104,8 @@ export const api = {
     }),
 
   // 长期记忆多文件合并（LLM 全保留整理，原文件备份进 .history/）
+  auditMemory: () =>
+    request<{ audited: number; consistent: number; contradictory: number; unverified: number; proposals: number; skipped?: string }>('/memory/audit', { method: 'POST' }),
   mergeMemory: (names: string[], target?: string) =>
     request<{ merged: string; mergedChars: number; removed: string[]; backupDir: string }>('/memory/merge', {
       method: 'POST',
