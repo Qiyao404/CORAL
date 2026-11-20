@@ -4,7 +4,7 @@
 
 > Audience: you (verification) and interviewers/friends (demo). Ordered by "performance impact" — each act takes 1-3 minutes, all doable in a browser + one terminal.
 > Prereq: service running (http://127.0.0.1:3001) with a real model in `.env` (demo mode halves the effect).
-> Covers: v2.4.0. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
+> Covers: v2.5.0. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
 
 ---
 
@@ -99,6 +99,7 @@ conclusion of the task we forked into a table?
 - **Auto-consolidation**: >15 files triggers full-preserve merge down to 5-12 topic files (verified: 68 → 9, zero fact loss)
 - **Automation isolation**: automated runs have memory_write denied — evaluation never pollutes personal memory
 - **Version safety net**: skill "History" button → all-version diff + one-click rollback (auto-backup before rollback)
+- **Usage-tracking badges**: every memory entry carries "used N times / possibly misleading / idle 30d" badges (see Act 16)
 
 ## Act 8: The self-evolution loop (post-run distillation → evolution proposals → human-approved landing)
 
@@ -109,8 +110,9 @@ conclusion of the task we forked into a table?
 
 **Why it's impressive**:
 1. After a run, the distillation pipeline analyzes automatically: skills used × failure signals ≥2 → drafts a **skill revision**; complex task → drafts a **new skill** (deduplicated against the existing 40); 24h elapsed → extracts **profile additions**
-2. **Proposals never take effect by themselves** — accepting applies: the old skill version is backed up to `.history/` and hot-reloaded; profile additions merge in. Rejecting archives. At most one distillation call per run (cost-bounded)
-3. This is the full loop: **skills improve through use + complex experience crystallizes into new skills + the profile keeps evolving — with a human gate on every step**. The agent proposes; you decide
+2. Every skill-kind proposal carries a **four-field experience entry** (applies-when / lesson / run evidence / confidence %) — judge "what situation, what change, on what grounds, how sure" without reading the full draft
+3. **Proposals never take effect by themselves** — accepting applies: the old skill version is backed up to `.history/` and hot-reloaded; profile additions merge in. Rejecting archives. At most one distillation call per run (cost-bounded)
+4. This is the full loop: **skills improve through use + complex experience crystallizes into new skills + the profile keeps evolving — with a human gate on every step**. The agent proposes; you decide
 
 **Shortcut**: to induce a skill revision — make some skill fail twice (e.g. give web-search an unreachable proxy), then check the Skills page after the next run.
 
@@ -170,9 +172,39 @@ curl http://127.0.0.1:3001/api/system/gc     # config self-cleanup scan (soft-de
 
 **Easter egg**: the globe icon in the sidebar toggles **EN/中文** for the entire UI (14 namespaces, preference persisted) — switch it live when your interviewer prefers English.
 
-## Act 15 (closing line)
+## Act 15: Knows when to converge while running (progressive budget reminders × compression signposts × recovery note)
 
-> "Other agent demos show 'what the model can do'. CORAL shows 'how the runtime makes sure the model does it right — and gets better with use' — blind edits refused, rhetoric bounced, oversized results archived, teams under a budget watchdog. None of it depends on model discipline; all of it is deterministic code, event-logged, and time-replayable. And every task it runs feeds three flywheels: skills revised through use, complex experience crystallizing into new skills, and the entire conversation history becoming full-text searchable — the agent proposes, the human decides."
+**Play**:
+1. Start a new conversation and deliberately give it a small step budget: include `"budget": {"maxSteps": 6}` in the request body (or lower the default in Settings first), then enter a multi-step task:
+
+```
+Search for plain-language explanations of these four concepts — entropy, photosynthesis, cache, quaternion — and write one summary line after each
+```
+
+2. Filter the event stream for `loop.budget_nudge` — one tier at 70% of steps ("consolidate, stop divergent exploration"), another at 85% ("stop exploring, answer from what you have")
+3. Run a long-enough research task (Act 1's `/research` works), then open Time-Travel and inspect the summary message the model received after compression — it ends with a **recall signpost** ("exact numbers/paths/IDs may be distorted; re-derive or evidence_read before quoting")
+4. **Fork** a run point that has a workspace bound from Time-Travel → a system-toned message right after the goal in the new conversation is the **recovery note** (event `loop.recovery_note`; full text visible in the Time-Travel checkpoint preview): "history is a snapshot, not the present — verify current real state before writing files/sending messages; never repeat an already-applied action"
+
+**Why it's impressive**:
+1. Budget reminders are **appended to the newest tool result**, never to the system prompt — the prefix cache stays valid, reminders cost nothing extra; each tier fires once; short tasks are never disturbed; unlimited budgets get reminders only (steps 20/40), never a hard stop
+2. Compression summaries carry a "compression disclaimer" — the model no longer mistakes the compressed version for the original; shelved stubs without an archive **honestly declare the original unrecoverable**
+3. The recovery note persists in checkpoints — a fork of the fork still carries this "save-file warning", preventing restored runs from re-sending messages or overwriting files
+
+## Act 16: Memory health-check day (usage badges × offline audit)
+
+**Play**:
+1. Settings → long-term memory card: each file now shows small badges — **used N times** (hits from memory_read/memory_search), **possibly misleading** (red; read-during-failed-run ≥2), **idle 30d** (yellow; likely stale)
+2. Click **"Offline audit"** at the top right: the platform cross-checks every memory entry against the **original trails of historical runs** (the full-text search index) — tens of seconds later you get "N entries checked, M contradictions found, K rewrite proposals pending"
+3. Contradictory entries appear below as **memory-rewrite proposals** with **verbatim evidence quotes** (which run said what) for side-by-side comparison; **Accept** → the original is backed up to `.history/` and rewritten; **Reject** → archived
+
+**Why it's impressive**:
+1. One wrong memory entry pollutes **every** future conversation (each new session reads it and repeats the error with confidence) — the audit uses **raw run trails as the ground truth**, "missing evidence is not contradiction" (no false positives) and "contradictions must quote the original" (human-checkable)
+2. "Possibly misleading" is **weak attribution**: a failed task is not necessarily the memory's fault, so it only gets a red badge and is **never auto-deleted** — disposal always stays with the user
+3. Human gate end to end: audit → proposal → your approval → backup → rewrite; nothing ever applies silently
+
+## Act 17 (closing line)
+
+> "Other agent demos show 'what the model can do'. CORAL shows 'how the runtime makes sure the model does it right — and gets better with use' — blind edits refused, rhetoric bounced, oversized results archived, teams under a budget watchdog, mid-budget runs told to converge, wrong memories caught by the offline audit. None of it depends on model discipline; all of it is deterministic code, event-logged, and time-replayable. And every task it runs feeds three flywheels: skills revised through use, complex experience crystallizing into new skills, and the entire conversation history becoming full-text searchable — the agent proposes, the human decides."
 
 ---
 
@@ -181,13 +213,14 @@ curl http://127.0.0.1:3001/api/system/gc     # config self-cleanup scan (soft-de
 | Dimension | Mechanisms |
 |---|---|
 | Tool contract | Effect bits (writes fs / process / network / idempotent) → approval-tier derivation, fail-closed sealing; MCP annotation mapping |
-| Context | clip → shelve → summarize, three tiers + 4-level usage warning + failure cooldown ladder (60/300/900s) + deterministic fallback summary |
+| Context | clip → shelve → summarize, three tiers + 4-level usage warning + failure cooldown ladder (60/300/900s) + deterministic fallback summary + compression signposts (recall pointers) |
 | Result management | Oversized results → immutable evidence records (summary-first + paged retrieval); `data`/`display` dual channel (model sees JSON, UI sees human summary) |
-| Deterministic discipline | Fact Gate (read-before-write), Wrap-up Gate (rhetoric audit), external command guards (8-event hooks + visual management page) |
+| Deterministic discipline | Fact Gate (read-before-write), Wrap-up Gate (rhetoric audit), external command guards (8-event hooks + visual management page), progressive budget reminders (70%/85% tiered convergence guidance) |
 | Multi-agent | team_spawn background teammates (shared safety invariants), step-boundary messages (never lost, never interrupting), acyclic task board (CAS), team-token watchdog |
-| Self-evolution | Post-run distillation pipeline (skill revision / new-skill draft / profile additions, ≤1 distillation per run) → human-approved landing (.history backup + hot reload); in-task memory nudges |
+| Self-evolution | Post-run distillation pipeline (skill revision / new-skill draft / profile additions, ≤1 distillation per run) → human-approved landing (.history backup + hot reload); structured experience entries (situation/lesson/evidence/confidence); in-task memory nudges |
 | Learning | Long-term memory trust tiers, habit learning (confidence → skill promotion), full-text session search session_search (experience recall) |
-| Replayability | Every checkpoint carries system prompt + model config (exact replay); trajectory JSONL export (training-data format) |
+| Memory lifecycle | Usage tracking (hit / possibly-misleading / stale badges), offline audit (memory ↔ run-trail cross-check; rewrites human-gated with .history backup) |
+| Replayability | Every checkpoint carries system prompt + model config (exact replay); trajectory JSONL export (training-data format); recovery note (side-effect verification on fork/continuation) |
 | Quality | Double-blind review, five-axis self-eval (low scores must cite evidence), skill quality gate, config self-cleanup |
 | Ops | coral doctor 8 channels, ESTOP sentinel, approval session memory, triggers continuing existing sessions (persistent inbox) |
 | Extensibility | Skill / named-sub-agent / slash-command user directories + hooks open interface + `coral install` packages (npm/git/local) + `@coral/sdk` library embedding — all hot-reloading; bilingual UI |
