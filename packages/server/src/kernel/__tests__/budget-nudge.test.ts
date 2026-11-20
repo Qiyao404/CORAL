@@ -119,3 +119,71 @@ describe('AgentLoop — 渐进预算提醒（集成）', () => {
     expect(r.messages.some(m => m.role === 'tool' && m.content.includes('[runtime notice]'))).toBe(false);
   });
 });
+
+describe('isPlanningNarration — 对话式开场盲区（GAIA 回归实测修复）', () => {
+  // 实测原句：IPCC 题 teammate 消息诱发的"对话式开场 + 第二句才是计划"被当成了终答
+  it('队友消息的对话式开场 + 第二句计划 → 判定为过渡话', async () => {
+    const { } = await import('../agent-loop.js'); // 确认模块可加载
+    // 通过 AgentLoop 行为验证：narration 回复不终止循环
+    const llm = new ToolLoopLLM(3); // 第 3 轮才给真终答
+    const calls: string[] = [];
+    const orig = llm.chat.bind(llm);
+    (llm as any).chat = async () => {
+      calls.push('call');
+      if (calls.length === 1) {
+        // 第一轮：对话式开场 + 第二句计划（无工具调用）—— 修复前会被当成终答
+        return {
+          content: 'Good catch from the teammate — the preset whitelist blocked it. I\'ll stand it down and cross-check myself.',
+          toolCalls: [], usage: { inputTokens: 10, outputTokens: 5 }, stopReason: 'end',
+        };
+      }
+      return orig();
+    };
+    const loop = new AgentLoop(llm as any, {
+      runId: 'run-narr', agentId: 'main', goal: 'test',
+      tools: [echo], budget: { maxSteps: 10, maxTokens: 1_000_000 },
+      signal: new AbortController().signal,
+      onEvent: () => {},
+    });
+    const r = await loop.run();
+    // 修复后：第一轮被识别为过渡话 → 循环继续 → 最终拿到真终答 "done"
+    expect(r.finalContent).toBe('done');
+    expect(r.steps).toBeGreaterThanOrEqual(2);
+  });
+
+  it('传统形态仍拦截：开头即计划的短回复不终止', async () => {
+    const llm = new ToolLoopLLM(3);
+    const calls: string[] = [];
+    const orig = llm.chat.bind(llm);
+    (llm as any).chat = async () => {
+      calls.push('x');
+      if (calls.length === 1) {
+        return { content: 'I will check the file now.', toolCalls: [], usage: { inputTokens: 5, outputTokens: 5 }, stopReason: 'end' };
+      }
+      return orig();
+    };
+    const loop = new AgentLoop(llm as any, {
+      runId: 'run-narr2', agentId: 'main', goal: 't',
+      tools: [echo], budget: { maxSteps: 10, maxTokens: 1_000_000 },
+      signal: new AbortController().signal,
+      onEvent: () => {},
+    });
+    const r = await loop.run();
+    expect(r.finalContent).toBe('done');
+  });
+
+  it('正常短答案不受影响：陈述句终答直接交付', async () => {
+    const llm = {
+      chat: async () => ({ content: 'The answer is 42.', toolCalls: [], usage: { inputTokens: 5, outputTokens: 5 }, stopReason: 'end' }),
+    };
+    const loop = new AgentLoop(llm as any, {
+      runId: 'run-narr3', agentId: 'main', goal: 't',
+      tools: [echo], budget: { maxSteps: 5, maxTokens: 1_000_000 },
+      signal: new AbortController().signal,
+      onEvent: () => {},
+    });
+    const r = await loop.run();
+    expect(r.finalContent).toBe('The answer is 42.');
+    expect(r.steps).toBe(1);
+  });
+});

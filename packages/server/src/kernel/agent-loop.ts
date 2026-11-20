@@ -1013,13 +1013,23 @@ function preview(input: unknown): string {
 }
 
 /** 用户实测（fork）：判定"过渡话"——模型宣布要做某事但没带工具调用。
- * 特征：短文本 + 第一人称将来时/起始动词开头，且不含交付性结构 */
+ * 特征：短文本 + 整段开头或末句开头是第一人称将来时/起始动词，且不含交付性结构。
+ * GAIA 回归实测补充：队友消息会诱发"对话式开场 + 第二句才是计划"
+ * （"Good catch from the teammate — ... I'll stand it down, ..."）——
+ * 只锚定整段开头会漏判，因此补查末句开头；但必须**以**将来时开头（纯计划句）——
+ * "事实已核实，现在我会写报告"这类半交付（末句先陈述再承诺）归未竟任务守卫管。
+ * 中文句号后无空格 — 分句用 \s*（零宽亦切） */
 const NARRATION_MAX = 2;
+const NARRATION_FUTURE = /^(I'll|I will|I'm going to|Let me|Now I|Next I|First,? I|I plan to|Now,? let|我来|我将|我会|接下来|让我|现在我来|现在我会|现在我将|现在要|接下来我|马上我|我先)/i;
 function isPlanningNarration(content: string): boolean {
   const t = (content ?? '').trim();
   if (!t || t.length > 300) return false; // 长文是正经回答
   if (/^#|\|---|\n- |\n\n/.test(t)) return false; // 标题/表格/列表/多段 = 交付物
-  return /^(I'll|I will|Let me|Now I|Next I|First,? I|I'm going to|Now,? let|我来|我将|我会|接下来|让我|现在我来|现在我会|现在我将|现在要|接下来我|马上我|我先)/i.test(t);
+  if (NARRATION_FUTURE.test(t)) return true; // 传统形态：整段开头即计划
+  // 对话式开场形态：末句以将来时开头（纯计划句）才算
+  const sentences = t.split(/(?<=[.!?。！？])\s*/).map(s => s.trim()).filter(Boolean);
+  const last = sentences[sentences.length - 1] ?? '';
+  return sentences.length >= 2 && NARRATION_FUTURE.test(last);
 }
 
 // ─── 渐进预算提醒（分档收敛引导）──────────────────────────────────────────

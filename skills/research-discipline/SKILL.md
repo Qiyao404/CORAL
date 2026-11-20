@@ -1,7 +1,7 @@
 ---
 name: research-discipline
 version: "1.0.0"
-description: "研究纪律：多源数据比较、计数验证、历史考据、内容恢复的方法学。在做深度调研、事实核查、数据比较、多源交叉验证时参考本技能。"
+description: "研究纪律：多源数据比较、计数验证、历史考据、内容恢复（含视频字幕/转录获取）的方法学。在做深度调研、事实核查、数据比较、多源交叉验证、视频内容提取时参考本技能。"
 domain: research
 capabilities: [research_methodology, verification]
 input_schema:
