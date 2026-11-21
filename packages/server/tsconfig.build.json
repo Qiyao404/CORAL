@@ -15,6 +15,7 @@
     "src/index.ts",
     "src/mcp/serve.ts",
     "src/cli/doctor.ts",
+    "src/cli/compact.ts",
     "src/embedded.ts"
   ]
 }

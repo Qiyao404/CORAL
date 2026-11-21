@@ -147,4 +147,7 @@ export const zh: Record<string, string> = {
   'settings.memory.audit': '离线对账',
   'settings.memory.auditRunning': '对账中…',
   'settings.memory.auditDone': '对账完成：核对 {a} 条记忆，发现 {c} 处与历史轨迹矛盾，{p} 条改写提议待审',
+  'settings.budget.askTimeoutLabel': '反问等待超时（分钟）',
+  'settings.budget.askTimeoutPlaceholder': '默认 0（无限等待）',
+  'settings.budget.askTimeoutHint': 'Agent 反问时的最长等待；0 = 一直等你答，>0 超时后按推荐选项/最合理假设继续并标注假设',
 };

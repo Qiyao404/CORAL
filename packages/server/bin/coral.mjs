@@ -94,6 +94,21 @@ if (process.argv[2] === 'resume') {
   process.exit(0);
 }
 
+// ── 子命令：coral compact（数据库一次性压实：checkpoint 去重迁移 + 孤儿清理 + VACUUM；停服/空闲时执行）──
+if (process.argv[2] === 'compact') {
+  try {
+    const compactPath = join(serverRoot, 'dist', 'cli', 'compact.js');
+    if (!existsSync(compactPath)) {
+      fail(`compact 模块缺失: ${compactPath}\n  请先运行: npm run build -w packages/server`);
+    }
+    const { runCompact } = await import(`file:///${compactPath.replace(/\\/g, '/')}`);
+    await runCompact();
+    process.exit(0);
+  } catch (err) {
+    fail(`compact 执行失败: ${err?.message ?? err}`);
+  }
+}
+
 // ── 自检 1：构建产物 ──
 if (!existsSync(distIndex)) {
   fail(`server 构建产物缺失: ${distIndex}\n  请先运行: npm run build -w packages/server`);

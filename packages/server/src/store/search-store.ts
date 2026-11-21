@@ -76,6 +76,11 @@ export class SearchStore {
     tx();
   }
 
+  /** 删除 run 时清理其检索文档（FTS 无外键 — 引擎删除路径显式调用） */
+  deleteRun(runId: string): void {
+    this.stmt(`DELETE FROM search_docs WHERE run_id = ?`).run(runId);
+  }
+
   /**
    * 全文检索（trigram 子串匹配；查询过短 <3 字符时降级为 LIKE）。
    * 返回按 run 聚合的命中（每个 run 最多取 2 条片段），最新文档优先。

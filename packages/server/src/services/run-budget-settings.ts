@@ -14,6 +14,8 @@ export interface RunBudgetSettings {
   maxTokens: number | null;
   /** 步数上限；null = 跟随平台默认 */
   maxSteps: number | null;
+  /** 反问等待超时（分钟）；0 = 无限等待（默认），>0 超时后按推荐/假设继续 */
+  askUserTimeoutMin: number;
   updatedAt?: string;
 }
 
@@ -31,32 +33,35 @@ export class RunBudgetSettingsService {
 
   get(): RunBudgetSettings {
     try {
-      if (!existsSync(this.path)) return { maxTokens: null, maxSteps: null };
+      if (!existsSync(this.path)) return { maxTokens: null, maxSteps: null, askUserTimeoutMin: 0 };
       const parsed = JSON.parse(readFileSync(this.path, 'utf-8'));
       return {
         maxTokens: clampOrNull(parsed.maxTokens, LIMITS.maxTokens),
         maxSteps: clampOrNull(parsed.maxSteps, LIMITS.maxSteps),
+        askUserTimeoutMin: clampNonNeg(parsed.askUserTimeoutMin),
         ...(typeof parsed.updatedAt === 'string' ? { updatedAt: parsed.updatedAt } : {}),
       };
     } catch {
-      return { maxTokens: null, maxSteps: null }; // 损坏按未设置处理
+      return { maxTokens: null, maxSteps: null, askUserTimeoutMin: 0 }; // 损坏按未设置处理
     }
   }
 
   /** 生效值解析（设置 > 平台默认），供 run-engine 直接取用 */
-  effective(): { maxTokens: number; maxSteps: number } {
+  effective(): { maxTokens: number; maxSteps: number; askUserTimeoutMin: number } {
     const s = this.get();
     return {
       maxTokens: s.maxTokens ?? platformConfig.runMaxTokens,
       maxSteps: s.maxSteps ?? platformConfig.runMaxSteps,
+      askUserTimeoutMin: s.askUserTimeoutMin ?? 0,
     };
   }
 
-  set(patch: { maxTokens?: number | null; maxSteps?: number | null }): RunBudgetSettings {
+  set(patch: { maxTokens?: number | null; maxSteps?: number | null; askUserTimeoutMin?: number }): RunBudgetSettings {
     const cur = this.get();
     const next: RunBudgetSettings = {
       maxTokens: patch.maxTokens === undefined ? cur.maxTokens : clampOrNull(patch.maxTokens, LIMITS.maxTokens),
       maxSteps: patch.maxSteps === undefined ? cur.maxSteps : clampOrNull(patch.maxSteps, LIMITS.maxSteps),
+      askUserTimeoutMin: patch.askUserTimeoutMin === undefined ? cur.askUserTimeoutMin : clampNonNeg(patch.askUserTimeoutMin),
       updatedAt: new Date().toISOString(),
     };
     const dir = dirname(this.path);
@@ -72,4 +77,11 @@ function clampOrNull(v: unknown, lim: { min: number; max: number }): number | nu
   if (!Number.isFinite(n)) return null;
   if (n === 0) return 0; // 0 = 无上限（合法特殊值）
   return Math.min(Math.max(Math.round(n), lim.min), lim.max);
+}
+
+/** 非负整数（负数/非法 → 0）；反问等待超时用：0 = 无限等待 */
+function clampNonNeg(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.min(Math.round(n), 24 * 60);
 }

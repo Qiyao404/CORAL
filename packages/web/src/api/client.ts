@@ -48,7 +48,7 @@ export const api = {
   commands: () => request<{ items: Array<{ name: string; description: string; argumentHint?: string }> }>('/commands'),
   // 运行预算（设置页）
   getRunBudget: () => request<any>('/settings/run-budget'),
-  saveRunBudget: (payload: { maxTokens?: number | null; maxSteps?: number | null }) =>
+  saveRunBudget: (payload: { maxTokens?: number | null; maxSteps?: number | null; askUserTimeoutMin?: number }) =>
     request<any>('/settings/run-budget', { method: 'PUT', body: JSON.stringify(payload) }),
   // 会话产物（回复底部的"本次生成文件"chips）
   sessionArtifacts: (sessionId: string) =>
@@ -249,6 +249,20 @@ export const api = {
     request<any>(`/runs/${runId}/events?afterSeq=${afterSeq}`),
   cancelRun: (runId: string) =>
     request<any>(`/runs/${runId}/cancel`, { method: 'POST' }),
+  // 反问（ask_user）：待答问题与作答
+  listRunQuestions: (runId: string) =>
+    request<{ items: Array<{ questionId: string; question: string; options: Array<{ label: string; description?: string; recommended?: boolean }>; allowMultiple: boolean }> }>(`/runs/${runId}/questions`),
+  answerRunQuestion: (runId: string, questionId: string, body: { choice?: number[]; free?: string }) =>
+    request<{ ok: boolean; message: string }>(`/runs/${runId}/questions/${questionId}/answer`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  // 运行中用户补充（立即补充）：进入注入邮箱，下一步边界送达模型
+  injectRunInput: (runId: string, content: string) =>
+    request<{ ok: boolean; message: string; queued: number }>(`/runs/${runId}/input`, {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    }),
   deleteRun: (runId: string) =>
     request<any>(`/runs/${runId}`, { method: 'DELETE' }),
   deleteSession: (sessionId: string) =>

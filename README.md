@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **版本：v2.5.0** · [快速导览（DEMO.md）](DEMO.md) · [CHANGELOG](CHANGELOG.md)
+> **版本：v2.6.0** · [快速导览（DEMO.md）](DEMO.md) · [CHANGELOG](CHANGELOG.md)
 > **定位：本地优先、单命令启动、单文件存储的个人级 Agent 运行时**
 
 ---
@@ -142,6 +142,15 @@ FTS5 trigram 索引（中英混合子串匹配）：run 终态时把目标、最
 - **记忆离线对账**：设置页一键触发，逐条记忆对照历史 run 的检索投影（FTS5）核对——LLM 判定一致 / 矛盾 / 无法验证（证据缺失不视为矛盾，防误报），矛盾时生成改写提议入演化队列（同文件至多一条未决），证据原文引用供人复核；批准后原文件备份 `.history/` 再改写。
 - **恢复指令**：fork 回放与会话续接的 run（绑定工作区时）在目标后注入系统指令——历史是快照不是现实，任何有外部副作用的动作（写文件、发消息、建 issue/PR）前先核对当前真实状态，不盲目重复可能已应用的动作；指令随 checkpoint 持久化。
 
+**30. 运行中输入与反问（人机全双工）**
+两条互补通道把"执行中只能干等"变为双向协作：
+
+- **运行中输入**：run 执行中发送不再静默开启并行第二个 run——弹出选择条由用户定夺：**立即补充**（消息进入该 run 的注入邮箱，在下一步边界与 teammate 消息同门送达——不丢、不打断正在执行的步骤、前缀缓存零失效；若补充大改方向，注入自带"先重写任务清单再继续"引导，UI 实时可见清单重排）或**排队**（终态后自动作为下一轮续接发出）。事件全程留痕（`run.user_input_received/injected`）。
+- **反问（ask_user 工具）**：模型在高影响、凭猜测代价大的分歧点上主动向用户提问——选择题 + 推荐位 + 自由补充伪选项，多问共存可切换。设计为**工具而非技能**（工具定义随每次请求在场，不存在"该问却没调到技能"的错过）；与审批同生命周期（挂起 waiting_human → 人作答 → 恢复）。守卫：每任务上限 3 问（防反问变逃逸口）、评测/自动化会话不挂起直接按最合理假设继续并注明、等待超时用户可配（默认无限等待）；"能自己查到的别问"纪律写在工具描述（实测：长期记忆已有偏好时模型主动不问并解释原因）。问答作为工具结果落入 checkpoint——Time-Travel fork 到提问前即可改答案重跑（提问发生在第一步时支持 fromSeq=0 起点重放）。
+
+**31. Checkpoint 去重存储与数据库压实**
+checkpoint 此前每步存全量消息快照，相邻步 90%+ 内容重复——单 run 存储 O(步数²)，实测 2.1GB 库 93% 被 checkpoint 占据。现消息按内容哈希存入 `checkpoint_messages`（每 run 一份，级联删除），checkpoint 只存引用列表（O(n²)→O(n)）；旧内联格式读取兼容。`coral compact` 一条命令完成存量迁移 + 孤儿清理（含全文索引/证据目录的删除级联补全）+ VACUUM 还给磁盘——实测 2089.3MB → 222.6MB（-89.3%）。
+
 ---
 
 ## 功能范围
@@ -153,6 +162,8 @@ FTS5 trigram 索引（中英混合子串匹配）：run 终态时把目标、最
 - **命令执行**：可选启用 shell 工具（每次执行均需审批）
 - **网络访问**：抓取任意 URL 并阅读正文；被封页面自动走恢复阶梯（存档副本 → 同站 API → 换源）
 - **运行收敛**：步数预算 70%/85% 分档提醒（合并收敛 / 停止探索准备交付）；压缩摘要自带回查路标；带历史恢复的 run 注入副作用核对指令
+- **人机全双工**：任务执行中随时插话（立即补充=步边界注入不打断当前步骤 / 排队=终态续接）；模型高影响分歧时主动反问（选择题+推荐+自由补充，≤3 问/任务，超时可配）；Time-Travel 可 fork 改答案重跑
+- **存储治理**：checkpoint 消息内容寻址去重（单 run O(步数²)→O(n)）+ `coral compact` 一键压实（实测 2.1GB→223MB）
 - **多代理团队**：`team_spawn` 后台具名队友并行执行、步边界消息投递、共享任务板（无环 DAG + 乐观锁）、`team_wait` 收割——整队 token 看门狗防失控
 - **经历回溯**：`session_search` 跨全部历史会话全文检索——"我们之前讨论过的那个方案"直接命中原始轨迹与最终回答
 - **自进化**：运行后蒸馏管线从失败经验起草技能修订、从复杂任务沉淀新技能、从对话提炼画像增补——全部人审落地；技能版本历史 + diff + 一键回滚
@@ -237,13 +248,13 @@ npm run dev            # 后端 3001 + 前端 5173
 | 持久化 | SQLite（better-sqlite3，WAL 模式，schema 版本化迁移） |
 | Skill | YAML frontmatter（gray-matter）+ chokidar 热重载 |
 | 进度协议 | 自研 `[CORAL_PROGRESS]` stderr 单行 JSON 协议（Python + Node 双 SDK，见 [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)） |
-| 质量 | Vitest（480 用例）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
+| 质量 | Vitest（496 用例）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
 
 ---
 
 ## 测试与基准
 
-- **测试**：480 个用例（Vitest），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时 / 外部守卫 / 团队协作等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
+- **测试**：496 个用例（Vitest），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时 / 外部守卫 / 团队协作等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
 - **GAIA 基准**：[docs/GAIA.md](./docs/GAIA.md) —— 官方 GAIA benchmark validation split，**87.1%**（85 题，确定性 exact match）。L1 90.2% / L2 96.2% / L3 66.7%。
 - **性能基准**：[docs/BENCHMARK.md](./docs/BENCHMARK.md) —— 上下文压缩收益（1.2MB 历史 → 169KB，-86%）、SQLite WAL 与 JSONL 持久化吞吐。脚本：`npx tsx scripts/benchmark.mts`。
 

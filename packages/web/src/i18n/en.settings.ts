@@ -147,4 +147,7 @@ export const en: Record<string, string> = {
   'settings.memory.audit': 'Offline audit',
   'settings.memory.auditRunning': 'Auditing…',
   'settings.memory.auditDone': 'Audit done: {a} entries checked, {c} contradictions found, {p} rewrite proposals pending',
+  'settings.budget.askTimeoutLabel': 'Ask-user timeout (minutes)',
+  'settings.budget.askTimeoutPlaceholder': 'Default 0 (wait indefinitely)',
+  'settings.budget.askTimeoutHint': 'Max wait when the agent asks you a question; 0 = wait forever, >0 = proceed with the recommended/best guess and state the assumption',
 };

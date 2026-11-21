@@ -120,6 +120,30 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
     };
   });
 
+  // 反问（ask_user）：待答问题列表（前端刷新恢复）+ 作答（choice 下标数组 / free 自由文本）
+  app.get('/api/runs/:runId/questions', async (request) => {
+    const { runId } = request.params as any;
+    return { items: engine.listPendingQuestions(runId) };
+  });
+
+  app.post('/api/runs/:runId/questions/:questionId/answer', async (request, reply) => {
+    const { runId, questionId } = request.params as any;
+    const body = (request.body || {}) as { choice?: number[]; free?: string };
+    const r = engine.answerQuestion(runId, questionId, body);
+    if (!r.ok) return reply.status(400).send({ error: r.message });
+    return r;
+  });
+
+  // 运行中用户补充（立即补充）：进入该 run 的注入邮箱，下一步边界送达模型
+  //（终态 run 返回 409 — 前端引导走"排队→续接下一轮"）
+  app.post('/api/runs/:runId/input', async (request, reply) => {
+    const { runId } = request.params as any;
+    const body = (request.body || {}) as { content?: string };
+    const r = engine.injectUserInput(runId, String(body.content ?? ''));
+    if (!r.ok) return reply.status(409).send({ error: r.message });
+    return r;
+  });
+
   app.post('/api/runs/:runId/cancel', async (request, reply) => {
     const { runId } = request.params as any;
     const run = engine.store.get(runId);
@@ -172,12 +196,17 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
     if (run.mode !== 'free') return reply.status(400).send({ error: 'Time-Travel fork 仅支持 free 模式 run（graph 用 resume）' });
 
     const fromSeq = Number(body.fromSeq);
-    if (!Number.isInteger(fromSeq)) return reply.status(400).send({ error: '需要 fromSeq（checkpoint 序号）' });
-    const state = engine.checkpoints.get(runId, fromSeq);
-    if (!state?.messages?.length) return reply.status(404).send({ error: `checkpoint ${fromSeq} 不存在或无消息` });
+    if (!Number.isInteger(fromSeq) || fromSeq < 0) return reply.status(400).send({ error: '需要 fromSeq（checkpoint 序号；0 = 从任务起点重放）' });
+    // fromSeq=0：任务起点重放（无中间历史）— 模式A 改答的边界情形：
+    // 模型第一步就 ask_user 时，"提问前"就是起点（checkpoint 编号从 1 起）。
+    // 必须种入原始目标 — 否则 fork 拿不到任务本身（实测：模型只能自由发挥）
+    const state: { messages?: Array<{ role: string; content: string }>; system?: string } | null = fromSeq === 0
+      ? { messages: [{ role: 'user', content: run.goal }] }
+      : engine.checkpoints.get(runId, fromSeq);
+    if (!state || (fromSeq > 0 && !state.messages?.length)) return reply.status(404).send({ error: `checkpoint ${fromSeq} 不存在或无消息` });
 
     // 追加 fork 指令（作为新的 user 消息 — 模型带着旧上下文执行新方向）
-    const history = [...state.messages];
+    const history: Array<{ role: string; content: string }> = [...(state.messages ?? [])];
     const instruction = String(body.instruction ?? '').trim();
     if (instruction) {
       history.push({ role: 'user', content: instruction });
@@ -206,7 +235,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
         workspaceId,
         parentRunId: runId,
         forkFromSeq: fromSeq,
-        initialHistory: history,
+        initialHistory: history as any,
         // 精确重放：源 checkpoint 记录了当时的系统提示 → fork 一字不差复现
         ...(state.system ? { forkSystem: state.system } : {}),
       });

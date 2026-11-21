@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **Version: v2.5.0** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
+> **Version: v2.6.0** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
 > **Positioning: a local-first, single-command, single-file-storage personal agent runtime**
 
 ---
@@ -21,6 +21,8 @@ CORAL is an LLM-powered personal agent runtime: it takes a natural-language goal
 - **Long-term memory**: full lifecycle governance — admission gate → auto-filing → consolidation → automation isolation → usage tracking (hit count / possibly-misleading / stale badges) → offline audit (cross-check against run history, rewrites go through human review); memory is plain editable Markdown
 - **Experience recall**: `session_search` full-text search across ALL past conversations (FTS5, CN/EN) — "that plan we discussed" hits the original trail
 - **Runtime convergence**: tiered budget reminders at 70%/85% of steps (consolidate / stop exploring and deliver); compression summaries carry recall signposts; runs resumed with history get a verify-before-side-effects note
+- **Full-duplex collaboration**: interject anytime while a task runs (inject-now = step-boundary delivery without interrupting; queue = continue next turn); the model asks back at high-impact forks (choice + recommended + free text, ≤3/task, configurable timeout); Time-Travel fork to re-run with a different answer
+- **Storage governance**: content-addressed checkpoint messages (per-run O(steps²)→O(n)) + one-command `coral compact` (measured 2.1GB→223MB)
 - **Multi-agent teams**: background named teammates running in parallel, step-boundary messaging, acyclic task board (CAS + optimistic locking), team-token watchdog
 - **Exact replay**: every checkpoint carries the system prompt + model config; Time-Travel forks reproduce historical context verbatim
 - **Observability**: streaming + event sourcing (fully persisted, replayable, exportable as Markdown or training-ready JSONL trajectories)
@@ -143,6 +145,15 @@ Six incremental mechanisms covering loss-stopping within a single run, compressi
 - **Offline memory audit**: one click in Settings checks each memory entry against the search projection of historical runs (FTS5) — an LLM rules consistent / contradictory / unverifiable (missing evidence is NOT contradiction, preventing false positives); contradictions produce rewrite proposals in the evolution queue (at most one pending per file) with verbatim evidence quotes for human review; accepting backs up the original to `.history/` before rewriting.
 - **Recovery note**: runs that resume with history (Time-Travel fork / session continuation) and have a workspace bound get a system note injected after the goal — history is a snapshot, not the present: verify the current real state before any externally-visible side effect (writing files, sending messages, creating issues/PRs), and never blindly repeat an action that may already have been applied; the note persists in checkpoints.
 
+**30. Runtime input & ask-back (full-duplex human-agent collaboration)**
+Two complementary channels turn "wait until it finishes" into bidirectional collaboration:
+
+- **Runtime follow-ups**: sending while a run executes no longer silently starts a second parallel run — a choice bar lets the user decide: **Inject now** (the message enters that run's injection inbox and is delivered at the next step boundary through the same gate as teammate messages — never lost, never interrupting the current step, zero prefix-cache invalidation; if the follow-up changes direction significantly, the injection carries a "rewrite your todo list first" nudge and the UI shows the re-plan live) or **Queue** (auto-sent as the next continuation turn after terminal state). Fully event-logged (`run.user_input_received/injected`).
+- **Ask-back (ask_user tool)**: the model proactively asks the user at high-impact decision points where guessing is expensive — multiple choice + recommended marker + free-text pseudo-option, multiple questions coexist with switching. Designed as a **tool, not a skill** (tool definitions are present on every request — no "should have asked but never invoked the skill" miss); shares the approval lifecycle (suspend waiting_human → human answers → resume). Guardrails: ≤3 questions per task (asking can't become an escape hatch), evaluation/automation sessions never block (proceed with a stated best-guess assumption), user-configurable wait timeout (default: wait indefinitely); the "don't ask what you can look up yourself" discipline lives in the tool description (verified live: when long-term memory already held the preference, the model declined to ask and explained why). Q&A lands in checkpoints as tool results — fork from before the question to re-run with a different answer (fromSeq=0 origin replay supported when the question was the first step).
+
+**31. Content-addressed checkpoint storage & database compaction**
+Checkpoints previously stored a full message snapshot every step with 90%+ overlap between adjacent steps — per-run storage was O(steps²), and a measured 2.1GB database was 93% checkpoints. Messages are now stored once per run by content hash in `checkpoint_messages` (cascade-deleted with the run) while checkpoints keep only reference lists (O(n²)→O(n)); legacy inline format remains readable. `coral compact` performs legacy migration + orphan cleanup (including full-text-index/evidence-directory cascade fixes) + VACUUM in one command — measured 2089.3MB → 222.6MB (−89.3%).
+
 ---
 
 ## Feature Scope
@@ -242,13 +253,13 @@ Verified against DeepSeek and DashScope; any OpenAI-compatible endpoint (OpenRou
 | Persistence | SQLite (better-sqlite3, WAL mode, versioned schema migrations) |
 | Skills | YAML frontmatter (gray-matter) + chokidar hot reload |
 | Progress protocol | in-house `[CORAL_PROGRESS]` single-line stderr JSON protocol (Python + Node SDKs, see [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)) |
-| Quality | Vitest (480 cases) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
+| Quality | Vitest (496 cases) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
 
 ---
 
 ## Tests & Benchmarks
 
-- **Tests**: 480 cases (Vitest) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
+- **Tests**: 496 cases (Vitest) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
 - **GAIA benchmark**: [docs/GAIA.md](./docs/GAIA.md) — official GAIA benchmark validation split, **87.1%** (85 questions, deterministic exact match). L1 90.2% / L2 96.2% / L3 66.7%.
 - **Performance**: [docs/BENCHMARK.md](./docs/BENCHMARK.md) — context-compression gains (1.2MB history → 169KB, −86%), SQLite WAL and JSONL persistence throughput. Script: `npx tsx scripts/benchmark.mts`.
 

@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Bot, Send, FolderOpen, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight,
   Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type, Trash2, MessageSquare,
-  FolderPlus, Activity, ChevronDown as ChevronDownIcon, GitBranch, Database, Coins, FileText, Download, Wand2,
+  FolderPlus, Activity, ChevronDown as ChevronDownIcon, GitBranch, Database, Coins, FileText, Download, Wand2, Zap, Inbox, HelpCircle, PenLine,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState, Modal, Input } from '../components/ui';
@@ -399,8 +399,70 @@ export default function ChatPage() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [events.length, view.finalContent]);
 
-  const submit = async () => {
-    if (!goal.trim() || submitting) return;
+  // ── 反问（ask_user）：从事件流派生待答问题，问题卡显示在输入框上方 ──────
+  interface PendingQuestion {
+    questionId: string;
+    question: string;
+    options: Array<{ label: string; description?: string; recommended?: boolean }>;
+    allowMultiple: boolean;
+  }
+  const pendingQuestions = useMemo(() => {
+    const byId = new Map<string, PendingQuestion>();
+    for (const e of events) {
+      const p: any = e.payload ?? {};
+      if (e.type === 'question.asked' && p.questionId) {
+        byId.set(p.questionId, { questionId: p.questionId, question: String(p.question ?? ''), options: Array.isArray(p.options) ? p.options : [], allowMultiple: Boolean(p.allowMultiple) });
+      } else if (e.type === 'question.answered' && p.questionId) {
+        byId.delete(p.questionId);
+      }
+    }
+    return [...byId.values()];
+  }, [events]);
+  const [activeQIdx, setActiveQIdx] = useState(0);
+  const [qDrafts, setQDrafts] = useState<Record<string, { selected: number[]; free: string }>>({});
+  const activeQ = pendingQuestions[Math.min(activeQIdx, Math.max(0, pendingQuestions.length - 1))] ?? null;
+  const activeQDraft = (activeQ && qDrafts[activeQ.questionId]) || { selected: [], free: '' };
+  const submitAnswer = async () => {
+    if (!activeRunId || !activeQ) return;
+    const d = activeQDraft;
+    if (!d.free.trim() && d.selected.length === 0) return;
+    try {
+      await api.answerRunQuestion(activeRunId, activeQ.questionId, {
+        ...(d.free.trim() ? { free: d.free.trim() } : { choice: d.selected }),
+      });
+      setQDrafts(prev => { const n = { ...prev }; delete n[activeQ.questionId]; return n; });
+      setActiveQIdx(0);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  // ── 运行中输入三态（立即补充 / 排队 / 正常发送）──────────────────────
+  // run 执行中发送不再静默开并行第二个 run —— 弹选择条由用户定夺
+  const [pendingSend, setPendingSend] = useState<string | null>(null);   // 待选择动作的文本
+  const [queuedFollowUp, setQueuedFollowUp] = useState<string | null>(null); // 排队：终态后自动发送
+  const [injectNote, setInjectNote] = useState<string | null>(null);     // 操作反馈（短暂显示）
+  const runExecuting = Boolean(activeRunId) && !view.runStatus;
+
+  // 终态联动：排队的补充自动作为下一轮发出（会话上下文续接）
+  const runStatusNow = view.runStatus;
+  useEffect(() => {
+    if (!runStatusNow || !['completed', 'failed', 'cancelled'].includes(runStatusNow)) return;
+    if (queuedFollowUp) {
+      const text = queuedFollowUp;
+      setQueuedFollowUp(null);
+      void sendGoal(text);
+    }
+    // 选择条打开期间任务结束：文本退回输入框正常发送（不再需要选择）
+    if (pendingSend) {
+      setGoal(pendingSend);
+      setPendingSend(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [runStatusNow]);
+
+  const sendGoal = async (rawText: string) => {
+    if (!rawText.trim() || submitting) return;
     setSubmitting(true);
     try {
       // 修复（用户反馈）：无会话时生成一个并记住 — 连续多次对话落在同一会话
@@ -413,7 +475,7 @@ export default function ChatPage() {
         : undefined;
       // @ 引用注入：把消息里的 @文件 解析为工作区路径，指示 agent 开工前先读
       //（若该文件在本会话已分析过，会话上下文已有摘要 — 指令同时覆盖两种情况）
-      const rawGoal = goal.trim();
+      const rawGoal = rawText.trim();
       const atRefs: string[] = [];
       const goalWithRefs = rawGoal.replace(/@([^\s@，。,]+)/g, (whole, token: string) => {
         const hit = wsFiles.find(f => f.rel === token || f.name === token)
@@ -449,6 +511,46 @@ export default function ChatPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // 发送入口：run 执行中 → 弹选择条（立即补充/排队），不再静默开并行 run
+  const submit = () => {
+    if (!goal.trim() || submitting) return;
+    if (runExecuting) { setPendingSend(goal.trim()); setGoal(''); return; }
+    void sendGoal(goal.trim());
+  };
+
+  // 立即补充：进入当前 run 的注入邮箱（下一步边界送达模型）
+  const chooseInject = async () => {
+    if (!pendingSend || !activeRunId) return;
+    try {
+      const r = await api.injectRunInput(activeRunId, pendingSend);
+      setInjectNote(t('chat.injectDone', { n: r.queued }));
+      setPendingSend(null);
+      setTimeout(() => setInjectNote(null), 6000);
+    } catch (err: any) {
+      // 竞态：注入瞬间 run 恰好终态 → 降级为正常发送
+      setInjectNote(t('chat.injectFallback'));
+      const text = pendingSend;
+      setPendingSend(null);
+      setTimeout(() => setInjectNote(null), 6000);
+      void sendGoal(text);
+    }
+  };
+
+  // 排队：终态后自动作为下一轮发出（useEffect 监听 runStatus）
+  const chooseQueue = () => {
+    if (!pendingSend) return;
+    setQueuedFollowUp(pendingSend);
+    setPendingSend(null);
+    setInjectNote(t('chat.queuedDone'));
+    setTimeout(() => setInjectNote(null), 6000);
+  };
+
+  const cancelPendingSend = () => {
+    if (!pendingSend) return;
+    setGoal(pendingSend); // 文本退回输入框
+    setPendingSend(null);
   };
 
   const decide = async (approvalId: string, approved: boolean) => {
@@ -904,6 +1006,102 @@ export default function ChatPage() {
                 </div>
               </div>
             )}
+            {/* 反问问题卡：选择题 + 推荐位 + 自由补充；多问共存可切换 */}
+            {activeQ && activeRunId && (
+              <div className="mb-2 p-3 rounded-lg border border-amber-400/40 bg-amber-400/5">
+                <div className="flex items-center gap-2 mb-2">
+                  <HelpCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                  <p className="text-xs font-medium text-fg-primary flex-1">{activeQ.question}</p>
+                  {pendingQuestions.length > 1 && (
+                    <span className="text-[10px] px-1.5 py-px rounded bg-bg-elev/60 text-fg-muted shrink-0">
+                      {t('chat.askCounter', { i: pendingQuestions.indexOf(activeQ) + 1, n: pendingQuestions.length })}
+                    </span>
+                  )}
+                </div>
+                {pendingQuestions.length > 1 && (
+                  <div className="flex gap-1 mb-2 flex-wrap">
+                    {pendingQuestions.map((q, i) => (
+                      <button
+                        key={q.questionId}
+                        onClick={() => setActiveQIdx(i)}
+                        className={`text-[10px] px-2 py-0.5 rounded-full cursor-pointer ${q.questionId === activeQ.questionId ? 'bg-amber-400/20 text-amber-500' : 'bg-bg-elev/50 text-fg-muted hover:bg-bg-elev'}`}
+                      >
+                        {t('chat.askTab', { n: i + 1 })}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                <div className="space-y-1">
+                  {activeQ.options.map((o, i) => {
+                    const checked = activeQDraft.selected.includes(i);
+                    return (
+                      <label
+                        key={i}
+                        className={`flex items-start gap-2 p-2 rounded-md cursor-pointer text-xs ${checked ? 'bg-amber-400/10 border border-amber-400/40' : 'hover:bg-bg-elev/40 border border-transparent'}`}
+                        onClick={() => setQDrafts(prev => {
+                          const cur = prev[activeQ.questionId] ?? { selected: [], free: '' };
+                          let selected: number[];
+                          if (activeQ.allowMultiple) {
+                            selected = checked ? cur.selected.filter(x => x !== i) : [...cur.selected, i];
+                          } else {
+                            selected = checked ? [] : [i];
+                          }
+                          return { ...prev, [activeQ.questionId]: { ...cur, selected } };
+                        })}
+                      >
+                        <span className={`w-3.5 h-3.5 mt-px shrink-0 border ${activeQ.allowMultiple ? 'rounded' : 'rounded-full'} flex items-center justify-center ${checked ? 'bg-amber-400 border-amber-400' : 'border-fg-disabled'}`}>
+                          {checked && <CheckCircle2 className="w-3 h-3 text-white" />}
+                        </span>
+                        <span className="flex-1">
+                          <span className="text-fg-primary">{o.label}</span>
+                          {o.recommended && <span className="ml-1.5 text-[10px] text-amber-400">★ {t('chat.askRecommended')}</span>}
+                          {o.description && <span className="block text-[11px] text-fg-muted mt-0.5">{o.description}</span>}
+                        </span>
+                      </label>
+                    );
+                  })}
+                  {/* 自由补充伪选项：觉得都不对时自己写 */}
+                  <div className={`p-2 rounded-md text-xs border ${activeQDraft.free ? 'bg-amber-400/10 border-amber-400/40' : 'border-transparent'}`}>
+                    <label className="flex items-center gap-2 text-fg-muted">
+                      <PenLine className="w-3.5 h-3.5 shrink-0" />
+                      {t('chat.askFreeLabel')}
+                    </label>
+                    <input
+                      value={activeQDraft.free}
+                      onChange={e => setQDrafts(prev => ({ ...prev, [activeQ.questionId]: { ...(prev[activeQ.questionId] ?? { selected: [], free: '' }), free: e.target.value } }))}
+                      placeholder={t('chat.askFreePlaceholder')}
+                      className="mt-1.5 w-full text-xs bg-bg-elev/50 border border-glass-border rounded px-2 py-1.5 outline-none focus:border-brand/50"
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 mt-2">
+                  <Button size="sm" onClick={submitAnswer} disabled={!activeQDraft.free.trim() && activeQDraft.selected.length === 0}>
+                    {t('chat.askSubmit')}
+                  </Button>
+                  <span className="text-[10px] text-fg-muted">{t('chat.askHint')}</span>
+                </div>
+              </div>
+            )}
+            {/* 运行中输入选择条：run 执行中发送 → 立即补充（注入当前任务）/ 排队（终态后自动发送） */}
+            {pendingSend && (
+              <div className="mb-2 p-2.5 rounded-lg border border-brand/40 bg-brand-soft/30">
+                <p className="text-xs text-fg-secondary mb-2 truncate" title={pendingSend}>
+                  “{pendingSend.length > 80 ? pendingSend.slice(0, 80) + '…' : pendingSend}”
+                </p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button size="sm" onClick={chooseInject} icon={<Zap className="w-3.5 h-3.5" />}>{t('chat.injectNow')}</Button>
+                  <Button size="sm" variant="ghost" onClick={chooseQueue} icon={<Inbox className="w-3.5 h-3.5" />}>{t('chat.injectQueue')}</Button>
+                  <Button size="sm" variant="ghost" onClick={cancelPendingSend}>{t('chat.injectCancel')}</Button>
+                  <span className="ml-auto text-[11px] text-fg-muted">{t('chat.injectHint')}</span>
+                </div>
+              </div>
+            )}
+            {queuedFollowUp && (
+              <p className="mb-1.5 text-[11px] text-fg-muted flex items-center gap-1">
+                <Inbox className="w-3 h-3" /> {t('chat.queuedWaiting')}：“{queuedFollowUp.length > 40 ? queuedFollowUp.slice(0, 40) + '…' : queuedFollowUp}”
+              </p>
+            )}
+            {injectNote && <p className="mb-1.5 text-[11px] text-status-success">{injectNote}</p>}
             <Textarea
               value={goal}
               onChange={e => {

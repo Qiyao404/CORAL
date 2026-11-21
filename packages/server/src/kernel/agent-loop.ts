@@ -63,10 +63,11 @@ export interface AgentLoopOptions {
   /** 精确重放：本 run 的模型配置快照（落 checkpoint，供审计与 TimeTravel 展示） */
   modelInfo?: { model: string; provider?: string; baseUrl?: string; profileId?: string };
   /**
-   * 团队邮箱（Teams）：每步 LLM 调用前排空收件箱，命中则注入为 user 消息。
-   * 由 run-engine 注入 TeamService 的 drain 闭包（主循环 'main'，子代理各 agentId）。
+   * 团队/用户邮箱（步边界投递）：下一轮请求前排空收件箱，命中注入为 user 消息。
+   * 由 run-engine 注入 TeamService.drain 与"运行中用户补充"的合流闭包。
+   * kind='user' 为用户立即补充（前缀 [user follow-up]；teammate 缺省保持原格式）。
    */
-  pollInbox?: () => Array<{ from: string; content: string }> | Promise<Array<{ from: string; content: string }>>;
+  pollInbox?: () => Array<{ from: string; content: string; kind?: 'user' }> | Promise<Array<{ from: string; content: string; kind?: 'user' }>>;
   /** 记忆 nudge 周期（步）：长任务进行中提醒持久化可复用知识；默认 12，0 = 关闭，最多提醒 2 次 */
   memoryNudgeEvery?: number;
   /** 多轮续接：本会话此前的对话历史（含上一轮的 goal/工具结果/最终回答），种子在新 goal 之前 */
@@ -367,14 +368,21 @@ export class AgentLoop {
           }
         }
 
-        // 团队邮箱（步边界投递）：下一轮请求前排空收件箱，命中注入为 user 消息。
+        // 团队/用户邮箱（步边界投递）：下一轮请求前排空收件箱，命中注入为 user 消息。
         // 放在压缩之后、请求组装之前 — 消息进入本轮上下文，不丢不打断
         if (this.options.pollInbox) {
           try {
             const incoming = await this.options.pollInbox();
             for (const msg of incoming) {
-              messages.push({ role: 'user', content: `[teammate message from ${msg.from}]\n${msg.content}` });
-              this.emit('team.message_delivered', { to: this.options.agentId, from: msg.from, chars: msg.content.length });
+              messages.push({
+                role: 'user',
+                content: msg.kind === 'user'
+                  ? `[user follow-up]\n${msg.content}`
+                  : `[teammate message from ${msg.from}]\n${msg.content}`,
+              });
+              this.emit(msg.kind === 'user' ? 'run.user_input_injected' : 'team.message_delivered', {
+                to: this.options.agentId, ...(msg.kind === 'user' ? {} : { from: msg.from }), chars: msg.content.length,
+              });
             }
           } catch { /* 邮箱故障不伤主循环 */ }
         }

@@ -4,6 +4,7 @@ import m002 from './002-run-session.js';
 import m003 from './003-run-workspace.js';
 import m004 from './004-triggers.js';
 import m005 from './005-session-search.js';
+import m006 from './006-checkpoint-dedup.js';
 
 /** 全部迁移 — 按版本号升序由 migrate() 应用；新迁移只允许追加，禁止修改已发布版本 */
-export const MIGRATIONS: Migration[] = [m001, m002, m003, m004, m005];
+export const MIGRATIONS: Migration[] = [m001, m002, m003, m004, m005, m006];

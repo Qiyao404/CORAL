@@ -4,7 +4,7 @@
 
 > Audience: you (verification) and interviewers/friends (demo). Ordered by "performance impact" — each act takes 1-3 minutes, all doable in a browser + one terminal.
 > Prereq: service running (http://127.0.0.1:3001) with a real model in `.env` (demo mode halves the effect).
-> Covers: v2.5.0. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
+> Covers: v2.6.0. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
 
 ---
 
@@ -202,7 +202,21 @@ Search for plain-language explanations of these four concepts — entropy, photo
 2. "Possibly misleading" is **weak attribution**: a failed task is not necessarily the memory's fault, so it only gets a red badge and is **never auto-deleted** — disposal always stays with the user
 3. Human gate end to end: audit → proposal → your approval → backup → rewrite; nothing ever applies silently
 
-## Act 17 (closing line)
+## Act 17: Two-way interruption (runtime follow-ups × ask-back confirmation)
+
+**Play**:
+1. Start a multi-step task (Act 1's /research). While it runs, type one more line in the input box — "only 2024 data" — and on the popup bar click **⚡ Inject now**: the message enters the running task at the **next step boundary** (never interrupting the current step; event `run.user_input_injected` logged). **📥 Queue for next turn** auto-sends it as the next round when this run finishes
+2. Flip the direction — have it ask you: type "use ask_user to ask me a question first" — a **question card** appears above the input: multiple-choice + ★ recommended + an "Other (free text)" box; submitting resumes the task immediately, and your answer enters the conversation as a tool result
+3. Multiple questions coexist: switch between them via the pills at the top of the card (Q1 / Q2), answer in any order
+4. Settings → run-budget card gains an **ask-user timeout** (default 0 = wait indefinitely; >0 = proceed with the recommended/best guess after the timeout and state the assumption)
+
+**Why it's impressive**:
+1. **Inject now** shares the same gate as teammate messages (step boundary: never lost, never interrupting); if the follow-up changes direction significantly, the injection carries a "rewrite your todo list first" nudge — you watch the checklist re-plan live in the UI
+2. Asking back is a **tool, not a skill** — tool definitions are present on every request, so there is no "should have asked but never invoked the skill" miss; only high-impact decisions get asked (≤3 per task, so asking can't become an escape hatch); evaluation/automation sessions never block — the model proceeds with a stated assumption
+3. Q&A lands in checkpoints — fork from the step before the question to **re-run with a different answer** (same start point, controlled comparison)
+4. Fixes an old hazard along the way: sending while a run executes no longer silently starts a second parallel run — you explicitly choose inject or queue
+
+## Act 18 (closing line)
 
 > "Other agent demos show 'what the model can do'. CORAL shows 'how the runtime makes sure the model does it right — and gets better with use' — blind edits refused, rhetoric bounced, oversized results archived, teams under a budget watchdog, mid-budget runs told to converge, wrong memories caught by the offline audit. None of it depends on model discipline; all of it is deterministic code, event-logged, and time-replayable. And every task it runs feeds three flywheels: skills revised through use, complex experience crystallizing into new skills, and the entire conversation history becoming full-text searchable — the agent proposes, the human decides."
 
@@ -221,6 +235,7 @@ Search for plain-language explanations of these four concepts — entropy, photo
 | Learning | Long-term memory trust tiers, habit learning (confidence → skill promotion), full-text session search session_search (experience recall) |
 | Memory lifecycle | Usage tracking (hit / possibly-misleading / stale badges), offline audit (memory ↔ run-trail cross-check; rewrites human-gated with .history backup) |
 | Replayability | Every checkpoint carries system prompt + model config (exact replay); trajectory JSONL export (training-data format); recovery note (side-effect verification on fork/continuation) |
+| Human-agent collaboration | Runtime follow-ups (inject-now = step-boundary injection / queue = continue next turn), ask_user clarifications (choice + recommended + free text, ≤3 per task, configurable timeout), content-addressed checkpoint messages (per-run O(steps²)→O(n); measured 2.1GB→223MB) |
 | Quality | Double-blind review, five-axis self-eval (low scores must cite evidence), skill quality gate, config self-cleanup |
 | Ops | coral doctor 8 channels, ESTOP sentinel, approval session memory, triggers continuing existing sessions (persistent inbox) |
 | Extensibility | Skill / named-sub-agent / slash-command user directories + hooks open interface + `coral install` packages (npm/git/local) + `@coral/sdk` library embedding — all hot-reloading; bilingual UI |

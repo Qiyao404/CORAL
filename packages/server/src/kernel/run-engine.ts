@@ -15,6 +15,7 @@ import { TeamService } from './team-service.js';
 import { SearchStore } from '../store/search-store.js';
 import { makeSessionSearchTool } from '../tools/builtin/search.js';
 import { makeMemoryTools, MEMORY_GUIDE } from '../tools/builtin/memory.js';
+import { makeAskUserTool, type AskUserAnswer, type AskUserPayload } from '../tools/builtin/ask-user.js';
 import { makeEvidenceReadTool } from '../tools/builtin/evidence.js';
 import { makeDualReviewTool } from '../tools/builtin/dual-review.js';
 import { EvidenceStore } from './evidence.js';
@@ -147,6 +148,12 @@ export class RunEngine {
   };
   /** runId → 会话/目标（习惯观察的上下文标注） */
   private runMeta = new Map<string, { sessionId: string; goal: string }>();
+  /** 运行中用户补充的注入邮箱（runId → 有序消息；步边界与团队邮箱合流排空） */
+  private userInboxByRun = new Map<string, Array<{ queuedAt: number; content: string }>>();
+  /** 反问生命周期（与审批同构）：questionId → 挂起的 ask_user 调用 */
+  private pendingQuestions = new Map<string, { runId: string; payload: AskUserPayload; resolve: (a: AskUserAnswer) => void; timer?: ReturnType<typeof setTimeout> }>();
+  /** 每 run 已问数（上限 3 — 防模型把反问当逃逸口） */
+  private questionsAskedByRun = new Map<string, number>();
   /** callId → 工具输入预览（观察在 call_completed 时落笔，需要 started 的输入） */
   private pendingObs = new Map<string, { tool: string; inputPreview: string; agentId: string; runId: string }>();
 
@@ -191,6 +198,135 @@ export class RunEngine {
   /** 会话全文检索库（离线对账等 API 侧复用 — 同一 FTS5 表） */
   get searchStore(): SearchStore {
     return this.search;
+  }
+
+  /**
+   * 运行中用户补充（立即补充模式）：消息进入该 run 的注入邮箱，
+   * 下一**步边界**（本轮 LLM/工具完成后、下轮请求组装前）送达模型 —
+   * 与 teammate 消息同门（不丢、不打断正在执行的步骤）。
+   * 仅接受 running / waiting_human 状态；终态 run 由前端走"排队→续接下一轮"。
+   */
+  injectUserInput(runId: string, content: string): { ok: boolean; message: string; queued?: number } {
+    const text = String(content ?? '').trim();
+    if (!text) return { ok: false, message: '补充内容为空' };
+    if (text.length > 8000) return { ok: false, message: '补充内容过长（上限 8000 字符）' };
+    const run = this.deps.runStore.get(runId);
+    if (!run) return { ok: false, message: 'run 不存在' };
+    if (!['running', 'waiting_human'].includes(run.status)) {
+      return { ok: false, message: `run 已终态（${run.status}），请直接发送开启下一轮（会话上下文自动续接）` };
+    }
+    let inbox = this.userInboxByRun.get(runId);
+    if (!inbox) { inbox = []; this.userInboxByRun.set(runId, inbox); }
+    inbox.push({ queuedAt: Date.now(), content: text });
+    this.emitRunEvent(runId, 'run.user_input_received', { chars: text.length, queued: inbox.length });
+    return { ok: true, message: '已加入注入队列，将在下一步边界送达当前任务', queued: inbox.length };
+  }
+
+  /** 步边界排空用户补充邮箱（pollInbox 合流用 — 与团队邮箱同一注入点） */
+  private drainUserInput(runId: string): Array<{ from: string; content: string; kind: 'user' }> {
+    const inbox = this.userInboxByRun.get(runId);
+    if (!inbox || inbox.length === 0) return [];
+    this.userInboxByRun.set(runId, []);
+    return inbox.map(m => ({
+      from: 'user',
+      kind: 'user' as const,
+      // 大方向改变的引导：todo 全量替换是模型的既有操作 — 注入即提醒先重排计划
+      content: `${m.content}\n\n[system note] If this changes the plan significantly, rewrite your todo list FIRST (todo_write), then continue from the new plan. Keep already-done work that is still useful.`,
+    }));
+  }
+
+  // ─── 反问（ask_user）生命周期 — 与审批同构：挂起 waiting_human → 人作答 → 恢复 ──
+  // 每问独立挂起（多问共存可切换作答）；事件留痕 question.asked / answered 可回放。
+
+  /** ask_user 工具的挂起回调：发事件 → 置 waiting_human → 等待作答（超时可选） */
+  private askUser(runId: string, payload: AskUserPayload): Promise<AskUserAnswer> {
+    return new Promise<AskUserAnswer>(resolve => {
+      const asked = this.questionsAskedByRun.get(runId) ?? 0;
+      if (asked >= 3) {
+        resolve({ source: 'cap', answer: null, note: '本任务询问额度已用完（上限 3 问）。请自行决策并在最终回答中标注假设。' });
+        return;
+      }
+      this.questionsAskedByRun.set(runId, asked + 1);
+      const questionId = `q_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
+      // 状态机：非终态时置 waiting_human（与审批同一语义 — UI 提示等待用户）
+      const runNow = this.deps.runStore.get(runId);
+      if (runNow && !['completed', 'failed', 'cancelled'].includes(runNow.status)) {
+        this.deps.runStore.update(runId, { status: 'waiting_human' });
+      }
+      this.emitRunEvent(runId, 'question.asked', {
+        questionId,
+        question: payload.question,
+        options: payload.options,
+        allowMultiple: payload.allowMultiple ?? false,
+      });
+      const entry = { runId, payload, resolve, timer: undefined as ReturnType<typeof setTimeout> | undefined };
+      // 超时（用户可配：0 = 无限等待）：到点按推荐/假设继续，不悬挂
+      const timeoutMin = this.budgetSettings.effective().askUserTimeoutMin;
+      if (timeoutMin > 0) {
+        entry.timer = setTimeout(() => {
+          const cur = this.pendingQuestions.get(questionId);
+          if (!cur) return;
+          this.pendingQuestions.delete(questionId);
+          this.emitRunEvent(runId, 'question.answered', { questionId, source: 'timeout', answer: null });
+          this.restoreAfterQuestion(runId);
+          cur.resolve({ source: 'timeout', answer: null, note: `用户 ${timeoutMin} 分钟未响应。请按推荐选项或最合理假设继续，并在最终回答中标注假设。` });
+        }, timeoutMin * 60_000);
+      }
+      this.pendingQuestions.set(questionId, entry);
+    });
+  }
+
+  /** 用户作答（choice=选项下标数组；free=自由文本） */
+  answerQuestion(runId: string, questionId: string, body: { choice?: number[]; free?: string }): { ok: boolean; message: string } {
+    const entry = this.pendingQuestions.get(questionId);
+    if (!entry || entry.runId !== runId) return { ok: false, message: '问题不存在或已作答' };
+    this.pendingQuestions.delete(questionId);
+    if (entry.timer) clearTimeout(entry.timer);
+    let answer: AskUserAnswer;
+    const freeText = typeof body.free === 'string' ? body.free.trim() : '';
+    if (freeText) {
+      answer = { source: 'free', answer: freeText.slice(0, 2000) };
+    } else if (Array.isArray(body.choice) && body.choice.length > 0) {
+      const labels = body.choice
+        .map(i => entry.payload.options[i]?.label)
+        .filter((l): l is string => Boolean(l));
+      if (labels.length === 0) return { ok: false, message: '选项下标无效' };
+      answer = { source: 'choice', answer: labels.join(', ') };
+    } else {
+      return { ok: false, message: '需要 choice（下标数组）或 free（自由文本）' };
+    }
+    this.emitRunEvent(runId, 'question.answered', { questionId, source: answer.source, answer: answer.answer });
+    this.restoreAfterQuestion(runId);
+    entry.resolve(answer);
+    return { ok: true, message: '已作答' };
+  }
+
+  /** 问题落定后恢复运行态（无其他挂起审批/问题时）；仍等待审批则保持 waiting_human */
+  private restoreAfterQuestion(runId: string): void {
+    const stillWaitingQ = [...this.pendingQuestions.values()].some(q => q.runId === runId);
+    if (stillWaitingQ) return;
+    const stillWaitingA = [...this.pendingApprovals.entries()].some(([, p]) => p.runId === runId);
+    if (stillWaitingA) return;
+    const run = this.deps.runStore.get(runId);
+    if (run?.status === 'waiting_human') this.deps.runStore.update(runId, { status: 'running' });
+  }
+
+  /** 某 run 的待答问题（前端刷新恢复用） */
+  listPendingQuestions(runId: string): Array<{ questionId: string; question: string; options: AskUserPayload['options']; allowMultiple: boolean }> {
+    return [...this.pendingQuestions.entries()]
+      .filter(([, e]) => e.runId === runId)
+      .map(([questionId, e]) => ({ questionId, question: e.payload.question, options: e.payload.options, allowMultiple: e.payload.allowMultiple ?? false }));
+  }
+
+  /** run 结束/取消：未答问题统一以 cancelled 落定（防悬挂） */
+  private resolveAllQuestions(runId: string): void {
+    for (const [questionId, entry] of [...this.pendingQuestions.entries()]) {
+      if (entry.runId !== runId) continue;
+      this.pendingQuestions.delete(questionId);
+      if (entry.timer) clearTimeout(entry.timer);
+      this.emitRunEvent(runId, 'question.answered', { questionId, source: 'cancelled', answer: null });
+      entry.resolve({ source: 'cancelled', answer: null, note: '任务已结束，问题作废。' });
+    }
   }
 
   /** 外部命令守卫（hooks — API/启动接线用） */
@@ -269,6 +405,7 @@ export class RunEngine {
     }
     abortTask(runId); // 立即中止 loop / 工具 / LLM
     this.rejectAllApprovals(runId); // 挂起的审批直接拒绝（loop 不悬挂）
+    this.resolveAllQuestions(runId); // 挂起的反问一并作废（防悬挂）
     this.deps.runStore.update(runId, { status: 'cancelled', endReason: 'cancelled' });
     this.emitRunEvent(runId, 'run.cancelled', { reason: 'user_cancelled' });
     return { ok: true, message: 'run 已取消' };
@@ -283,11 +420,12 @@ export class RunEngine {
     }
     this.rejectAllApprovals(runId);
     this.evidence.deleteRun(runId);
+    this.search.deleteRun(runId); // FTS 无外键 — 显式清理检索文档
     const deleted = this.deps.runStore.delete(runId);
     return { ok: deleted, message: deleted ? '已删除' : '删除失败' };
   }
 
-  /** 删除整个会话（含全部 run） */
+  /** 删除整个会话（含全部 run；证据目录与检索文档一并清理） */
   deleteSession(sessionId: string): number {
     const { items } = this.deps.runStore.list({ sessionId, limit: 200 });
     for (const run of items) {
@@ -295,6 +433,8 @@ export class RunEngine {
         this.cancelRun(run.id);
       }
       this.rejectAllApprovals(run.id); // 挂起审批一并落定（防悬挂）
+      this.evidence.deleteRun(run.id); // 证据目录不随 DB 级联 — 显式清理
+      this.search.deleteRun(run.id);   // 检索文档同理
     }
     return this.deps.runStore.deleteSession(sessionId);
   }
@@ -449,8 +589,9 @@ export class RunEngine {
         // 精确重放：fork 携带历史系统提示时一字不差复现（优先于现场组装）
         ...(input.forkSystem ? { exactSystem: input.forkSystem } : {}),
         modelInfo,
-        // 团队邮箱（主循环）：步边界收件 — teammate 发给 'main' 的消息在下一轮请求前注入
-        pollInbox: () => team.drain('main'),
+        // 团队/用户邮箱合流（主循环）：步边界排空 — teammate 消息与"运行中用户补充"
+        // 同门注入（不丢、不打断当前步骤）
+        pollInbox: () => [...team.drain('main'), ...this.drainUserInput(runId)],
         // D18：记忆使用指引常驻系统提示；调用方的 extraSystem 追加在后
         // D18 记忆指引 + 个人画像（越聊越懂用户）+ 协作习惯 + 具名子代理目录 + 个性化（6维度，默认关）+ 调用方 extraSystem
         extraSystem: [
@@ -606,6 +747,7 @@ export class RunEngine {
         } catch { /* 记账失败不影响 run */ }
       }
       this.memoryReadsByRun.delete(runId);
+      this.userInboxByRun.delete(runId);
       // 按 runId 精准清理——clear() 会误杀其他并发 run 的观察记录
       for (const [cid, obs] of this.pendingObs) {
         if (obs.runId === runId) this.pendingObs.delete(cid);
@@ -848,7 +990,13 @@ export class RunEngine {
     tools.push(makeTeamWaitTool(team));
     // 会话经历回溯：跨全部历史 run 的全文检索（FTS5）
     tools.push(makeSessionSearchTool(this.search, this.deps.runStore as any));
-    return { tools, team };
+    // 反问（ask_user）：**仅主循环持有** — spawn 在上方已捕获当时的 tools 数组，
+    // 此处返回新数组使 teammate 不带此工具（其问题由主循环代问，一期决策）
+    const askTool = makeAskUserTool({
+      ask: payload => this.askUser(runId, payload),
+      automationSession: this.isAutomationSession(sessionId),
+    });
+    return { tools: [...tools, askTool], team };
   }
 
   // ─── M1-10：审批流（waiting_human → 人工决定 → 恢复）──────────────────
