@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **Version: v2.6.0** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
+> **Version: v2.7.0** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
 > **Positioning: a local-first, single-command, single-file-storage personal agent runtime**
 
 ---
@@ -22,7 +22,9 @@ CORAL is an LLM-powered personal agent runtime: it takes a natural-language goal
 - **Experience recall**: `session_search` full-text search across ALL past conversations (FTS5, CN/EN) — "that plan we discussed" hits the original trail
 - **Runtime convergence**: tiered budget reminders at 70%/85% of steps (consolidate / stop exploring and deliver); compression summaries carry recall signposts; runs resumed with history get a verify-before-side-effects note
 - **Full-duplex collaboration**: interject anytime while a task runs (inject-now = step-boundary delivery without interrupting; queue = continue next turn); the model asks back at high-impact forks (choice + recommended + free text, ≤3/task, configurable timeout); Time-Travel fork to re-run with a different answer
+- **Delivery verification**: workspace tasks generate an acceptance checklist at start and verify before delivery (default-deny, evidence-backed failures, bounded pushbacks) — completion carries a verification level with per-line results; failed lines can be promoted to permanent checks (CHECKS.md accumulates through use and auto-loads for similar tasks)
 - **Storage governance**: content-addressed checkpoint messages (per-run O(steps²)→O(n)) + one-command `coral compact` (measured 2.1GB→223MB)
+- **Memory retrieval**: recency weighting (current-state queries return the newest entry) + entity index (scattered records of the same entity threaded together; threshold auto-activation, backfillable)
 - **Multi-agent teams**: background named teammates running in parallel, step-boundary messaging, acyclic task board (CAS + optimistic locking), team-token watchdog
 - **Exact replay**: every checkpoint carries the system prompt + model config; Time-Travel forks reproduce historical context verbatim
 - **Observability**: streaming + event sourcing (fully persisted, replayable, exportable as Markdown or training-ready JSONL trajectories)
@@ -154,6 +156,20 @@ Two complementary channels turn "wait until it finishes" into bidirectional coll
 **31. Content-addressed checkpoint storage & database compaction**
 Checkpoints previously stored a full message snapshot every step with 90%+ overlap between adjacent steps — per-run storage was O(steps²), and a measured 2.1GB database was 93% checkpoints. Messages are now stored once per run by content hash in `checkpoint_messages` (cascade-deleted with the run) while checkpoints keep only reference lists (O(n²)→O(n)); legacy inline format remains readable. `coral compact` performs legacy migration + orphan cleanup (including full-text-index/evidence-directory cascade fixes) + VACUUM in one command — measured 2089.3MB → 222.6MB (−89.3%).
 
+**32. Delivery verification (acceptance checklist × independent checker × one-rule-per-mistake)**
+Turns "done" from a claim into an auditable delivery with a level, proof, and accumulating standards:
+
+- **Criteria before work**: workspace tasks generate an acceptance checklist at start (3-7 binary pass/fail lines; a qualifying line = a third party who never saw the work can judge it in 30 seconds) from the task goal + the workspace's accumulated CHECKS.md. Generation input is strictly limited to the goal and accumulated checks — **never the work product or execution trail**, so the checklist cannot be reverse-tailored to the product; ambiguities found during generation are injected as a prompt for the model to clarify via ask_user (ask before work begins, don't guess)
+- **Verification gate**: before the final answer ships, an independent checker judges each line — **default deny** (lines missing a verdict are counted as failed), failures must cite evidence; lines that cannot be verified (e.g. require opening an external link) are honestly marked "unverifiable" rather than guessed PASS; at most 2 pushback rounds, the 3rd forces passage with a warning (the gate guards against letting bad work slip, not against delivery — the human rules last). The checker can read small text artifact contents (whitelisted extensions, ≤8KB) — **artifact content overrides the maker's own claims**
+- **Verification levels**: the completion event carries the verdict (L4 all-pass with evidence / L3 all-pass with some unverifiable / L2 has failures); the chat verdict card shows the level badge and per-line results, with one-click **"promote to permanent check"** on failed lines
+- **One rule per mistake**: promoted lines are appended to the workspace CHECKS.md (dated) and auto-loaded at the start of similar tasks — the checklist grows itself through use (promotion is human-gated, never auto-written)
+- Guardrails: evaluation/automation sessions skip verification entirely; a settings toggle disables it; a checker crash never blocks delivery (fail-open — verification is an enhancement, not a dependency)
+
+**33. Memory retrieval upgrade (recency × entity index)**
+- **Recency weighting**: results ranked by a hybrid score — files scanned newest-first plus a boost for the tail "recent section" of each file (append-style filing keeps the newest entries last), so "what's the current state" returns the newest entry instead of the oldest namesake
+- **Entity index**: after memory_write, an LLM extracts key proper nouns from the note (people/projects/tools/domains, ≤10 per file) into a sidecar index; at retrieval, lines hitting known entities get boosted — **scattered records of the same entity are threaded together**. Settings provide a toggle + auto-activation threshold (default 8 files — cost accrues per write immediately while benefit arrives with library scale; the threshold aligns the two) + a backfill button (one-shot indexing when enabled mid-library); while the index is active the memory consolidation threshold auto-relaxes — retrieval capability decides how large the library should be
+- Honest trade-off: the planned statistical "specificity boost" cannot change ranking under AND-per-line matching (every matched line contains all query terms → every term's file spread is identical), so it was removed with the reasoning documented in comments and a regression test
+
 ---
 
 ## Feature Scope
@@ -253,13 +269,13 @@ Verified against DeepSeek and DashScope; any OpenAI-compatible endpoint (OpenRou
 | Persistence | SQLite (better-sqlite3, WAL mode, versioned schema migrations) |
 | Skills | YAML frontmatter (gray-matter) + chokidar hot reload |
 | Progress protocol | in-house `[CORAL_PROGRESS]` single-line stderr JSON protocol (Python + Node SDKs, see [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)) |
-| Quality | Vitest (496 cases) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
+| Quality | Vitest (511 cases) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
 
 ---
 
 ## Tests & Benchmarks
 
-- **Tests**: 496 cases (Vitest) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
+- **Tests**: 511 cases (Vitest) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
 - **GAIA benchmark**: [docs/GAIA.md](./docs/GAIA.md) — official GAIA benchmark validation split, **87.1%** (85 questions, deterministic exact match). L1 90.2% / L2 96.2% / L3 66.7%.
 - **Performance**: [docs/BENCHMARK.md](./docs/BENCHMARK.md) — context-compression gains (1.2MB history → 169KB, −86%), SQLite WAL and JSONL persistence throughput. Script: `npx tsx scripts/benchmark.mts`.
 

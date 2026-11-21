@@ -4,7 +4,7 @@
 
 > Audience: you (verification) and interviewers/friends (demo). Ordered by "performance impact" — each act takes 1-3 minutes, all doable in a browser + one terminal.
 > Prereq: service running (http://127.0.0.1:3001) with a real model in `.env` (demo mode halves the effect).
-> Covers: v2.6.0. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
+> Covers: v2.7.0. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
 
 ---
 
@@ -216,7 +216,21 @@ Search for plain-language explanations of these four concepts — entropy, photo
 3. Q&A lands in checkpoints — fork from the step before the question to **re-run with a different answer** (same start point, controlled comparison)
 4. Fixes an old hazard along the way: sending while a run executes no longer silently starts a second parallel run — you explicitly choose inject or queue
 
-## Act 18 (closing line)
+
+## Act 18: Deliveries ship with their own inspection report (acceptance checklist × independent checker × one-rule-per-mistake)
+
+**Play**:
+1. Start a deliverable task in a bound workspace (e.g. "create top3.md listing the 2024 top-3 BEV sales, ending with a 'Sources' section"). The execution log shows a `verify.criteria` event — the **acceptance checklist generated at task start** (3-7 binary pass/fail lines); if the task has ambiguities (e.g. "one page" undefined), the model immediately ask_users for the exact caliber — checklist generation doubles as the cheapest ambiguity detector
+2. When it finishes, a **verdict card** appears above the input: level badge (L4 all-pass with evidence / L3 pass with some unverifiable / L2 has failures) plus per-line results (✓/✗/? with evidence). If round one had failures, the verification gate already bounced it back for fixing (bounded at 2 rounds)
+3. Click **"promote to permanent check"** next to a failed line — it enters the workspace CHECKS.md; run a similar task and the generated checklist **auto-loads the accumulated line** (the checklist grows itself through use)
+4. Settings → memory card gains an **entity index** section (toggle + auto-activation threshold + backfill button); Settings → run-budget card gains a **delivery verification** toggle
+
+**Why it's impressive**:
+1. Checker–maker isolation: the checklist is generated only from the goal and accumulated checks (never the product); the verdict considers only checklist + final answer + artifact contents — artifact content overrides the model's own claims
+2. Default deny: missing verdicts count as failed; unverifiable lines are marked honestly rather than guessed PASS; after 3 failing rounds it force-passes and escalates to the human
+3. One rule per mistake: every error you catch by hand becomes a permanent check line — the same mistake never happens twice
+
+## Act 19 (closing line)
 
 > "Other agent demos show 'what the model can do'. CORAL shows 'how the runtime makes sure the model does it right — and gets better with use' — blind edits refused, rhetoric bounced, oversized results archived, teams under a budget watchdog, mid-budget runs told to converge, wrong memories caught by the offline audit. None of it depends on model discipline; all of it is deterministic code, event-logged, and time-replayable. And every task it runs feeds three flywheels: skills revised through use, complex experience crystallizing into new skills, and the entire conversation history becoming full-text searchable — the agent proposes, the human decides."
 

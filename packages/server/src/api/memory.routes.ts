@@ -1,8 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { MemoryService } from '../services/memory-service.js';
 import { MemoryUsageService } from '../services/memory-usage-service.js';
+import { MemoryEntityService } from '../services/memory-entity-service.js';
+import { RunBudgetSettingsService } from '../services/run-budget-settings.js';
 import { auditMemory } from '../services/dream.js';
 import { platformConfig } from '../services/config.js';
+import { dirname as pathDirname } from 'path';
 import type { SearchStore } from '../store/search-store.js';
 import type { EvolutionService } from '../services/evolution-service.js';
 
@@ -15,6 +18,8 @@ import type { EvolutionService } from '../services/evolution-service.js';
 let mergeLock = false;
 // 对账互斥锁：审计是多文件 LLM 批处理，防止重复点击并发跑两轮
 let auditLock = false;
+// 实体补建互斥锁
+let entityLock = false;
 
 export function registerMemoryRoutes(
   app: FastifyInstance,
@@ -29,7 +34,31 @@ export function registerMemoryRoutes(
   app.get('/api/memory', async () => {
     const svc = service();
     const files = svc.list();
-    return { items: files, dir: platformConfig.memoryDir, usage: usage().stats(svc) };
+    const eff = new RunBudgetSettingsService(pathDirname(platformConfig.databasePath)).effective();
+    const entitySvc = new MemoryEntityService(platformConfig.memoryDir);
+    return {
+      items: files,
+      dir: platformConfig.memoryDir,
+      usage: usage().stats(svc),
+      entities: { ...entitySvc.summary(), active: entitySvc.active(svc, eff), threshold: eff.entityIndexThreshold, enabled: eff.entityIndexEnabled },
+    };
+  });
+
+  // 实体索引存量补建（人工触发 — 中途启用时为已有记忆建索引）
+  app.post('/api/memory/entities/backfill', async (_request, reply) => {
+    if (entityLock) return reply.status(409).send({ error: '补建正在进行中，请稍后再试' });
+    entityLock = true;
+    try {
+      const { llmClient } = await import('../services/llm-client.js');
+      const svc = service();
+      const entitySvc = new MemoryEntityService(platformConfig.memoryDir);
+      const r = await entitySvc.backfill(svc, llmClient as any);
+      return { ...r, summary: entitySvc.summary() };
+    } catch (err: any) {
+      return reply.status(502).send({ error: `补建失败: ${err?.message ?? err}` });
+    } finally {
+      entityLock = false;
+    }
   });
 
   // 离线对账（Dreaming）：空闲时对照原始轨迹核对记忆条目 — 只提议，改写走人审

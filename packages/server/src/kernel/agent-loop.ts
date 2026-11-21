@@ -101,6 +101,17 @@ export interface AgentLoopOptions {
   /** 收工门开关（默认开；测试或演示可关） */
   qualityGate?: boolean;
   /**
+   * 验证门（A1 验证工程）：最终回答交付前的独立验收 — 默认否、失败带证据、
+   * 打回重做（上限 2 次，第 3 次强制放行+告警 — 门防漏放不防交付）。
+   * 由 run-engine 注入（工作区 run 且非自动化会话）；返回 null 表示本轮不验证。
+   */
+  verifyGate?: (finalContent: string) => Promise<{
+    passed: boolean;
+    failedLines: Array<{ line: string; evidence: string }>;
+    passedCount: number;
+    totalCount: number;
+  } | null>;
+  /**
    * 外部命令守卫（hooks）— 结构化注入（run-engine 接 HookService；测试注桩）。
    * 决策语义：pre_tool_use 的 deny=拒绝执行 / stop 与 pre_compact 的 deny=block；
    * ask=升级人工审批；additionalContext=注入上下文；updatedInput=改写工具入参。
@@ -258,6 +269,8 @@ export class AgentLoop {
     // 收工门状态：打回次数（上限 2，第 3 次强制放行）+ 复杂度计数
     let gateContinues = 0;
     let writeOps = 0;
+    // 验证门打回计数（与收工门各自独立，同上限防死循环）
+    let verifyContinues = 0;
     // stop 钩子打回计数（与收工门各自独立，同上限防死循环）
     let hookStopContinues = 0;
     // 空回答守卫：模型偶发返回空 content + 无工具调用的"假终答"（用户实测：
@@ -539,6 +552,52 @@ export class AgentLoop {
               }
               // 第 3 次仍含话术 — 强制放行但如实告警（门是防偷懒的，不是防交付的）
               this.emit('loop.gate_forced_pass', { step: steps, hits });
+            }
+          }
+
+          // 验证门（A1 验证工程）：独立验收 — 默认否，失败带证据打回重做（上限 2 次）。
+          // 在收工门之后：先修话术再验货；与收工门同样只在预算尚存时打回
+          if (
+            this.options.verifyGate &&
+            response.content.trim().length > 20 &&
+            steps < budget.maxSteps - 1 &&
+            tokensIn + tokensOut < budget.maxTokens
+          ) {
+            let verdict: Awaited<ReturnType<NonNullable<AgentLoopOptions['verifyGate']>>> = null;
+            try {
+              verdict = await this.options.verifyGate(response.content);
+            } catch (err: any) {
+              this.emit('loop.verify_error', { error: err?.message ?? String(err) });
+            }
+            if (verdict && !verdict.passed && verdict.failedLines.length > 0) {
+              if (verifyContinues < 2) {
+                verifyContinues++;
+                this.emit('loop.verification_rejected', {
+                  step: steps,
+                  passed: verdict.passedCount,
+                  total: verdict.totalCount,
+                  failedLines: verdict.failedLines.map(f => f.line),
+                  continues: verifyContinues,
+                });
+                messages.push({ role: 'assistant', content: response.content });
+                messages.push({
+                  role: 'user',
+                  content:
+                    `[system] VERIFICATION FAILED — ${verdict.passedCount}/${verdict.totalCount} checks passed. ` +
+                    `Fix the deliverable so these lines pass, then answer again:\n` +
+                    verdict.failedLines.map(f => `- FAIL: ${f.line}${f.evidence ? `（evidence: ${f.evidence}）` : ''}`).join('\n') +
+                    `\nIf you believe a check line itself is wrong, comply with what you can and say so explicitly in your final answer.`,
+                });
+                this.checkpoint(steps, messages);
+                continue;
+              }
+              // 第 3 次仍失败 — 强制放行但如实告警（人最终裁决；失败行随事件可采纳为永久检查）
+              this.emit('loop.verification_forced_pass', {
+                step: steps,
+                passed: verdict.passedCount,
+                total: verdict.totalCount,
+                failedLines: verdict.failedLines.map(f => f.line),
+              });
             }
           }
 

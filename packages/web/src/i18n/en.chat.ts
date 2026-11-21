@@ -139,4 +139,9 @@ export const en: Record<string, string> = {
   'chat.askFreePlaceholder': 'None of the above? Type your answer here…',
   'chat.askSubmit': 'Submit answer',
   'chat.askHint': 'The task resumes immediately; switch between questions above to answer all',
+  'chat.verifyTitle': 'Verification: {p}/{n} checks passed',
+  'chat.verifyLevel': 'L{l}',
+  'chat.verifyRounds': '({r} verify rounds)',
+  'chat.verifyPromote': 'Promote to permanent check',
+  'chat.verifyPromoted': 'Promoted ✓',
 };

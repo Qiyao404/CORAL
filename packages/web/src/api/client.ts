@@ -48,7 +48,7 @@ export const api = {
   commands: () => request<{ items: Array<{ name: string; description: string; argumentHint?: string }> }>('/commands'),
   // 运行预算（设置页）
   getRunBudget: () => request<any>('/settings/run-budget'),
-  saveRunBudget: (payload: { maxTokens?: number | null; maxSteps?: number | null; askUserTimeoutMin?: number }) =>
+  saveRunBudget: (payload: { maxTokens?: number | null; maxSteps?: number | null; askUserTimeoutMin?: number; verificationEnabled?: boolean; entityIndexEnabled?: boolean; entityIndexThreshold?: number }) =>
     request<any>('/settings/run-budget', { method: 'PUT', body: JSON.stringify(payload) }),
   // 会话产物（回复底部的"本次生成文件"chips）
   sessionArtifacts: (sessionId: string) =>
@@ -249,6 +249,15 @@ export const api = {
     request<any>(`/runs/${runId}/events?afterSeq=${afterSeq}`),
   cancelRun: (runId: string) =>
     request<any>(`/runs/${runId}/cancel`, { method: 'POST' }),
+  // 验证工程：一错一规（人工采纳检查行进工作区 CHECKS.md）
+  promoteCheck: (runId: string, line: string) =>
+    request<{ ok: boolean; message: string }>(`/runs/${runId}/checks/promote`, {
+      method: 'POST',
+      body: JSON.stringify({ line }),
+    }),
+  // 记忆实体索引：存量补建（人工触发）
+  backfillMemoryEntities: () =>
+    request<{ files: number; entities: number; summary: { entityCount: number; fileCount: number } }>('/memory/entities/backfill', { method: 'POST' }),
   // 反问（ask_user）：待答问题与作答
   listRunQuestions: (runId: string) =>
     request<{ items: Array<{ questionId: string; question: string; options: Array<{ label: string; description?: string; recommended?: boolean }>; allowMultiple: boolean }> }>(`/runs/${runId}/questions`),

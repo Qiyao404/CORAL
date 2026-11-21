@@ -16,11 +16,13 @@ import { SearchStore } from '../store/search-store.js';
 import { makeSessionSearchTool } from '../tools/builtin/search.js';
 import { makeMemoryTools, MEMORY_GUIDE } from '../tools/builtin/memory.js';
 import { makeAskUserTool, type AskUserAnswer, type AskUserPayload } from '../tools/builtin/ask-user.js';
+import { generateCriteria, verifyDeliverable, appendCheck, type CriteriaResult, type VerifyVerdict } from '../services/verification-service.js';
 import { makeEvidenceReadTool } from '../tools/builtin/evidence.js';
 import { makeDualReviewTool } from '../tools/builtin/dual-review.js';
 import { EvidenceStore } from './evidence.js';
 import { MemoryService, distillMemory } from '../services/memory-service.js';
 import { MemoryUsageService } from '../services/memory-usage-service.js';
+import { MemoryEntityService } from '../services/memory-entity-service.js';
 import { HabitService } from '../services/habit-service.js';
 import { EvolutionService } from '../services/evolution-service.js';
 import { AgentPresetService } from '../services/agent-presets.js';
@@ -35,7 +37,8 @@ import { fsSearchTool } from '../tools/builtin/fs-search.js';
 import { docxTools } from '../tools/builtin/docx.js';
 import { unifiedDiff } from '../tools/diff.js';
 import { resolveWorkspacePath } from '../tools/workspace-path.js';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
+import { join as pathJoin } from 'path';
 import { dirname as pathDirname } from 'path';
 import { nanoid } from 'nanoid';
 import type { Tool, ToolPermission } from '../tools/types.js';
@@ -154,6 +157,10 @@ export class RunEngine {
   private pendingQuestions = new Map<string, { runId: string; payload: AskUserPayload; resolve: (a: AskUserAnswer) => void; timer?: ReturnType<typeof setTimeout> }>();
   /** 每 run 已问数（上限 3 — 防模型把反问当逃逸口） */
   private questionsAskedByRun = new Map<string, number>();
+  /** 验证工程：每 run 的验收清单（memoized promise — 开工即预热，验证门复用） */
+  private criteriaByRun = new Map<string, Promise<CriteriaResult | null>>();
+  /** 验证工程：每 run 的最后一次判决（终态 run.verified 事件用） */
+  private verdictByRun = new Map<string, VerifyVerdict & { rounds: number }>();
   /** callId → 工具输入预览（观察在 call_completed 时落笔，需要 started 的输入） */
   private pendingObs = new Map<string, { tool: string; inputPreview: string; agentId: string; runId: string }>();
 
@@ -233,6 +240,59 @@ export class RunEngine {
       // 大方向改变的引导：todo 全量替换是模型的既有操作 — 注入即提醒先重排计划
       content: `${m.content}\n\n[system note] If this changes the plan significantly, rewrite your todo list FIRST (todo_write), then continue from the new plan. Keep already-done work that is still useful.`,
     }));
+  }
+
+
+  /** 验证工程：memoized 验收清单（开工预热与验证门共用 — 清单只算一次） */
+  private ensureCriteria(runId: string, goal: string, workspaceDir: string): Promise<CriteriaResult | null> {
+    let p = this.criteriaByRun.get(runId);
+    if (!p) {
+      p = (async () => {
+        try {
+          if ((this.deps.llm as any).isDemoMode?.()) return null;
+          return await generateCriteria({ llm: this.deps.llm as any, goal, workspaceDir });
+        } catch { return null; }
+      })();
+      this.criteriaByRun.set(runId, p);
+    }
+    return p;
+  }
+
+  /** 验证工程：工作区产物清单（名字+大小+小文本内容 — 检查者打开活产物，而不是听转述） */
+  private workspaceArtifacts(workspaceDir: string, cap = 50): Array<{ rel: string; bytes: number; content?: string }> {
+    try {
+      const out: Array<{ rel: string; bytes: number; content?: string }> = [];
+      const walk = (rel: string, depth: number) => {
+        if (out.length >= cap || depth > 2) return;
+        for (const e of readdirSync(pathJoin(workspaceDir, rel))) {
+          if (out.length >= cap) return;
+          if (e.startsWith('.') || e === 'node_modules' || e === 'CHECKS.md') continue;
+          const r = rel ? `${rel}/${e}` : e;
+          const abs = pathJoin(workspaceDir, r);
+          try {
+            const st = statSync(abs);
+            if (st.isDirectory()) walk(r, depth + 1);
+            else {
+              // 小文本产物带内容进判定（ground truth 而非读代码哲学的落地：打开它）
+              const small = /\.(md|txt|json|csv|html|ya?ml)$/i.test(e) && st.size <= 8 * 1024;
+              out.push({ rel: r, bytes: st.size, ...(small ? { content: readFileSync(abs, 'utf-8').slice(0, 6000) } : {}) });
+            }
+          } catch { /* 并发删除跳过 */ }
+        }
+      };
+      walk('', 0);
+      return out;
+    } catch { return []; }
+  }
+
+  /** 一错一规（人工采纳）：把一条检查行追加进该 run 工作区的 CHECKS.md */
+  promoteCheck(runId: string, line: string): { ok: boolean; message: string } {
+    const run = this.deps.runStore.get(runId);
+    const wsId = run?.workspace_id;
+    if (!wsId) return { ok: false, message: '该 run 未绑定工作区（CHECKS.md 随工作区累积）' };
+    const ws = new WorkspaceService().get(wsId);
+    if (!ws) return { ok: false, message: '工作区不存在' };
+    return appendCheck(ws.dir, line);
   }
 
   // ─── 反问（ask_user）生命周期 — 与审批同构：挂起 waiting_human → 人作答 → 恢复 ──
@@ -528,6 +588,31 @@ export class RunEngine {
       this.emitRunEvent(runId, 'run.started', continuedFrom ? { continuedFrom } : {});
       this.runMeta.set(runId, { sessionId: input.sessionId ?? '', goal: input.goal });
 
+      // 验证工程（B4 标准前置）：工作区交互 run 开工即预热验收清单（memoized —
+      // 验证门复用同一 promise，保证清单只依赖 goal+CHECKS.md，永不含产物）。
+      // 生成时发现的歧义经注入通道提示模型用 ask_user 澄清（该问的在开工前问）。
+      const verifyEligible = Boolean(workspace)
+        && !this.isAutomationSession(input.sessionId)
+        && this.budgetSettings.effective().verificationEnabled !== false;
+      if (verifyEligible) {
+        void this.ensureCriteria(runId, input.goal, workspace!.dir).then(cr => {
+          if (cr && cr.ambiguities.length > 0) {
+            const inbox = this.userInboxByRun.get(runId) ?? [];
+            inbox.push({
+              queuedAt: Date.now(),
+              content: `验收清单生成时发现以下任务歧义：${cr.ambiguities.join('；')}。请立即用 ask_user 向用户澄清后再继续，不要猜。`,
+            });
+            this.userInboxByRun.set(runId, inbox);
+          }
+          if (cr) {
+            this.emitRunEvent(runId, 'verify.criteria', {
+              lines: cr.lines.map(l => ({ line: l.line, source: l.source })),
+              ambiguities: cr.ambiguities,
+            });
+          }
+        }).catch(() => { /* 预热失败不伤 run — 验证门会现生成 */ });
+      }
+
       const run = this.deps.runStore.get(runId)!;
       const budget = (run.budget ?? {}) as { maxSteps?: number; maxTokens?: number };
 
@@ -608,6 +693,28 @@ export class RunEngine {
         saveCheckpoint: cp => this.saveCheckpoint(runId, cp),
         evidenceStore: this.evidence,
         hooks: this.loopHooks,
+        // 验证门（A1）：交付前独立验收 — 清单 memoized（开工已预热），判决留档供终态事件
+        ...(verifyEligible && workspace ? {
+          verifyGate: async (finalContent: string) => {
+            const criteria = await this.ensureCriteria(runId, input.goal, workspace!.dir);
+            if (!criteria || criteria.lines.length === 0) return null;
+            const verdict = await verifyDeliverable({
+              llm: runLlm as any,
+              goal: input.goal,
+              criteria: criteria.lines,
+              finalContent,
+              artifacts: this.workspaceArtifacts(workspace!.dir),
+            });
+            const rounds = (this.verdictByRun.get(runId)?.rounds ?? 0) + 1;
+            this.verdictByRun.set(runId, { ...verdict, rounds });
+            return {
+              passed: verdict.passed,
+              failedLines: verdict.results.filter(r => !r.pass && !r.unverifiable).map(r => ({ line: r.line, evidence: r.evidence })),
+              passedCount: verdict.passedCount,
+              totalCount: verdict.totalCount,
+            };
+          },
+        } : {}),
         // M1-10：工作区存在时启用审批流（ask/auto 的 approval 工具 + shell）
         approveTool: workspace
           ? (tool, inp, callId) => this.requestApproval(runId, tool, inp, callId, workspace)
@@ -636,6 +743,19 @@ export class RunEngine {
 
       if (result.status === 'budget_exceeded') {
         this.emitRunEvent(runId, 'run.budget_exceeded', { steps: result.steps, tokensIn: result.tokensIn, tokensOut: result.tokensOut });
+      }
+      // 验证工程（A2）：终态判决事件 — 带级别（4=全过带证据/3=全过部分不可验/2=有失败）、
+      // 逐行结果（失败行可被人工采纳进 CHECKS.md）。未验证的 run 不发（UI 显示"未验证"）
+      const finalVerdict = this.verdictByRun.get(runId);
+      if (result.status === 'completed' && result.finalContent.trim() && finalVerdict && finalVerdict.totalCount > 0) {
+        this.emitRunEvent(runId, 'run.verified', {
+          level: finalVerdict.level,
+          passed: finalVerdict.passed,
+          passedCount: finalVerdict.passedCount,
+          totalCount: finalVerdict.totalCount,
+          rounds: finalVerdict.rounds,
+          results: finalVerdict.results,
+        });
       }
       // 自评轻闭环：完成态先跑一次确定性五轴评分并落事件（零成本、不阻断 —
       // 外部审查指出自评原先只存在于 API 里，交付链上没有痕迹；置于 completed 之前，
@@ -938,8 +1058,21 @@ export class RunEngine {
 
     tools.push(makeTodoTool()); // 事件经 ctx.emit → loop 注入 agentId
     tools.push(makePastRunsTool(taskStore as any));
-    // 记忆自动归档：注入 LLM（平台自治路由 + 超量整理）
-    tools.push(...makeMemoryTools(new MemoryService(platformConfig.memoryDir), this.deps.llm as any, this.isAutomationSession(sessionId)));
+    // 记忆自动归档：注入 LLM（平台自治路由 + 超量整理）+ 实体索引（B5）与整理阈值联动
+    const memSvc = new MemoryService(platformConfig.memoryDir);
+    const memEntity = new MemoryEntityService(platformConfig.memoryDir);
+    tools.push(...makeMemoryTools(memSvc, this.deps.llm as any, this.isAutomationSession(sessionId), {
+      entity: {
+        active: () => memEntity.active(memSvc, this.budgetSettings.effective()),
+        indexFile: (name: string) => memEntity.indexFile(memSvc, this.deps.llm as any, name),
+        boostMap: () => memEntity.boostMap(),
+      },
+      // 实体索引生效时放宽整理阈值（检索变强，库可以大）
+      getConsolidateMax: () => {
+        const eff = this.budgetSettings.effective();
+        return memEntity.active(memSvc, eff) ? Math.max(eff.consolidateMaxFiles, 30) : eff.consolidateMaxFiles;
+      },
+    }));
     tools.push(makeEvidenceReadTool(this.evidence));
     tools.push(makeDualReviewTool({ llm: llmOverride ?? this.deps.llm }));;
 

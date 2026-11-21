@@ -139,4 +139,9 @@ export const zh: Record<string, string> = {
   'chat.askFreePlaceholder': '觉得选项都不对？在这里写你的答案…',
   'chat.askSubmit': '提交回答',
   'chat.askHint': '提交后任务立即继续；多个问题可在上方切换作答',
+  'chat.verifyTitle': '交付验证：{p}/{n} 项通过',
+  'chat.verifyLevel': 'L{l}',
+  'chat.verifyRounds': '（验证 {r} 轮）',
+  'chat.verifyPromote': '采纳为永久检查',
+  'chat.verifyPromoted': '已采纳 ✓',
 };

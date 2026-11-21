@@ -144,16 +144,18 @@ export class MemoryService {
     return { name: safe, bytes: Buffer.byteLength(content, 'utf-8'), truncated };
   }
 
-  /** 关键词检索：空格分词，行内 AND 语义（全部命中才算匹配），大小写不敏感 */
-  search(query: string, maxMatches = 50): { matches: MemorySearchMatch[]; scannedFiles: number; truncated: boolean } {
+  /** 关键词检索：空格分词，行内 AND 语义（全部命中才算匹配），大小写不敏感。
+   *  混合排序（A3）：新近度加权（文件按修改时间倒序扫描 + 文件尾部"近期小节"加成——
+   *  问现状优先取最新条）+ 实体加成（查询词命中已知实体索引——同一实体的零散记录被串起来） */
+  search(query: string, maxMatches = 50, opts: { entityIndex?: Record<string, string[]> } = {}): { matches: (MemorySearchMatch & { score?: number })[]; scannedFiles: number; truncated: boolean } {
     const terms = String(query ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean);
     if (terms.length === 0) return { matches: [], scannedFiles: 0, truncated: false };
 
-    const matches: MemorySearchMatch[] = [];
+    const matches: Array<MemorySearchMatch & { score: number }> = [];
     let scannedFiles = 0;
     let truncated = false;
 
-    for (const meta of this.list()) {
+    for (const meta of this.list()) { // list 已按修改时间倒序 — 文件级新近度天然有序
       scannedFiles++;
       const text = this.read(meta.name)?.content;
       if (!text) continue;
@@ -161,15 +163,28 @@ export class MemoryService {
       for (let i = 0; i < lines.length; i++) {
         const lower = lines[i].toLowerCase();
         if (terms.every(t => lower.includes(t))) {
-          matches.push({ file: meta.name, line: i + 1, text: lines[i].slice(0, 300) });
-          if (matches.length >= maxMatches) {
-            truncated = true;
-            return { matches, scannedFiles, truncated };
+          // ── 排序分 ──
+          let score = 1;
+          // 行级新近度：文件尾部的"近期小节"（追加式归档 — 越靠后越新）
+          if (lines.length - i <= 40) score += 0.4;
+          // 实体加成：查询词命中已知实体（B5 索引 — 同一实体的零散记录被串起来）
+          for (const t of terms) {
+            const known = opts.entityIndex?.[t];
+            if (known?.includes(meta.name)) score += 0.5;
+            else if (known) score += 0.2; // 实体存在但本文件未提 — 轻加成（同实体互串）
           }
+          // 注：AND 行内匹配下"统计特异性"无法改变排序（匹配行必含全部查询词 →
+          // 词在匹配文件中的分布恒同）— 不设该信号；语义级 OR 召回+排序留作后续
+          matches.push({ file: meta.name, line: i + 1, text: lines[i].slice(0, 300), score });
+          if (matches.length >= maxMatches * 2) break; // 收集超采样，排序后截断
         }
       }
+      if (matches.length >= maxMatches * 2) { truncated = true; break; }
     }
-    return { matches, scannedFiles, truncated };
+    matches.sort((a, b) => b.score - a.score);
+    const capped = matches.slice(0, maxMatches);
+    if (matches.length > maxMatches) truncated = true;
+    return { matches: capped, scannedFiles, truncated };
   }
 }
 

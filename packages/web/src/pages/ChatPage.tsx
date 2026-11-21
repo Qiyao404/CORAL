@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Bot, Send, FolderOpen, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronRight,
   Plus, History, Square, Wrench, ShieldAlert, ListTodo, Upload, Type, Trash2, MessageSquare,
-  FolderPlus, Activity, ChevronDown as ChevronDownIcon, GitBranch, Database, Coins, FileText, Download, Wand2, Zap, Inbox, HelpCircle, PenLine,
+  FolderPlus, Activity, ChevronDown as ChevronDownIcon, GitBranch, Database, Coins, FileText, Download, Wand2, Zap, Inbox, HelpCircle, PenLine, ShieldCheck,
 } from 'lucide-react';
 import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState, Modal, Input } from '../components/ui';
@@ -398,6 +398,22 @@ export default function ChatPage() {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }, [events.length, view.finalContent]);
+
+  // ── 验证判决卡（A2）：从事件流取 run.verified — 级别 + 逐行结果；失败行可人工采纳进 CHECKS.md ──
+  const verifyVerdict = useMemo(() => {
+    for (let i = events.length - 1; i >= 0; i--) {
+      if (events[i].type === 'run.verified') return events[i].payload as any;
+    }
+    return null;
+  }, [events]);
+  const [promotedLines, setPromotedLines] = useState<Set<string>>(new Set());
+  const promoteLine = async (line: string) => {
+    if (!activeRunId) return;
+    try {
+      await api.promoteCheck(activeRunId, line);
+      setPromotedLines(prev => new Set([...prev, line]));
+    } catch (err: any) { alert(err.message); }
+  };
 
   // ── 反问（ask_user）：从事件流派生待答问题，问题卡显示在输入框上方 ──────
   interface PendingQuestion {
@@ -1003,6 +1019,40 @@ export default function ChatPage() {
                       </div>
                     </>
                   )}
+                </div>
+              </div>
+            )}
+            {/* 验证判决卡：级别徽章 + 逐行结果；失败行一键采纳为永久检查（一错一规） */}
+            {verifyVerdict && verifyVerdict.totalCount > 0 && (
+              <div className={`mb-2 p-3 rounded-lg border ${verifyVerdict.passed ? 'border-emerald-400/40 bg-emerald-400/5' : 'border-orange-400/40 bg-orange-400/5'}`}>
+                <div className="flex items-center gap-2 mb-1.5">
+                  {verifyVerdict.passed
+                    ? <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                    : <ShieldAlert className="w-4 h-4 text-orange-400 shrink-0" />}
+                  <span className="text-xs font-medium text-fg-primary">
+                    {t('chat.verifyTitle', { p: verifyVerdict.passedCount, n: verifyVerdict.totalCount })}
+                  </span>
+                  <span className={`text-[10px] px-1.5 py-px rounded ${verifyVerdict.level >= 4 ? 'bg-emerald-400/15 text-emerald-400' : 'bg-orange-400/15 text-orange-400'}`}>
+                    {t('chat.verifyLevel', { l: verifyVerdict.level })}
+                  </span>
+                  {verifyVerdict.rounds > 1 && <span className="text-[10px] text-fg-muted">{t('chat.verifyRounds', { r: verifyVerdict.rounds })}</span>}
+                </div>
+                <div className="space-y-1">
+                  {(verifyVerdict.results ?? []).map((r: any, i: number) => (
+                    <div key={i} className={`flex items-start gap-1.5 text-[11px] ${r.pass ? 'text-fg-muted' : 'text-fg-secondary'}`}>
+                      <span className="shrink-0">{r.pass ? '✓' : r.unverifiable ? '？' : '✗'}</span>
+                      <span className="flex-1">{r.line}{!r.pass && r.evidence ? <span className="text-fg-disabled"> — {r.evidence}</span> : null}</span>
+                      {!r.pass && (
+                        <button
+                          onClick={() => promoteLine(r.line)}
+                          disabled={promotedLines.has(r.line)}
+                          className="shrink-0 text-[10px] px-1.5 py-px rounded bg-bg-elev/60 text-fg-muted hover:text-brand cursor-pointer disabled:opacity-50"
+                        >
+                          {promotedLines.has(r.line) ? t('chat.verifyPromoted') : t('chat.verifyPromote')}
+                        </button>
+                      )}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}

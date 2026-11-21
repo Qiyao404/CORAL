@@ -8,7 +8,19 @@ import { routeNewMemory, appendToMemory, autoConsolidate, type LlmChat as Router
  * 全部 auto 权限（记忆目录有边界，文件名消毒防穿越）。
  */
 
-export function makeMemoryTools(service: MemoryService, llm?: RouterLlm, automationSession = false): Tool[] {
+/** 实体索引与整理阈值依赖（B5 — run-engine 注入；缺省回落无索引/固定阈值） */
+export interface MemoryToolDeps {
+  /** 实体索引生效判定 + 单文件重索引（写入路径 fire-and-forget）+ 检索加成视图 */
+  entity?: {
+    active(): boolean;
+    indexFile(name: string): Promise<number>;
+    boostMap(): Record<string, string[]>;
+  };
+  /** 超量整理阈值（实体索引生效时由引擎放宽 — 检索变强，库可以大） */
+  getConsolidateMax(): number;
+}
+
+export function makeMemoryTools(service: MemoryService, llm?: RouterLlm, automationSession = false, deps?: MemoryToolDeps): Tool[] {
   const list: Tool = {
     name: 'memory_list',
     description:
@@ -114,8 +126,9 @@ export function makeMemoryTools(service: MemoryService, llm?: RouterLlm, automat
         const w = routed === 'append'
           ? { name: finalName, bytes: Buffer.byteLength(input.content, 'utf-8'), truncated: false }
           : service.write(finalName, input.content);
-        // 写入后检查超量整理（fire-and-forget，失败不影响写入结果）
-        if (llm) void autoConsolidate(service, llm, 15).catch(() => {});
+        // 写入后：实体重索引（fire-and-forget）+ 超量整理（阈值可配 — 实体索引生效时放宽）
+        if (deps?.entity?.active() && llm) void deps.entity.indexFile(finalName).catch(() => {});
+        if (llm) void autoConsolidate(service, llm, deps?.getConsolidateMax() ?? 15).catch(() => {});
         return routed === 'append'
           ? toolOk(
               { written: w.name, bytes: w.bytes, action: 'append', routedFrom: String(rawName), note: `主题与既有记忆匹配，已并入 ${finalName}（原文保留，新内容作为新小节追加）` },
@@ -169,7 +182,8 @@ export function makeMemoryTools(service: MemoryService, llm?: RouterLlm, automat
     async invoke(input: any, ctx: any) {
       const query = String(input?.query ?? '').trim();
       if (!query) return toolError('BAD_INPUT', 'query 必填');
-      const r = service.search(query);
+      const entityActive = deps?.entity?.active() === true;
+      const r = service.search(query, 50, entityActive ? { entityIndex: deps!.entity!.boostMap() } : {});
       // 使用追踪：命中文件上报（去重；与 memory.read 同通道记账）
       try {
         const hitFiles = [...new Set(r.matches.map(m => m.file))];
@@ -181,6 +195,7 @@ export function makeMemoryTools(service: MemoryService, llm?: RouterLlm, automat
         truncated: r.truncated,
         // 不完整召回必须如实报告（宁可说"未扫完"也不谎报"没有"）
         incomplete: r.truncated,
+        ranked: true,
         note: r.matches.length === 0
           ? (r.truncated ? '未找到匹配（注意：结果已达上限，扫描可能不完整 — 可换更具体的关键词再试）' : '无匹配记忆')
           : r.truncated ? '结果已达上限，可能还有更多匹配' : undefined,

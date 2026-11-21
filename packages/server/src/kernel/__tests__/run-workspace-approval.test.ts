@@ -4,6 +4,8 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const tmp = mkdtempSync(join(tmpdir(), 'coral-approval-'));
+// 验证工程关闭（脚本化桩对额外 LLM 调用敏感 — 预热/验证门会打乱调用序列）
+writeFileSync(join(tmp, 'run-budget.json'), JSON.stringify({ verificationEnabled: false }), 'utf-8');
 process.env.DATABASE_PATH = join(tmp, 'runs.db');
 process.env.RUN_MAX_STEPS = '10';
 

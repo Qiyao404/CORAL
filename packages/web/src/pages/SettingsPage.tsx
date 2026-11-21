@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, MoonStar, Monitor, Palette, Brain, FileText, FolderOpen, User, Type, Languages } from 'lucide-react';
+import { Building2, Tag as TagIcon, Plus, X, Save, RefreshCw, AlertTriangle, Cpu, Sun, Moon, MoonStar, Monitor, Palette, Brain, FileText, FolderOpen, User, Type, Languages, Database } from 'lucide-react';
 import { api } from '../api/client';
 import { Card, Button, Input, Textarea, Tag, Select, Skeleton } from '../components/ui';
 import { useTheme, type ThemeMode } from '../contexts/ThemeContext';
@@ -132,9 +132,22 @@ export default function SettingsPage() {
     try {
       const res = await api.listMemory();
       setMemoryFiles(res.items ?? []); setMemoryUsage(Object.fromEntries((res.usage ?? []).map((u: any) => [u.name, u])));
+      if (res.entities) setEntityState(s => ({ ...s, enabled: res.entities.enabled, active: res.entities.active, threshold: res.entities.threshold, entityCount: res.entities.entityCount }));
     } catch { /* 静默 */ }
   };
   const reloadMemoryFiles = loadMemory;
+  // 记忆实体索引（B5）：状态 + 存量补建
+  const [entityState, setEntityState] = useState<{ enabled: boolean; active: boolean; threshold: number; entityCount: number }>({ enabled: true, active: false, threshold: 8, entityCount: 0 });
+  const [entityBackfilling, setEntityBackfilling] = useState(false);
+  const runEntityBackfill = async () => {
+    setEntityBackfilling(true);
+    try {
+      const r = await api.backfillMemoryEntities();
+      setAuditMsg(t('settings.memory.entityDone', { f: r.files, e: r.entities }));
+      await loadMemory();
+    } catch (err: any) { setAuditMsg(err.message); }
+    finally { setEntityBackfilling(false); }
+  };
   // 离线对账（Dreaming）：对照历史轨迹核对记忆 — 矛盾生成改写提议（进演化队列人审）
   const [auditBusy, setAuditBusy] = useState(false);
   const [auditMsg, setAuditMsg] = useState('');
@@ -199,6 +212,7 @@ export default function SettingsPage() {
       // 不再每次勾选都清空 target（用户可能已输入自定义名）
       const res = await api.listMemory();
       setMemoryFiles(res.items ?? []); setMemoryUsage(Object.fromEntries((res.usage ?? []).map((u: any) => [u.name, u])));
+      if (res.entities) setEntityState(s => ({ ...s, enabled: res.entities.enabled, active: res.entities.active, threshold: res.entities.threshold, entityCount: res.entities.entityCount }));
       setMemoryName(r.merged);
       try {
         setMemoryContent((await api.getMemory(r.merged)).content ?? '');
@@ -485,6 +499,20 @@ export default function SettingsPage() {
             <p className="text-[11px] text-fg-muted mt-1">{t('settings.budget.askTimeoutHint')}</p>
           </div>
         </div>
+        <div className="flex items-center gap-2 mt-3">
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-brand cursor-pointer"
+              defaultChecked
+              onChange={async e => {
+                try { await api.saveRunBudget({ verificationEnabled: e.target.checked }); } catch (err: any) { alert(err.message); }
+              }}
+            />
+            {t('settings.budget.verifyLabel')}
+          </label>
+          <span className="text-[11px] text-fg-muted">{t('settings.budget.verifyHint')}</span>
+        </div>
         <div className="flex items-center gap-3 mt-3">
           <Button onClick={saveRunBudget} disabled={runBudget.saving}>
             {runBudget.saving ? t('settings.budget.saving') : t('settings.budget.save')}
@@ -747,6 +775,44 @@ export default function SettingsPage() {
           {t('settings.memory.desc')}
         </p>
         {auditMsg && <p className="text-xs text-status-success mb-3">{auditMsg}</p>}
+        {/* 记忆实体索引（B5）：同实体零散记录串联检索；阈值自动启用（成本-收益对齐） */}
+        <div className="flex items-center gap-3 flex-wrap mb-4 pb-3 border-b border-glass-border">
+          <span className="text-xs text-fg-muted">{t('settings.memory.entityTitle')}</span>
+          <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+            <input
+              type="checkbox"
+              className="accent-brand cursor-pointer"
+              checked={entityState.enabled}
+              onChange={async e => {
+                const v = e.target.checked;
+                setEntityState(s => ({ ...s, enabled: v, saving: true }));
+                try { await api.saveRunBudget({ entityIndexEnabled: v }); } catch (err: any) { alert(err.message); }
+                finally { setEntityState(s => ({ ...s, saving: false })); }
+              }}
+            />
+            {t('settings.memory.entityToggle')}
+          </label>
+          <label className="flex items-center gap-1 text-xs">
+            {t('settings.memory.entityThreshold')}
+            <input
+              type="number"
+              className="w-16 text-xs bg-bg-elev/50 border border-glass-border rounded px-1.5 py-0.5"
+              defaultValue={entityState.threshold}
+              onBlur={async e => {
+                const v = Number(e.target.value) || 8;
+                try { await api.saveRunBudget({ entityIndexThreshold: v }); setEntityState(s => ({ ...s, threshold: v })); } catch (err: any) { alert(err.message); }
+              }}
+            />
+          </label>
+          <Button size="sm" variant="ghost" disabled={entityBackfilling} onClick={runEntityBackfill} icon={<Database className="w-3.5 h-3.5" />}>
+            {entityBackfilling ? t('settings.memory.entityBackfilling') : t('settings.memory.entityBackfill')}
+          </Button>
+          <span className="text-[11px] text-fg-muted">
+            {entityState.active
+              ? t('settings.memory.entityActive', { n: entityState.entityCount })
+              : t('settings.memory.entityInactive', { t: entityState.threshold })}
+          </span>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="space-y-1.5 md:col-span-1">
             {memoryFiles.length === 0 && <p className="text-xs text-fg-muted">{t('settings.memory.empty')}</p>}

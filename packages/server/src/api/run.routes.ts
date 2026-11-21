@@ -120,6 +120,15 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
     };
   });
 
+  // 一错一规（人工采纳）：把一条检查行追加进该 run 工作区的 CHECKS.md（同类任务永久生效）
+  app.post('/api/runs/:runId/checks/promote', async (request, reply) => {
+    const { runId } = request.params as any;
+    const body = (request.body || {}) as { line?: string };
+    const r = engine.promoteCheck(runId, String(body.line ?? ''));
+    if (!r.ok) return reply.status(400).send({ error: r.message });
+    return r;
+  });
+
   // 反问（ask_user）：待答问题列表（前端刷新恢复）+ 作答（choice 下标数组 / free 自由文本）
   app.get('/api/runs/:runId/questions', async (request) => {
     const { runId } = request.params as any;
