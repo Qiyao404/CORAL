@@ -121,11 +121,21 @@ export class EvidenceStore {
 /**
  * 把超预算的工具结果转成「摘要 + 证据 ID」的消息体。
  * 预览保留头尾（模型通常需要开头判断性质、结尾看结论）。
+ *
+ * ref.path：读取类工具的目标路径（fs_read/docx_read 的入参 path）。摘要一旦丢失路径，
+ * 事实门（fact-gate）就认不出"这个文件已经读过"→ 编辑同一个文件被误拦（REG-27）。
+ * 放在首个字段：旧结果被收纳时只保留头 240 字符，路径必须活过头摘。
  */
-export function summarizeForEvidence(rec: EvidenceRecord, previewHead = 900, previewTail = 400): string {
+export function summarizeForEvidence(
+  rec: EvidenceRecord,
+  previewHead = 900,
+  previewTail = 400,
+  ref: { path?: string } = {},
+): string {
   const head = rec.content.slice(0, previewHead);
   const tail = rec.content.slice(-previewTail);
   return JSON.stringify({
+    ...(typeof ref.path === 'string' && ref.path ? { path: ref.path } : {}),
     note: `结果过大（${rec.chars} 字符），完整内容已存为证据记录 ${rec.id}。需要更多细节时调用 evidence_read（evidence_id="${rec.id}"，可翻页 offset/limit）。`,
     totalChars: rec.chars,
     preview: rec.chars <= previewHead + previewTail ? rec.content : `${head}\n[...省略 ${rec.chars - previewHead - previewTail} 字符...]\n${tail}`,

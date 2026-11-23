@@ -254,7 +254,7 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
     }
   });
 
-  // ── 上下文用量（ZCode 风格指示器）────────────────────
+  // ── 上下文用量（用量指示器）────────────────────
   app.get('/api/sessions/:sessionId/context-usage', async (request, reply) => {
     const { sessionId } = request.params as any;
     const { items } = engine.store.list({ sessionId, limit: 50 });

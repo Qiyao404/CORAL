@@ -56,7 +56,7 @@ CORAL 当前是一个**通用、并发、文件系统驱动**的多智能体运�
 
 七大子目标：
 
-1. **Skill 自助生产**：用户用自然语言（含语音转文字）描述 → AI 多轮澄清 → 自动生成可执行的 SKILL.md → 预览 → 入库（参考 [anthropics/skills/skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator) 的工程实践）。
+1. **Skill 自助生产**：用户用自然语言（含语音转文字）描述 → AI 多轮澄清 → 自动生成可执行的 SKILL.md → 预览 → 入库。
 2. **Skill 全生命周期管理**：在 UI 中对所有 Skill 做增/删/改/查，内置 Skill 二次确认保护。
 3. **全链路可观测**：从任务开始到结束，用户在前端任意时刻都能回答「现在在做什么、进度多少、已经产出了什么」三个问题。
 4. **政策双 Agent 改造**：`policy-scraper` 流式输出 + MD/CSV 双产物 + 智能识别站点/月份；`policy-to-post` 双输入并展示进度。
@@ -73,7 +73,7 @@ CORAL 当前是一个**通用、并发、文件系统驱动**的多智能体运�
 | **Skill** | 标准化能力单元，目录形式存在于 `skills/` 下，含 `SKILL.md` |
 | **内置 Skill (builtin)** | 仓库初始 Skill；frontmatter 不带 `source` 或 `source: builtin` |
 | **用户 Skill (user)** | 通过 Skill Builder 创建的 Skill；frontmatter `source: user` |
-| **Skill Builder** | 多轮对话式 Skill 创建工具（参考 [anthropics/skills/skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)） |
+| **Skill Builder** | 多轮对话式 Skill 创建工具 |
 | **公司业务画像（Company Profile）** | 描述公司主营业务、关注领域、关键词等的结构化配置；多个 Skill（如 information-filter / policy-to-post）的共享上下文 |
 | **多源信息（Multi-source Input）** | 政策清单 / 展会信息 / 行业新闻 / 单篇文章等异构内容，可来自 MD、CSV、URL、纯文本 |
 | **组合任务（Composite Task）** | 由多个 Skill 协作完成的端到端任务，平台自动规划 DAG（如 采集 → 筛选 → 转推文） |
@@ -297,7 +297,7 @@ CORAL 当前是一个**通用、并发、文件系统驱动**的多智能体运�
 
 ### 6.1 本期范围（IN）
 
-- Skill Builder 多轮对话与落盘（参考 anthropics/skill-creator 工程模式）
+- Skill Builder 多轮对话与落盘
 - Skill CRUD（含 builtin 二次确认）
 - 进度事件三件套（progress / log / artifact）+ WS + SSE 双通道
 - policy-scraper 流式 + MD/CSV 双输出 + 智能站点/月份提取

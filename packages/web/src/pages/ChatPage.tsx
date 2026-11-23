@@ -47,7 +47,7 @@ export default function ChatPage() {
   const [runAttachments, setRunAttachments] = useState<Record<string, string[]>>({});
   // 最终回答全文（run.completed 事件只带 500 字预览，终态后从详情拉全文）
   const [fullFinal, setFullFinal] = useState<string | null>(null);
-  // 上下文用量（ZCode 风格指示器）
+  // 上下文用量（用量指示器）
   const [ctxUsage, setCtxUsage] = useState<{ contextChars: number; contextMax: number; messageCount: number; sessionContext: { fileCount: number; keyPointCount: number; totalChars: number } | null } | null>(null);
   // 会话线程：当前会话全部 run（时间升序，含 final_content）— ChatGPT 式连续对话视图
   const [sessionRuns, setSessionRuns] = useState<Array<{ id: string; goal: string; final_content?: string | null; created_at: string; parent_run_id?: string | null; fork_from_seq?: number | null; inherited?: Array<{ goal: string; answer: string }> }>>([]);
@@ -1056,8 +1056,10 @@ export default function ChatPage() {
                 </div>
               </div>
             )}
-            {/* 反问问题卡：选择题 + 推荐位 + 自由补充；多问共存可切换 */}
-            {activeQ && activeRunId && (
+            {/* 反问问题卡：选择题 + 推荐位 + 自由补充；多问共存可切换。
+                任务已终态就不显示 — 等待中的问题只对"还在跑的任务"有意义
+                （服务重启被中断的任务，事件流里可能留着没有下文的 question.asked） */}
+            {activeQ && activeRunId && !view.runStatus && (
               <div className="mb-2 p-3 rounded-lg border border-amber-400/40 bg-amber-400/5">
                 <div className="flex items-center gap-2 mb-2">
                   <HelpCircle className="w-4 h-4 text-amber-400 shrink-0" />
@@ -1368,6 +1370,10 @@ function RunLiveView({
 
   return (
     <div className="space-y-4">
+      {/* 失败原因（服务重启被中断 / 原地打转被终止 / 模型报错 — 此前界面上只有一个"失败"标签） */}
+      {view.runError && (
+        <p className="text-xs text-status-danger whitespace-pre-wrap break-words">{t('chat.failedReason', { reason: view.runError })}</p>
+      )}
       {/* 继承的提问气泡（分支线） */}
       {inherited?.map((b, i) => (
         <div key={`inh-${i}`} className="opacity-60 flex justify-end">
@@ -1426,6 +1432,14 @@ function RunLiveView({
             {view.endReason === 'budget_exceeded' && (
               <div className="mt-2 flex items-center gap-2">
                 <p className="text-xs text-status-warn">{t('chat.budgetExceeded')}</p>
+                {onContinue && (
+                  <Button size="sm" variant="secondary" onClick={onContinue}>{t('chat.continueRun')}</Button>
+                )}
+              </div>
+            )}
+            {view.endReason === 'stalled' && (
+              <div className="mt-2 flex items-center gap-2">
+                <p className="text-xs text-status-warn">{t('chat.stalledNote')}</p>
                 {onContinue && (
                   <Button size="sm" variant="secondary" onClick={onContinue}>{t('chat.continueRun')}</Button>
                 )}

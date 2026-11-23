@@ -59,8 +59,13 @@ export class TeamService {
     private runId: string,
     private emit: (ev: { type: string; payload?: Record<string, any> }) => void,
     /** 整队 token 上限（缺省 1000 万 = 平台默认 run 预算量级；Infinity = 不限） */
-    private budgetTokens: number = 10_000_000,
-  ) {}
+    budgetTokens: number = 10_000_000,
+  ) {
+    // ≤0 / NaN 一律按"不限"：与主循环"0 = 无上限"同一语义（REG-34）—
+    // 否则 0 会变成一个立即耗尽的硬上限，team_spawn 永远被拒
+    this.budgetTokens = typeof budgetTokens === 'number' && budgetTokens > 0 ? budgetTokens : Infinity;
+  }
+  private budgetTokens: number;
 
   /** Watchdog 闸门：新 spawn 前检查整队预算；80% 预警一次性，100% 拒绝 */
   checkSpawnTokens(): { ok: true; warn?: boolean } | { ok: false; reason: string } {
@@ -264,14 +269,18 @@ export class TeamService {
       });
   }
 
-  /** 等待：轮询直到指定成员全部终态或超时（team_wait 工具的数据源） */
-  async wait(names: string[], timeoutMs: number): Promise<Array<TeammateHandle>> {
+  /**
+   * 等待：轮询直到指定成员全部终态或超时（team_wait 工具的数据源）。
+   * signal 中止 → 立即返回 null（REG-24：此前轮询最多干等 600 秒，取消对它无效）。
+   */
+  async wait(names: string[], timeoutMs: number, signal?: AbortSignal): Promise<Array<TeammateHandle> | null> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
+      if (signal?.aborted) return null;
       const handles = names.map(n => this.teammates.get(n)).filter(Boolean) as TeammateHandle[];
       const settled = handles.every(h => h.status !== 'running');
       if (settled || Date.now() >= deadline) return handles;
-      await new Promise(r => setTimeout(r, 400));
+      await sleepUnlessAborted(400, signal);
     }
   }
 
@@ -291,4 +300,17 @@ export class TeamService {
     }
     return false;
   }
+}
+
+/** 可被取消信号打断的休眠（到点或中止即醒；监听器在醒来时移除，不留悬挂） */
+function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(done, ms);
+    function done(): void {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', done);
+      resolve();
+    }
+    signal?.addEventListener('abort', done, { once: true });
+  });
 }

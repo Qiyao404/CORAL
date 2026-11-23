@@ -32,6 +32,9 @@ function env(key: string, defaultValue: string): string {
   return process.env[key] || defaultValue;
 }
 
+/** 平台默认预算 — 也是预算为 0（无上限）时派生子代理 / 团队预算所用的名义量级 */
+export const PLATFORM_DEFAULT_BUDGET = { steps: 200, tokens: 10_000_000 } as const;
+
 function envInt(key: string, defaultValue: number): number {
   const v = process.env[key];
   return v ? parseInt(v, 10) : defaultValue;
@@ -75,10 +78,10 @@ export function loadConfig(): PlatformConfig {
     demoMode: process.argv.includes('--demo') || envBool('CORAL_DEMO_MODE', false),
     shellToolEnabled: envBool('SHELL_TOOL_ENABLED', false),
     mcpStdioEnabled: envBool('MCP_STDIO_ENABLED', true), // 终审 P2：stdio=本机执行权限，默认开（个人工具）但可关
-    runMaxSteps: envInt('RUN_MAX_STEPS', 200),
+    runMaxSteps: envInt('RUN_MAX_STEPS', PLATFORM_DEFAULT_BUDGET.steps),
     // 默认 1M token（实测：一次 standard 档深度调研约 54 万 — 500k 会中途打断，
     // 靠"继续"接力既贵又折腾；上限钳制 MAX_TOKENS_CAP=2M 不变）
-    runMaxTokens: envInt('RUN_MAX_TOKENS', 10_000_000),
+    runMaxTokens: envInt('RUN_MAX_TOKENS', PLATFORM_DEFAULT_BUDGET.tokens),
     memoryDir: resolveDir(env('MEMORY_DIR', './data/memory')),
     memoryDistillEnabled: envBool('MEMORY_DISTILL', true),
     corsAllowedOrigins: parseCorsOrigins(

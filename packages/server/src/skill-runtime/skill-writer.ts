@@ -178,6 +178,8 @@ export function manifestToFrontmatter(m: ParsedSkillManifest): Record<string, an
   if (m.emptyWhen) fm.empty_when = m.emptyWhen;
   if (m.defaultInput) fm.default = m.defaultInput;
   if (m.inputKeys) fm.input_keys = m.inputKeys;
+  if (m.acceptsCode) fm.accepts_code = true;
+  if (m.sandboxed) fm.sandboxed = true;
   return fm;
 }
 

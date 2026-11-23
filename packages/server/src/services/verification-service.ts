@@ -32,6 +32,8 @@ export interface VerifyLineResult {
   pass: boolean;
   unverifiable?: boolean;
   evidence: string;
+  /** 这条判定是怎么归位到清单行的（审计用）：行号 / 完全相等 / 去标点后相等 / 包含 / 相似度 */
+  matchedBy?: 'exact' | 'index' | 'normalized' | 'containment' | 'fuzzy';
 }
 
 export interface VerifyVerdict {
@@ -98,7 +100,10 @@ export async function generateCriteria(deps: { llm: LlmChat; goal: string; works
     `- Binary pass/fail against the ARTIFACT (files produced, numbers, links) — never taste words like "professional" or "high quality"\n` +
     `- A third party who never saw the work must be able to judge it in 30 seconds\n` +
     `- 3-7 lines total; only include what the task actually demands\n\n` +
-    `If any requirement is too ambiguous to make checkable (e.g. "one page" — A4 or screen?), put it in "ambiguities" instead of guessing.\n` +
+    `Report an ambiguity ONLY when two reasonable readings would produce SUBSTANTIALLY different deliverables ` +
+    `(different scope, audience or output format) and the checklist depends on which one is meant — then put it in ` +
+    `"ambiguities" instead of guessing. Do NOT report details that have an obvious conventional default (file names, ` +
+    `units, decimal places, column order, wording): the agent decides those itself. Usually there are none; at most 2.\n` +
     `Reply JSON only: {"lines":["..."],"ambiguities":["..."]}`;
   const res = await llm.chat({ messages: [{ role: 'user', content: prompt }], jsonMode: true, maxTokens: 2000 });
   const parsed = safeJson(res.content);
@@ -116,7 +121,7 @@ export async function generateCriteria(deps: { llm: LlmChat; goal: string; works
     }
   }
   const ambiguities = Array.isArray(parsed?.ambiguities)
-    ? parsed.ambiguities.filter((a: unknown) => typeof a === 'string' && a.trim()).slice(0, 3).map((a: string) => a.slice(0, 200))
+    ? parsed.ambiguities.filter((a: unknown) => typeof a === 'string' && a.trim()).slice(0, 2).map((a: string) => a.slice(0, 200))
     : [];
   return { lines: lines.slice(0, 10), ambiguities };
 }
@@ -147,36 +152,108 @@ export async function verifyDeliverable(deps: {
     `Judge against the artifact CONTENT where provided (it is the ground truth, overriding the maker's claims). ` +
     `If judging a line requires evidence you cannot see (e.g. opening an external link), mark it "unverifiable": true rather than guessing PASS. ` +
     `Every FAIL or unverifiable line MUST cite what you saw ("final answer says X but checklist requires Y" / "no artifact matching Z").\n` +
-    `Reply JSON only: {"results":[{"line":"<verbatim>","pass":true|false,"unverifiable":true|false,"evidence":"<what you saw>"}]}`;
+    `Reply JSON only: {"results":[{"index":<the checklist line number>,"line":"<verbatim>","pass":true|false,"unverifiable":true|false,"evidence":"<what you saw>"}]}`;
   const res = await llm.chat({ messages: [{ role: 'user', content: prompt }], jsonMode: true, maxTokens: 3000 });
   const parsed = safeJson(res.content);
-  const byLine = new Map(criteria.map(c => [c.line, c.line])); // 行文本 → 行文本（归位用）
-  const results: VerifyLineResult[] = [];
+  // 判定归位（REG-36）：检查者常把检查行"改写"一下再回传——只认完全相等的行文字，会把判过的行
+  // 当成"判定缺失"按未通过处理（真实复现：2 行全过却被判 2/4 并打回）。按行号 → 文字匹配归位；
+  // 归不了位的判定丢弃（不能凭空多出一条"通过"），漏判的行仍按默认否补齐
+  const used = new Set<number>();
+  const byIndex = new Map<number, { r: any; by: VerifyLineResult['matchedBy'] }>();
   if (Array.isArray(parsed?.results)) {
     for (const r of parsed.results) {
-      if (!r || typeof r.line !== 'string') continue;
-      // 行文本对不上清单的（LLM 改写了）→ 按原清单行归位
-      const orig = byLine.get(r.line.trim()) ?? criteria.find(c => c.line.includes(r.line.slice(0, 20)))?.line ?? r.line.trim();
-      results.push({
-        line: orig.slice(0, 300),
-        pass: r.pass === true && r.unverifiable !== true,
-        unverifiable: r.unverifiable === true,
-        evidence: typeof r.evidence === 'string' ? r.evidence.slice(0, 300) : '',
-      });
+      if (!r || typeof r !== 'object') continue;
+      const hasLine = typeof r.line === 'string' && r.line.trim().length > 0;
+      const hasIndex = typeof r.index === 'number' && Number.isInteger(r.index);
+      if (!hasLine && !hasIndex) continue;
+      const m = matchCheckResult(hasLine ? r.line : '', hasIndex ? r.index : undefined, criteria, used);
+      if (!m) continue;
+      used.add(m.index); // 同一行重复判定：只认第一条
+      byIndex.set(m.index, { r, by: m.matchedBy });
     }
   }
-  // 清单行缺失判定结果的按 FAIL 补齐（默认否 — 宁可误退不可漏放）
-  for (const c of criteria) {
-    if (!results.some(r => r.line === c.line)) {
-      results.push({ line: c.line, pass: false, unverifiable: false, evidence: '(判定缺失 — 按未通过处理)' });
+  const results: VerifyLineResult[] = criteria.map((c, i) => {
+    const hit = byIndex.get(i);
+    if (!hit) {
+      // 清单行缺失判定结果的按 FAIL 补齐（默认否 — 宁可误退不可漏放）
+      return { line: c.line, pass: false, unverifiable: false, evidence: '(判定缺失 — 按未通过处理)' };
     }
-  }
+    return {
+      line: c.line,
+      pass: hit.r.pass === true && hit.r.unverifiable !== true,
+      unverifiable: hit.r.unverifiable === true,
+      evidence: typeof hit.r.evidence === 'string' ? hit.r.evidence.slice(0, 300) : '',
+      matchedBy: hit.by,
+    };
+  });
   const passedCount = results.filter(r => r.pass).length;
   // 不可验 ≠ 失败（诚实而非猜 PASS）；硬失败 = 既未通过也不可验
   const unverifiable = results.filter(r => r.unverifiable && !r.pass).length;
   const hardFailed = results.filter(r => !r.pass && !r.unverifiable).length;
   const level: VerifyVerdict['level'] = hardFailed > 0 ? 2 : (unverifiable > 0 ? 3 : 4);
   return { passed: hardFailed === 0, results, level, passedCount, totalCount: results.length };
+}
+
+/** 归一化：小写 + 去掉空白与标点符号（只比较"内容字符"） */
+function normalizeLine(s: string): string {
+  return String(s ?? '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+}
+
+/** 字符二元组 Dice 相似度（0–1）：对中英混合都适用，不依赖分词 */
+function bigramDice(a: string, b: string): number {
+  if (a.length < 2 || b.length < 2) return a === b ? 1 : 0;
+  const count = new Map<string, number>();
+  for (let i = 0; i < a.length - 1; i++) count.set(a.slice(i, i + 2), (count.get(a.slice(i, i + 2)) ?? 0) + 1);
+  let common = 0;
+  for (let i = 0; i < b.length - 1; i++) {
+    const g = b.slice(i, i + 2);
+    const n = count.get(g) ?? 0;
+    if (n > 0) { common++; count.set(g, n - 1); }
+  }
+  return (2 * common) / (a.length - 1 + (b.length - 1));
+}
+
+/** 相似度门槛：低于它不算同一行；且必须"明显只有一个候选"（与第二名拉开差距），否则宁可不认 */
+const FUZZY_MIN = 0.45;
+const FUZZY_MARGIN = 0.15;
+
+/**
+ * 把检查者回传的一条判定归位到清单行；返回清单下标，归不了位返回 null。
+ * 顺序：完全相等 → 行号 → 去标点后相等 → 包含（短的一方至少 6 个字符）→ 相似度（唯一明显的候选）。
+ */
+export function matchCheckResult(
+  returnedLine: string,
+  returnedIndex: number | undefined,
+  criteria: VerifyLine[],
+  used: Set<number>,
+): { index: number; matchedBy: VerifyLineResult['matchedBy'] } | null {
+  const raw = String(returnedLine ?? '').trim();
+  const exact = criteria.findIndex((c, i) => !used.has(i) && c.line.trim() === raw);
+  if (exact >= 0) return { index: exact, matchedBy: 'exact' };
+  if (typeof returnedIndex === 'number' && Number.isInteger(returnedIndex)) {
+    const i = returnedIndex - 1; // 清单在提示里是 1 起始编号
+    if (i >= 0 && i < criteria.length && !used.has(i)) return { index: i, matchedBy: 'index' };
+  }
+  const norm = normalizeLine(raw);
+  if (!norm) return null;
+  const normIdx = criteria.findIndex((c, i) => !used.has(i) && normalizeLine(c.line) === norm);
+  if (normIdx >= 0) return { index: normIdx, matchedBy: 'normalized' };
+  const containIdx = criteria.findIndex((c, i) => {
+    if (used.has(i)) return false;
+    const n = normalizeLine(c.line);
+    return n.length >= 6 && norm.length >= 6 && (n.includes(norm) || norm.includes(n));
+  });
+  if (containIdx >= 0) return { index: containIdx, matchedBy: 'containment' };
+  let best = -1;
+  let bestScore = 0;
+  let runnerUp = 0;
+  criteria.forEach((c, i) => {
+    if (used.has(i)) return;
+    const score = bigramDice(norm, normalizeLine(c.line));
+    if (score > bestScore) { runnerUp = bestScore; bestScore = score; best = i; } else if (score > runnerUp) { runnerUp = score; }
+  });
+  if (best >= 0 && bestScore >= FUZZY_MIN && bestScore - runnerUp >= FUZZY_MARGIN) return { index: best, matchedBy: 'fuzzy' };
+  return null;
 }
 
 function safeJson(text: string): any | null {

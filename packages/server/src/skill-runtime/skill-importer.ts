@@ -12,10 +12,10 @@ import type { SkillSource } from '../types/index.js';
 const execFileAsync = promisify(execFile);
 
 /**
- * M1-6：Anthropic Agent Skills 格式导入器。
+ * M1-6：Agent Skills 标准格式导入器。
  *
  * 把标准 Agent Skills 目录（SKILL.md + 任意附属文件）导入 CORAL 技能库：
- *  · frontmatter 映射：Anthropic 只强制 name/description（提示词技能）→
+ *  · frontmatter 映射：该标准只强制 name/description（提示词技能）→
  *    CORAL 必填 execution_mode 缺省映射为 llm_only；未知字段原样保留（向前兼容）
  *  · 附属文件（scripts/ / 参考文档 / 任何资源）完整迁移，目录原子换入（.history 备份）
  *  · 兼容性报告：映射结果 + 警告（scripts/ 未接线等）+ 冲突跳过/覆盖
@@ -217,7 +217,7 @@ function importFromDir(dir: string, options: ImportOptions, originalSource: stri
 
 // ─── 单技能导入 ─────────────────────────────────────────────────────
 
-/** Anthropic / CORAL 通用字段 → CORAL frontmatter；未知字段原样保留 */
+/** Agent Skills 标准 / CORAL 通用字段 → CORAL frontmatter；未知字段原样保留 */
 function mapFrontmatter(raw: Record<string, any>, dirName: string, report: ImportReport): Record<string, any> | null {
   const warnings = report.warnings;
 
@@ -243,7 +243,7 @@ function mapFrontmatter(raw: Record<string, any>, dirName: string, report: Impor
     return null;
   }
 
-  // execution_mode：源是 CORAL 格式则透传；Anthropic 提示词技能 → llm_only
+  // execution_mode：源是 CORAL 格式则透传；标准提示词技能 → llm_only
   let executionMode = raw.execution_mode;
   if (executionMode !== 'llm_only' && executionMode !== 'script' && executionMode !== 'hybrid') {
     executionMode = 'llm_only';
@@ -263,6 +263,7 @@ function mapFrontmatter(raw: Record<string, any>, dirName: string, report: Impor
     'name', 'version', 'description', 'execution_mode', 'script_entry', 'script_runtime',
     'script_timeout_ms', 'domain', 'capabilities', 'input_schema', 'output_schema',
     'human_gate', 'estimated_duration_ms', 'cost_level', 'status', 'tags', 'source',
+    'accepts_code', 'sandboxed',
   ]);
   const preserved = Object.keys(raw).filter(k => !known.has(k));
   if (preserved.length > 0) {

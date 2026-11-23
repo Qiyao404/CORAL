@@ -1,9 +1,34 @@
 import type { FastifyInstance } from 'fastify';
-import { writeFileSync, mkdirSync, readdirSync, statSync, existsSync, readFileSync } from 'fs';
+import { writeFileSync, mkdirSync, readdirSync, statSync, existsSync, readFileSync, openSync, readSync, closeSync, fstatSync, createReadStream } from 'fs';
 import { join } from 'path';
 import { WorkspaceService } from '../services/workspace-service.js';
 import { resolveWorkspacePath } from '../tools/workspace-path.js';
 import { extractDocxText } from '../tools/builtin/docx.js';
+
+/** 文本预览返回的字符上限 */
+export const MAX_PREVIEW_TEXT = 200 * 1024;
+/** 预览最多从磁盘读多少字节（够截出 MAX_PREVIEW_TEXT 个字符 — 中文 UTF-8 每字 3 字节，留 4 倍余量） */
+const MAX_PREVIEW_READ_BYTES = 4 * MAX_PREVIEW_TEXT;
+
+/**
+ * 只读文件开头的一段文本（REG-40）：不把整个文件读进内存。
+ * 此前是 readFileSync 整文件 → 再截前 20 万字符：工作区里一个几 GB 的日志，点一下预览就是几 GB 的字符串。
+ * 截断处若切在多字节字符中间，丢掉末尾那个残缺字符（不留下 U+FFFD）。
+ */
+export function readTextHead(absPath: string, maxBytes: number): { text: string; bytesRead: number; truncated: boolean } {
+  const fd = openSync(absPath, 'r');
+  try {
+    const size = fstatSync(fd).size;
+    const length = Math.min(size, Math.max(0, maxBytes));
+    const buf = Buffer.allocUnsafe(length);
+    const bytesRead = length > 0 ? readSync(fd, buf, 0, length, 0) : 0;
+    let text = buf.toString('utf-8', 0, bytesRead);
+    if (bytesRead < size) text = text.replace(/\uFFFD$/, '');
+    return { text, bytesRead, truncated: bytesRead < size };
+  } finally {
+    closeSync(fd);
+  }
+}
 
 /**
  * 创新点②：文件上传到工作区 — 用户拖文件给 agent 处理的入口。
@@ -105,7 +130,10 @@ export function registerWorkspaceFileRoutes(
 
 const TEXT_EXTS = new Set(['md', 'txt', 'json', 'csv', 'js', 'ts', 'py', 'html', 'htm', 'xml', 'log', 'yml', 'yaml', 'ini', 'toml', 'sql', 'sh', 'css']);
 const IMAGE_EXTS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp']);
-const MAX_PREVIEW_TEXT = 200 * 1024;
+
+function formatSize(bytes: number): string {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
 
 const MIME: Record<string, string> = {
   pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
@@ -135,10 +163,13 @@ app.get('/api/workspaces/:id/preview', async (request, reply) => {
 
   // 文本类：直接回内容（docx 走 python 提取全文文本）
   if (TEXT_EXTS.has(ext)) {
-    const text = readFileSync(r.absPath, 'utf-8');
+    const head = readTextHead(r.absPath, MAX_PREVIEW_READ_BYTES); // 只读开头，不整文件入内存
+    const clipped = head.text.length > MAX_PREVIEW_TEXT;
     return {
       kind: 'text', name: relPath.split(/[\/]/).pop(), size,
-      content: text.length > MAX_PREVIEW_TEXT ? text.slice(0, MAX_PREVIEW_TEXT) + '\n\n[...预览截断，全文请下载]' : text,
+      content: clipped ? head.text.slice(0, MAX_PREVIEW_TEXT) + '\n\n[...预览截断，全文请下载]' : head.text,
+      truncated: head.truncated || clipped,
+      ...(head.truncated || clipped ? { note: `文件较大（${formatSize(size)}），预览只显示开头部分；完整内容请下载后查看` } : {}),
     };
   }
   if (ext === 'docx') {
@@ -170,12 +201,14 @@ app.get('/api/workspaces/:id/raw', async (request, reply) => {
     return reply.status(404).send({ error: `文件不存在: ${relPath}` });
   }
   const ext = extOf(relPath);
-  const buf = readFileSync(r.absPath);
+  // 流式转发（REG-40）：不 readFileSync 整个文件 — 多 GB 的产物下载不该先全部进内存
+  const size = statSync(r.absPath).size;
   reply.header('Content-Type', MIME[ext] ?? 'application/octet-stream');
+  reply.header('Content-Length', String(size));
   reply.header('Cache-Control', 'no-cache');
   if (q.download) {
     reply.header('Content-Disposition', `attachment; filename="${encodeURIComponent(relPath.split(/[\/]/).pop() ?? 'file')}"`);
   }
-  return reply.send(buf);
+  return reply.send(createReadStream(r.absPath));
 });
 }

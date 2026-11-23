@@ -314,7 +314,7 @@ export const api = {
     request<any>(`/mcp/servers/${id}/reconnect`, { method: 'POST' }),
   deleteMcpServer: (id: string) =>
     request<any>(`/mcp/servers/${id}`, { method: 'DELETE' }),
-  getClaudeConfig: () => request<any>('/mcp/claude-desktop-config'),
+  getMcpClientConfig: () => request<any>('/mcp/client-config'),
   listTriggers: () => request<any>('/triggers'),
   // ─── M4-1：Time-Travel ───────────────────────────────────
   getRunCheckpoints: (runId: string) => request<any>(`/runs/${runId}/checkpoints`),

@@ -8,7 +8,7 @@ import type { McpClientService } from '../services/mcp-client-service.js';
  *  · PATCH  /api/mcp/servers/:id          启停 { enabled }
  *  · POST   /api/mcp/servers/:id/reconnect 重连（重试）
  *  · DELETE /api/mcp/servers/:id          删除（断开连接）
- *  · GET    /api/mcp/claude-desktop-config 生成 Claude Desktop 接入 CORAL 的 JSON 片段（DoD 助手）
+ *  · GET    /api/mcp/client-config 生成 MCP 客户端接入 CORAL 的 JSON 片段（DoD 助手）
  */
 export function registerMcpRoutes(app: FastifyInstance, mcpClient: McpClientService): void {
   app.get('/api/mcp/servers', async () => {
@@ -64,13 +64,13 @@ export function registerMcpRoutes(app: FastifyInstance, mcpClient: McpClientServ
     return r;
   });
 
-  // DoD 助手：生成 Claude Desktop 配置片段（指向本机 CORAL 的 mcp serve 入口）
-  app.get('/api/mcp/claude-desktop-config', async () => {
+  // DoD 助手：生成 MCP 客户端配置片段（指向本机 CORAL 的 mcp serve 入口）
+  app.get('/api/mcp/client-config', async () => {
     const { platform } = await import('os');
     const repo = process.cwd().replace(/\\/g, '/');
     const isWin = platform() === 'win32';
     return {
-      hint: '把下面的 coral 条目合并进 Claude Desktop 的 claude_desktop_config.json（mcpServers 字段）',
+      hint: '把下面的 coral 条目合并进你的 MCP 客户端配置文件（mcpServers 字段）',
       config: {
         coral: {
           command: 'npx',

@@ -89,6 +89,8 @@ description: >-
 | `output_schema` | ❌ | object | 输出结果的 JSON Schema 定义 |
 | `execution_mode` | ❌ | string | 执行模式：`llm_only` / `script` / `hybrid` |
 | `human_gate` | ❌ | boolean | 是否需要人工审批 |
+| `accepts_code` | ❌ | boolean | 入参包含**模型生成的代码**（而非纯数据）。必须同时声明 `sandboxed`，否则工具层拒绝执行 |
+| `sandboxed` | ❌ | boolean | 技能脚本内部实现了执行沙箱（文件 / 进程 / 网络动作被拦截）。声明式契约，由技能自身负责 |
 | `estimated_duration_ms` | ❌ | number | 预计执行时间（毫秒） |
 | `cost_level` | ❌ | string | 成本等级：`low` / `medium` / `high` |
 | `status` | ❌ | string | 状态：`stable` / `beta` / `experimental` |
@@ -591,6 +593,7 @@ tags: [数据转换, JSON, 格式化]
 
 - [ ] `input_schema` 和 `output_schema` 定义完整
 - [ ] `execution_mode` 设置正确
+- [ ] 执行模型代码的技能同时声明了 `accepts_code` 与 `sandboxed`
 - [ ] `cost_level` 和 `estimated_duration_ms` 合理评估
 - [ ] `status` 反映当前稳定程度
 - [ ] `tags` 覆盖主要搜索词

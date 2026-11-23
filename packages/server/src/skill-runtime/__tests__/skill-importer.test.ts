@@ -12,7 +12,7 @@ const skillsRoot = join(tmp, 'skills');
 beforeAll(() => {
   mkdirSync(join(skillsRoot), { recursive: true });
 
-  // Anthropic 标准格式：只有 name/description + 正文 + 附属文件
+  // Agent Skills 标准格式：只有 name/description + 正文 + 附属文件
   const d1 = join(srcRoot, 'pdf-form-filler');
   mkdirSync(join(d1, 'scripts'), { recursive: true });
   writeFileSync(join(d1, 'SKILL.md'), [
@@ -70,8 +70,8 @@ afterAll(() => rmSync(tmp, { recursive: true, force: true }));
 
 describe('parseGitSource — git 源解析（M1-6，离线）', () => {
   it('GitHub tree 子路径 URL → 仓库 + ref + 子路径', () => {
-    const r = parseGitSource('https://github.com/anthropics/skills/tree/main/document-skills/pdf')!;
-    expect(r.repoUrl).toBe('https://github.com/anthropics/skills.git');
+    const r = parseGitSource('https://github.com/skill-authors/skills/tree/main/document-skills/pdf')!;
+    expect(r.repoUrl).toBe('https://github.com/skill-authors/skills.git');
     expect(r.ref).toBe('main');
     expect(r.subPath).toBe('document-skills/pdf');
   });
@@ -81,24 +81,24 @@ describe('parseGitSource — git 源解析（M1-6，离线）', () => {
     expect(blob.ref).toBe('v1.2');
     expect(blob.subPath).toBe('path/to/s');
 
-    const root = parseGitSource('https://github.com/anthropics/skills')!;
-    expect(root.repoUrl).toBe('https://github.com/anthropics/skills.git');
+    const root = parseGitSource('https://github.com/skill-authors/skills')!;
+    expect(root.repoUrl).toBe('https://github.com/skill-authors/skills.git');
     expect(root.subPath).toBe('');
 
-    const ssh = parseGitSource('git@github.com:anthropics/skills.git')!;
-    expect(ssh.repoUrl).toBe('git@github.com:anthropics/skills.git');
+    const ssh = parseGitSource('git@github.com:skill-authors/skills.git')!;
+    expect(ssh.repoUrl).toBe('git@github.com:skill-authors/skills.git');
 
     expect(parseGitSource('D:/some/local/dir')).toBeNull();
     expect(parseGitSource('not a url at all')).toBeNull();
   });
 });
 
-describe('importSkills — Anthropic Agent Skills 导入（M1-6）', () => {
+describe('importSkills — Agent Skills 标准格式导入（M1-6）', () => {
   it('父目录多技能扫描：全部导入并给出映射与警告', async () => {
     const reports = await importSkills(srcRoot, { skillsDir: skillsRoot });
     const byName = new Map(reports.map(r => [r.skillName, r]));
 
-    // pdf-form-filler：Anthropic → llm_only 映射 + scripts/ 警告 + 未知字段保留
+    // pdf-form-filler：提示词技能 → llm_only 映射 + scripts/ 警告 + 未知字段保留
     const r1 = byName.get('pdf-form-filler')!;
     expect(r1.status).toBe('imported');
     expect(r1.mapped!.executionMode).toBe('llm_only');
@@ -193,13 +193,15 @@ describe('importFromNpm — npm 源（离线分支：不触网）', () => {
     expect(r2.status).toBe('failed');
   });
 
+  // 注：这条会真的起一个 npm 进程去解析包（要等注册表回应"包不存在"），耗时随网络波动 —
+  // 默认 5 秒超时下会偶发失败，给足余量
   it('npm: 不存在的本地路径不会被误判为 git/本地源（前缀优先）', async () => {
-    // npm:coral-skill-pack@0.0.0-does-not-exist —— 不触网即失败：包名保留在报告里
+    // npm:coral-skill-pack@0.0.0-does-not-exist —— 包不存在即失败：包名保留在报告里
     const reports = await importSkills('npm:coral-skill-pack@0.0.0-does-not-exist', { skillsDir: skillsRoot });
     expect(reports.length).toBe(1);
     // 离线/包不存在都会走失败报告（错误文案含 npm 字样），不会误走本地源分支
     if (reports[0].status === 'failed') {
       expect(reports[0].source).toContain('npm:');
     }
-  });
+  }, 30_000);
 });

@@ -1,7 +1,7 @@
 /** dashboard namespace (en) */
 export const en: Record<string, string> = {
   'dashboard.title': 'Dashboard',
-  'dashboard.subtitle': 'CORAL v1.1.0 · Automated multi-agent collaboration platform',
+  'dashboard.subtitle': 'CORAL · Personal agent runtime · Automated multi-agent collaboration platform',
   'dashboard.demoPrefix': 'The system is currently in ',
   'dashboard.demoMode': 'demo mode',
   'dashboard.demoMid': ' (started with --demo) — all LLM calls return simulated data, and task results carry the ',

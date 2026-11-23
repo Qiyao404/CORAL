@@ -29,6 +29,12 @@ export interface ToolEffects {
   executesForeignCode?: boolean;
   /** 幂等：同样的输入重复执行结果一致（重试安全） */
   idempotent?: boolean;
+  /**
+   * 执行模型写的代码，但已在受限解释器内隔离（文件/进程/网络动作被运行时拦截）。
+   * 属于计算类效果 — 不触发审批；声明出来是为了可审计（"哪些工具会跑模型代码"一眼可查）。
+   * 与 executesForeignCode 的区别：后者是未隔离的外部代码，恒审批。
+   */
+  runsSandboxedCode?: boolean;
 }
 
 /**

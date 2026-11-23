@@ -121,6 +121,8 @@ export const en: Record<string, string> = {
   'chat.approveExecution': 'Approve execution',
   'chat.budgetExceeded': '⚠ Budget limit reached; the above is a partial summary',
   'chat.continueRun': 'Continue',
+  'chat.failedReason': 'Failed: {reason}',
+  'chat.stalledNote': '⚠ The task kept repeating the same action and was stopped by the runtime; the above is the summary so far',
   'chat.eventCount': '{count} events',
   'chat.waitingEvents': 'Waiting for events…',
   'chat.waitingEventsDesc': 'Run created; waiting for the first event',

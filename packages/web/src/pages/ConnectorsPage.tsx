@@ -9,7 +9,7 @@ import { Tag } from '../components/ui';
 
 /**
  * M3-4/M3-5：连接器页 — MCP 管理 + 触发器（个人 agent 的自动化入口）。
- *  · MCP tab：外部 server 列表/添加/启停/重连/删除/工具预览/最近错误 + Claude Desktop 配置片段
+ *  · MCP tab：外部 server 列表/添加/启停/重连/删除/工具预览/最近错误 + MCP 客户端配置片段
  *  · 触发器 tab：定时（interval/cron）与 webhook 列表/创建/启停/触发记录
  */
 
@@ -71,7 +71,7 @@ export default function ConnectorsPage() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
-  const [claudeConfig, setClaudeConfig] = useState<string | null>(null);
+  const [mcpClientConfig, setMcpClientConfig] = useState<string | null>(null);
   const [showTriggerAdd, setShowTriggerAdd] = useState(false);
 
   useEffect(() => { localStorage.setItem('coral.connectors.tab', tab); }, [tab]);
@@ -125,13 +125,13 @@ export default function ConnectorsPage() {
             <button onClick={() => setShowAdd(a => !a)} className="px-3 py-1.5 rounded-lg bg-brand text-white text-xs flex items-center gap-1.5 cursor-pointer hover:bg-brand-hover">
               <Plus className="w-3.5 h-3.5" /> {t('connectors.addMcpServer')}
             </button>
-            <button onClick={() => act(() => api.getClaudeConfig().then((d: any) => { setClaudeConfig(JSON.stringify(d.config, null, 2)); return null; }))}
+            <button onClick={() => act(() => api.getMcpClientConfig().then((d: any) => { setMcpClientConfig(JSON.stringify(d.config, null, 2)); return null; }))}
               className="px-3 py-1.5 rounded-lg glass border border-glass-border text-xs text-fg-secondary flex items-center gap-1.5 cursor-pointer hover:border-brand/40">
-              <Copy className="w-3.5 h-3.5" /> {t('connectors.claudeDesktop')}
+              <Copy className="w-3.5 h-3.5" /> {t('connectors.mcpClientConfig')}
             </button>
           </div>
-          {claudeConfig && (
-            <pre className="glass border border-glass-border rounded-xl p-3 text-xs text-fg-secondary overflow-x-auto">{claudeConfig}</pre>
+          {mcpClientConfig && (
+            <pre className="glass border border-glass-border rounded-xl p-3 text-xs text-fg-secondary overflow-x-auto">{mcpClientConfig}</pre>
           )}
           {showAdd && <AddMcpForm onAdd={payload => act(() => api.addMcpServer(payload)).then(() => setShowAdd(false))} />}
 

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, statSync } from 'fs';
 import { join, resolve } from 'path';
 
 /**
@@ -136,12 +136,38 @@ export class MemoryService {
         content += '\n\n[...写入时超长，已截断]';
       }
     }
-    if (opts.trust) {
-      content = `<!-- trust: ${opts.trust} -->\n\n${content}`;
-    }
     this.ensure();
-    writeFileSync(join(this.dir, safe), content, 'utf-8');
+    const abs = join(this.dir, safe);
+    // REG-19：更新既有文件且调用方未显式指定信任级别 → 沿用原文件头部标记。
+    // 此前只有显式传 trust 才写标记，于是并入/合并/蒸馏写回后，agent 写的
+    // unreviewed 文件一律被洗成 reviewed（"无标记 = 用户手编"的语义被误用）。
+    let trust = opts.trust;
+    if (!trust && existsSync(abs)) {
+      const prevMarker = TRUST_MARKER.exec(readFileSync(abs, 'utf-8').slice(0, 200));
+      if (prevMarker && !TRUST_MARKER.test(content.slice(0, 200))) trust = prevMarker[1] as MemoryTrust;
+    }
+    if (trust) {
+      content = `<!-- trust: ${trust} -->\n\n${content}`;
+    }
+    writeFileSync(abs, content, 'utf-8');
     return { name: safe, bytes: Buffer.byteLength(content, 'utf-8'), truncated };
+  }
+
+  /** 改写前备份：原文件整份拷进 .history/<时间戳>--<文件名>（失败返回 null，不阻塞写入） */
+  backup(name: string): string | null {
+    const safe = this.sanitizeName(name);
+    if (!safe) return null;
+    const abs = join(this.dir, safe);
+    if (!existsSync(abs)) return null;
+    try {
+      const histDir = join(this.dir, '.history');
+      mkdirSync(histDir, { recursive: true });
+      const target = join(histDir, `${new Date().toISOString().replace(/[:.]/g, '-')}--${safe}`);
+      copyFileSync(abs, target);
+      return target;
+    } catch {
+      return null;
+    }
   }
 
   /** 关键词检索：空格分词，行内 AND 语义（全部命中才算匹配），大小写不敏感。
@@ -199,8 +225,11 @@ export interface DistillItem {
  * LLM 提炼本次 run 值得长期保留的内容并写入 memory/。
  * 返回写入结果；LLM 输出非法/无值得保留 → 空数组（绝不因整理失败影响 run）。
  */
+/** 长期记忆一次写入的落地方式：created 新建 / merged 全保留合并 / appended 原文不动只追加新增行 */
+export type DistillWriteMode = 'created' | 'merged' | 'appended';
+
 export interface DistillResult {
-  longTermWritten: Array<{ name: string; bytes: number }>;
+  longTermWritten: Array<{ name: string; bytes: number; mode?: DistillWriteMode }>;
   sessionFiles: Array<{ filename: string; summary: string }>;
   sessionPoints: string[];
   /** 本次 run 中做出的决策（what + why — 决策带原因才能指导后续会话） */
@@ -245,11 +274,16 @@ Rules:
 - Prefer updating an existing topic file over creating near-duplicates.
 - Long-term filenames: short kebab-case, e.g. user-preferences.md, project-x.md.
 - Each long-term file: concise markdown, at most ~40 lines.
+- Existing memory files are listed below WITH their current content. If (and only if) the transcript adds a
+  genuinely new long-term fact to one of them, output that file again as the COMPLETE merged file: keep every
+  existing line that is still true VERBATIM, then add the new lines. Never drop, rephrase or shorten existing
+  lines — a file that comes back shorter is treated as a lossy rewrite and only its new lines are kept.
+  If the transcript adds nothing new to a file, omit that file from your output.
 Output STRICT JSON:
 {"long_term": [{"filename": "...", "content": "..."}], "session_files": [{"filename": "...", "summary": "..."}], "session_points": ["..."], "decisions": [{"what": "...", "why": "..."}], "handoff": {"left_off": "...", "next_steps": ["..."], "blockers": ["..."]}}
 Output empty arrays / null handoff if nothing is worth remembering. No prose, no code fences.`;
 
-  const existing = service.list().map(m => m.name).join(', ') || '(empty)';
+  const existing = existingLibraryContext(service);
   const clipped = transcript.slice(0, 60_000);
 
   let raw: string;
@@ -257,7 +291,7 @@ Output empty arrays / null handoff if nothing is worth remembering. No prose, no
     const r = await llm.complete(
       [
         { role: 'system', content: system },
-        { role: 'user', content: `Existing memory files: ${existing}\n\n--- TRANSCRIPT ---\n${clipped}` },
+        { role: 'user', content: `Existing memory files:\n${existing}\n\n--- TRANSCRIPT ---\n${clipped}` },
       ],
       { temperature: 0.2, maxTokens: 3500 }
     );
@@ -267,15 +301,27 @@ Output empty arrays / null handoff if nothing is worth remembering. No prose, no
   }
 
   const parsed = parseTwoTierDistill(raw);
-  const written: Array<{ name: string; bytes: number }> = [];
-  // Tier 1: 写入长期记忆（agent 写入默认 unreviewed — 用户确认属实后可标记 reviewed）
+  const written: DistillResult['longTermWritten'] = [];
+  // Tier 1: 写入长期记忆（agent 写入默认 unreviewed — 用户确认属实后可标记 reviewed）。
+  // REG-19：既有文件走行级全保留合并 — 模型看不到原文时回一份"全新的短文件"，
+  // 整篇覆盖会让老事实静默蒸发；现在原文一条不丢，只有新增行进得来。
+  const seen = new Set<string>();
   for (const item of parsed.long_term.slice(0, 8)) {
     const safe = service.sanitizeName(item.filename);
-    if (!safe) continue;
+    if (!safe || seen.has(safe)) continue;
+    seen.add(safe);
     try {
-      const existed = service.exists(safe);
-      const w = service.write(safe, item.content, existed ? {} : { trust: 'unreviewed' });
-      written.push(w);
+      if (service.exists(safe)) {
+        const prev = service.read(safe);
+        const merge = prev ? preserveMerge(prev.content, item.content) : null;
+        if (!merge || merge.mode === 'unchanged') continue;
+        service.backup(safe);
+        const w = service.write(safe, merge.content);
+        written.push({ ...w, mode: merge.mode });
+      } else {
+        const w = service.write(safe, item.content, { trust: 'unreviewed' });
+        written.push({ ...w, mode: 'created' });
+      }
     } catch { /* 跳过单文件失败 */ }
   }
   // Tier 2: 写入会话上下文
@@ -352,6 +398,148 @@ function parseTwoTierDistill(raw: string): {
     if (bracket) return bracket;
   }
   return { long_term: [], session_files: [], session_points: [], decisions: [], handoff: null };
+}
+
+// ─── REG-19：既有文件的全保留合并 ──────────────────────────────────────────
+
+/** 蒸馏上下文里带正文展示的既有文件数（按最近修改优先）与单文件字符上限 */
+const DISTILL_SHOW_FILES = 12;
+const DISTILL_FILE_CHARS = 2_500;
+
+const TRUST_MARKER_AT_TOP = /^<!--\s*trust:\s*(unreviewed|reviewed)\s*-->\s*/;
+function stripTrustMarker(text: string): string {
+  return text.replace(TRUST_MARKER_AT_TOP, '');
+}
+
+/** 既有记忆库快照：最近修改的若干个带正文，其余只列文件名（模型要合并就必须先看到原文） */
+function existingLibraryContext(service: MemoryService): string {
+  const files = service.list();
+  if (files.length === 0) return '(empty)';
+  const blocks = files.slice(0, DISTILL_SHOW_FILES).map(f => {
+    const body = stripTrustMarker(service.read(f.name)?.content ?? '').trim();
+    return `### ${f.name}\n${body.length > DISTILL_FILE_CHARS ? `${body.slice(0, DISTILL_FILE_CHARS)}\n…[truncated]` : body}`;
+  });
+  const rest = files.slice(DISTILL_SHOW_FILES).map(f => f.name);
+  return blocks.join('\n\n') + (rest.length ? `\n\n### other files (content omitted)\n${rest.join(', ')}` : '');
+}
+
+const normLine = (s: string) => s.replace(/\s+/g, ' ').trim();
+const isHeading = (t: string) => /^#{1,6}\s/.test(t);
+const isMarkerLine = (t: string) => /^<!--.*-->$/.test(t);
+
+/** 事实行：非空、非标题、非信任标记的行（空白归一化后返回 — 逐行比较用） */
+export function factLines(text: string): string[] {
+  return String(text ?? '').split(/\r?\n/).map(normLine).filter(t => t && !isHeading(t) && !isMarkerLine(t));
+}
+
+/** 一条原文内容在改写稿里的"片段召回率"低于它 = 这条内容整个消失了 */
+const ITEM_VANISHED_BELOW = 0.25;
+/** 消失的条目超过这个比例 = 疑似丢内容（改写只应修正矛盾的那一两处） */
+const MAX_VANISHED_RATIO = 1 / 3;
+/** 整体召回率的兜底：防"每条都被砍掉一大半、却没有一条完全消失"绕过条目计数。
+ *  取值在两组实测数据中间：正常改写 0.58～0.62，丢内容 0.17～0.36 */
+const MIN_OVERALL_RECALL = 0.45;
+
+export interface RewriteCoverage {
+  /** 原文的事实行数 */
+  total: number;
+  /** 在改写稿里原样保留的事实行数（空白差异忽略）— 仅供参考，真实改写常整体换说法 */
+  kept: number;
+  /** 在改写稿里"整个消失"的条目数 */
+  vanished: number;
+  /** 整体片段召回率（0–1）：原文的字符片段有多少出现在改写稿里 */
+  recall: number;
+}
+
+const normForRecall = (s: string) => String(s ?? '').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, '');
+
+function charBigrams(s: string): Map<string, number> {
+  const m = new Map<string, number>();
+  for (let i = 0; i < s.length - 1; i++) {
+    const g = s.slice(i, i + 2);
+    m.set(g, (m.get(g) ?? 0) + 1);
+  }
+  return m;
+}
+
+/** 片段召回率：original 的字符二元组有多少出现在 proposed 里（对换说法、重排不敏感；内容整块消失才会掉） */
+function fragmentRecall(original: string, proposed: string): number {
+  const a = charBigrams(normForRecall(original));
+  if (a.size === 0) return 1;
+  const b = charBigrams(normForRecall(proposed));
+  let common = 0;
+  let total = 0;
+  for (const [g, n] of a) {
+    total += n;
+    common += Math.min(n, b.get(g) ?? 0);
+  }
+  return total > 0 ? common / total : 1;
+}
+
+/**
+ * 改写稿对原文的覆盖情况（REG-38）。为什么不用"逐行原样保留率"：真实数据校准发现，
+ * 模型对记忆文件的正常改写会把每一条都换个说法（逐行保留率 0%），但没有任何一条内容消失；
+ * 而丢内容的改写，特征是整条整条地不见。所以判定看"消失的条目"与"整体召回"。
+ */
+export function rewriteCoverage(existing: string, proposed: string): RewriteCoverage {
+  const items = factLines(existing);
+  const proposedText = String(proposed ?? '');
+  const incoming = new Set(factLines(proposedText));
+  return {
+    total: items.length,
+    kept: items.filter(line => incoming.has(line)).length,
+    vanished: items.filter(line => fragmentRecall(line, proposedText) < ITEM_VANISHED_BELOW).length,
+    recall: items.length > 0 ? fragmentRecall(items.join('\n'), proposedText) : 1,
+  };
+}
+
+/**
+ * 改写稿是否"疑似丢内容"。原文不足 3 条时不构成判断依据（改掉唯一那条正是改写的用途）。
+ * 校准（阈值取自实测）：真实接受的一次正常改写 — 逐行原样保留 0/4，但消失 0/4 条、整体召回 0.62；
+ * 内容等价的换说法 0 条消失、0.58；丢一半 3/5 条消失、0.36；丢大半 4/5、0.17。
+ */
+export function isLossyRewrite(c: RewriteCoverage): boolean {
+  if (c.total < 3) return false;
+  return c.vanished / c.total > MAX_VANISHED_RATIO || c.recall < MIN_OVERALL_RECALL;
+}
+
+/**
+ * 行级全保留合并。判定只看"事实行"（非空、非标题、非信任标记），空白差异忽略：
+ *  · incoming 覆盖了原文全部事实行且有新增 → merged：采用 incoming（标题可重组，事实可增补）
+ *  · incoming 丢了事实行 → appended：原文一字不动，只把 incoming 里原文没有的行追加到尾部带日期的小节
+ *  · 没有任何新增行 → unchanged（调用方跳过写入）
+ * incoming 为空 → null（非法输出，跳过）。
+ */
+export function preserveMerge(
+  existing: string,
+  incoming: string,
+  now = new Date(),
+): { content: string; mode: 'merged' | 'appended' | 'unchanged' } | null {
+  const inc = stripTrustMarker(String(incoming ?? '')).trim();
+  if (!inc) return null;
+  const existingLines = existing.split(/\r?\n/);
+  const incomingLines = inc.split(/\r?\n/);
+  // 与 factLines 同一套判定，只是这里手里已经是行数组
+  const factsOf = (lines: string[]) => lines.map(normLine).filter(t => t && !isHeading(t) && !isMarkerLine(t));
+  const incomingFacts = new Set(factsOf(incomingLines));
+  const lost = factsOf(existingLines).filter(t => !incomingFacts.has(t));
+
+  // 新增行：incoming 里原文没有的行（去重；标题与事实行同等对待 — 新小节连同标题一起追加）
+  const known = new Set(existingLines.map(normLine));
+  const fresh: string[] = [];
+  for (const raw of incomingLines) {
+    const n = normLine(raw);
+    if (!n || known.has(n) || fresh.includes(n) || isMarkerLine(n)) continue;
+    fresh.push(n);
+  }
+
+  if (lost.length === 0 && fresh.length === 0) return { content: existing, mode: 'unchanged' };
+  if (lost.length === 0) return { content: inc, mode: 'merged' };
+  if (fresh.length === 0) return { content: existing, mode: 'unchanged' };
+  return {
+    content: `${existing.trimEnd()}\n\n## ${now.toISOString().slice(0, 10)} · 会话结束整理新增\n${fresh.join('\n')}\n`,
+    mode: 'appended',
+  };
 }
 
 

@@ -13,7 +13,7 @@ import { platformConfig } from '../services/config.js';
 /**
  * M3-1：`coral mcp serve` — 把 CORAL 暴露为 MCP server（stdio transport）。
  *
- * Claude Desktop / 任何 MCP 客户端配置一条 JSON 即可：
+ * 任何 MCP 客户端配置一条 JSON 即可：
  *   { "command": "npx", "args": ["tsx", "<repo>/packages/server/src/mcp/serve.ts"] }
  *
  * 暴露的工具：

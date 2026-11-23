@@ -4,7 +4,7 @@
 
 > Audience: you (verification) and interviewers/friends (demo). Ordered by "performance impact" — each act takes 1-3 minutes, all doable in a browser + one terminal.
 > Prereq: service running (http://127.0.0.1:3001) with a real model in `.env` (demo mode halves the effect).
-> Covers: v2.7.0. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
+> Covers: v2.7.1. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
 
 ---
 
@@ -220,7 +220,7 @@ Search for plain-language explanations of these four concepts — entropy, photo
 ## Act 18: Deliveries ship with their own inspection report (acceptance checklist × independent checker × one-rule-per-mistake)
 
 **Play**:
-1. Start a deliverable task in a bound workspace (e.g. "create top3.md listing the 2024 top-3 BEV sales, ending with a 'Sources' section"). The execution log shows a `verify.criteria` event — the **acceptance checklist generated at task start** (3-7 binary pass/fail lines); if the task has ambiguities (e.g. "one page" undefined), the model immediately ask_users for the exact caliber — checklist generation doubles as the cheapest ambiguity detector
+1. Start a deliverable task in a bound workspace (e.g. "create top3.md listing the 2024 top-3 BEV sales, ending with a 'Sources' section"). The execution log shows a `verify.criteria` event — the **acceptance checklist generated at task start** (3-7 binary pass/fail lines); if the task has a substantive ambiguity (readings that would materially change the deliverable, e.g. "one page" undefined), the model ask_users for the exact caliber and takes conventional defaults for mere details — checklist generation doubles as the cheapest ambiguity detector
 2. When it finishes, a **verdict card** appears above the input: level badge (L4 all-pass with evidence / L3 pass with some unverifiable / L2 has failures) plus per-line results (✓/✗/? with evidence). If round one had failures, the verification gate already bounced it back for fixing (bounded at 2 rounds)
 3. Click **"promote to permanent check"** next to a failed line — it enters the workspace CHECKS.md; run a similar task and the generated checklist **auto-loads the accumulated line** (the checklist grows itself through use)
 4. Settings → memory card gains an **entity index** section (toggle + auto-activation threshold + backfill button); Settings → run-budget card gains a **delivery verification** toggle
@@ -232,7 +232,7 @@ Search for plain-language explanations of these four concepts — entropy, photo
 
 ## Act 19 (closing line)
 
-> "Other agent demos show 'what the model can do'. CORAL shows 'how the runtime makes sure the model does it right — and gets better with use' — blind edits refused, rhetoric bounced, oversized results archived, teams under a budget watchdog, mid-budget runs told to converge, wrong memories caught by the offline audit. None of it depends on model discipline; all of it is deterministic code, event-logged, and time-replayable. And every task it runs feeds three flywheels: skills revised through use, complex experience crystallizing into new skills, and the entire conversation history becoming full-text searchable — the agent proposes, the human decides."
+> "Other agent demos show 'what the model can do'. CORAL shows 'how the runtime makes sure the model does it right — and gets better with use' — blind edits refused, rhetoric bounced, oversized results archived, teams under a budget watchdog, mid-budget runs told to converge, wrong memories caught by the offline audit, stalls get broken up, restarts leave no zombies, model-written code cannot leave its sandbox. None of it depends on model discipline; all of it is deterministic code, event-logged, and time-replayable. And every task it runs feeds three flywheels: skills revised through use, complex experience crystallizing into new skills, and the entire conversation history becoming full-text searchable — the agent proposes, the human decides."
 
 ---
 
@@ -252,4 +252,6 @@ Search for plain-language explanations of these four concepts — entropy, photo
 | Human-agent collaboration | Runtime follow-ups (inject-now = step-boundary injection / queue = continue next turn), ask_user clarifications (choice + recommended + free text, ≤3 per task, configurable timeout), content-addressed checkpoint messages (per-run O(steps²)→O(n); measured 2.1GB→223MB) |
 | Quality | Double-blind review, five-axis self-eval (low scores must cite evidence), skill quality gate, config self-cleanup |
 | Ops | coral doctor 8 channels, ESTOP sentinel, approval session memory, triggers continuing existing sessions (persistent inbox) |
+| Runtime reliability | Stall breaker (same signature 15 consecutive / 30 cumulative), truncation continuation, end-of-run drain (terminal paths never drop messages), cancel checkpoints, startup reconciliation (in-flight runs + dangling interactions closed out), unattended runs (no questions / approvals settle immediately), rotating offline audit across the whole library, checklist verdicts aligned by line number, full cleanup when deleting large sessions, batched legacy-checkpoint migration in compact (450 rows: 13+ seconds → under half a second) |
+| Execution boundaries | code-exec restricted interpreter (audit hooks + import finder + minimal environment + fail-closed self-check), skill contract (accepts_code / sandboxed), event-channel origin check before the handshake |
 | Extensibility | Skill / named-sub-agent / slash-command user directories + hooks open interface + `coral install` packages (npm/git/local) + `@coral/sdk` library embedding — all hot-reloading; bilingual UI |

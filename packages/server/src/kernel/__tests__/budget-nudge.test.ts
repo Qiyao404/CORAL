@@ -21,7 +21,8 @@ class ToolLoopLLM {
       return { content: 'done', toolCalls: [], usage: { inputTokens: 10, outputTokens: 5 }, stopReason: 'end' };
     }
     return {
-      content: '', toolCalls: [{ id: `c${this.calls}`, name: 'echo', input: {} }],
+      // 入参带步序号：每次调用互不相同 — 本测试只考察预算提醒（入参全同会触发 REG-21 连打提醒）
+      content: '', toolCalls: [{ id: `c${this.calls}`, name: 'echo', input: { step: this.calls } }],
       usage: { inputTokens: 10, outputTokens: 5 }, stopReason: 'tool_use',
     };
   }

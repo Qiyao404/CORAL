@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **Version: v2.7.0** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
+> **Version: v2.7.1** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
 > **Positioning: a local-first, single-command, single-file-storage personal agent runtime**
 
 ---
@@ -17,6 +17,8 @@ CORAL is an LLM-powered personal agent runtime: it takes a natural-language goal
 - **Autonomous planning**: a checklist before work starts, updated live; long tasks get periodic nudges to persist reusable knowledge
 - **Tool calling**: 24 built-in tools (files / Word / web / long-term memory / sub-agents / multi-agent teams / full-text search, …) + a 40-skill ecosystem
 - **Deterministic discipline**: Fact Gate (read-before-write), Wrap-up Gate (rhetoric audit), tool effects contract (approval tiers derived from effects), external command guards (8 lifecycle points, pluggable)
+
+- **Runtime reliability**: stall breaker, truncation continuation, end-of-run drain, startup reconciliation — deterministic, model-independent safety nets around a model-driven loop; model-written code cannot leave its sandbox
 - **Self-evolution loop**: post-run distillation drafts skill revisions / new-skill proposals / profile additions from real experience — all human-reviewed before landing; version history + diff + one-click rollback
 - **Long-term memory**: full lifecycle governance — admission gate → auto-filing → consolidation → automation isolation → usage tracking (hit count / possibly-misleading / stale badges) → offline audit (cross-check against run history, rewrites go through human review); memory is plain editable Markdown
 - **Experience recall**: `session_search` full-text search across ALL past conversations (FTS5, CN/EN) — "that plan we discussed" hits the original trail
@@ -128,9 +130,9 @@ Two loops turn every run into fuel for improvement:
 
 **Memory governance system** (four defense layers keeping the library small and valuable):
 - **Admission gate**: before creating a new memory file, an LLM checks admission rules — environment snapshots (rebuildable via fs_list) / conversation recaps (already covered by session_search) / volatile state → rejected with reason; user preferences, corrections, conventions, problem→solution lessons → accepted; user-instructed "remember this" bypasses the gate
-- **Auto-filing**: accepted content is routed by LLM to the closest matching existing file (original preserved + dated section appended), genuinely new topics get new files — no fragmentation
+- **Auto-filing**: accepted content is routed by LLM to the closest matching existing file (original preserved + dated section appended, trust marker carried along), genuinely new topics get new files — no fragmentation
 - **Auto-consolidation**: >15 files triggers LLM topic grouping (target 5-12) + in-group full-preserve merge (every fact kept), originals backed up to `.history/` — verified live: 68 fragmented files → 9 topic files, zero fact loss
-- **Automation isolation**: automated runs (sessionId prefix match: gaia-eval / pawbench / eval- / benchmark-) have memory_write denied by default — evaluation experience never pollutes the personal memory library
+- **Automation isolation**: automated runs (sessionId prefix match: gaia-eval / pawbench / eval- / benchmark-) have memory_write denied by default and skip end-of-session distillation — one rule across both write paths, so evaluation experience never pollutes the personal memory library
 
 Paired with **memory nudges** (every 12 steps during long tasks, max 2) and **manual multi-select merge** (Settings page → LLM full-preserve merge with length-safety check).
 
@@ -151,7 +153,7 @@ Six incremental mechanisms covering loss-stopping within a single run, compressi
 Two complementary channels turn "wait until it finishes" into bidirectional collaboration:
 
 - **Runtime follow-ups**: sending while a run executes no longer silently starts a second parallel run — a choice bar lets the user decide: **Inject now** (the message enters that run's injection inbox and is delivered at the next step boundary through the same gate as teammate messages — never lost, never interrupting the current step, zero prefix-cache invalidation; if the follow-up changes direction significantly, the injection carries a "rewrite your todo list first" nudge and the UI shows the re-plan live) or **Queue** (auto-sent as the next continuation turn after terminal state). Fully event-logged (`run.user_input_received/injected`).
-- **Ask-back (ask_user tool)**: the model proactively asks the user at high-impact decision points where guessing is expensive — multiple choice + recommended marker + free-text pseudo-option, multiple questions coexist with switching. Designed as a **tool, not a skill** (tool definitions are present on every request — no "should have asked but never invoked the skill" miss); shares the approval lifecycle (suspend waiting_human → human answers → resume). Guardrails: ≤3 questions per task (asking can't become an escape hatch), evaluation/automation sessions never block (proceed with a stated best-guess assumption), user-configurable wait timeout (default: wait indefinitely); the "don't ask what you can look up yourself" discipline lives in the tool description (verified live: when long-term memory already held the preference, the model declined to ask and explained why). Q&A lands in checkpoints as tool results — fork from before the question to re-run with a different answer (fromSeq=0 origin replay supported when the question was the first step).
+- **Ask-back (ask_user tool)**: the model proactively asks the user at high-impact decision points where guessing is expensive — multiple choice + recommended marker + free-text pseudo-option, multiple questions coexist with switching. Designed as a **tool, not a skill** (tool definitions are present on every request — no "should have asked but never invoked the skill" miss); shares the approval lifecycle (suspend waiting_human → human answers → resume). Guardrails: ≤3 questions per task (asking can't become an escape hatch), evaluation/automation sessions and scheduled/triggered runs never block (proceed with a stated best-guess assumption), user-configurable wait timeout (default: wait indefinitely); the "don't ask what you can look up yourself" discipline lives in the tool description (verified live: when long-term memory already held the preference, the model declined to ask and explained why). Q&A lands in checkpoints as tool results — fork from before the question to re-run with a different answer (fromSeq=0 origin replay supported when the question was the first step).
 
 **31. Content-addressed checkpoint storage & database compaction**
 Checkpoints previously stored a full message snapshot every step with 90%+ overlap between adjacent steps — per-run storage was O(steps²), and a measured 2.1GB database was 93% checkpoints. Messages are now stored once per run by content hash in `checkpoint_messages` (cascade-deleted with the run) while checkpoints keep only reference lists (O(n²)→O(n)); legacy inline format remains readable. `coral compact` performs legacy migration + orphan cleanup (including full-text-index/evidence-directory cascade fixes) + VACUUM in one command — measured 2089.3MB → 222.6MB (−89.3%).
@@ -159,7 +161,7 @@ Checkpoints previously stored a full message snapshot every step with 90%+ overl
 **32. Delivery verification (acceptance checklist × independent checker × one-rule-per-mistake)**
 Turns "done" from a claim into an auditable delivery with a level, proof, and accumulating standards:
 
-- **Criteria before work**: workspace tasks generate an acceptance checklist at start (3-7 binary pass/fail lines; a qualifying line = a third party who never saw the work can judge it in 30 seconds) from the task goal + the workspace's accumulated CHECKS.md. Generation input is strictly limited to the goal and accumulated checks — **never the work product or execution trail**, so the checklist cannot be reverse-tailored to the product; ambiguities found during generation are injected as a prompt for the model to clarify via ask_user (ask before work begins, don't guess)
+- **Criteria before work**: workspace tasks generate an acceptance checklist at start (3-7 binary pass/fail lines; a qualifying line = a third party who never saw the work can judge it in 30 seconds) from the task goal + the workspace's accumulated CHECKS.md. Generation input is strictly limited to the goal and accumulated checks — **never the work product or execution trail**, so the checklist cannot be reverse-tailored to the product; substantive ambiguities found during generation (readings that would materially change the deliverable) are handed to the model through a runtime note — clarify those via ask_user before work begins, take conventional defaults for the rest; unattended runs get no such note
 - **Verification gate**: before the final answer ships, an independent checker judges each line — **default deny** (lines missing a verdict are counted as failed), failures must cite evidence; lines that cannot be verified (e.g. require opening an external link) are honestly marked "unverifiable" rather than guessed PASS; at most 2 pushback rounds, the 3rd forces passage with a warning (the gate guards against letting bad work slip, not against delivery — the human rules last). The checker can read small text artifact contents (whitelisted extensions, ≤8KB) — **artifact content overrides the maker's own claims**
 - **Verification levels**: the completion event carries the verdict (L4 all-pass with evidence / L3 all-pass with some unverifiable / L2 has failures); the chat verdict card shows the level badge and per-line results, with one-click **"promote to permanent check"** on failed lines
 - **One rule per mistake**: promoted lines are appended to the workspace CHECKS.md (dated) and auto-loaded at the start of similar tasks — the checklist grows itself through use (promotion is human-gated, never auto-written)
@@ -169,6 +171,15 @@ Turns "done" from a claim into an auditable delivery with a level, proof, and ac
 - **Recency weighting**: results ranked by a hybrid score — files scanned newest-first plus a boost for the tail "recent section" of each file (append-style filing keeps the newest entries last), so "what's the current state" returns the newest entry instead of the oldest namesake
 - **Entity index**: after memory_write, an LLM extracts key proper nouns from the note (people/projects/tools/domains, ≤10 per file) into a sidecar index; at retrieval, lines hitting known entities get boosted — **scattered records of the same entity are threaded together**. Settings provide a toggle + auto-activation threshold (default 8 files — cost accrues per write immediately while benefit arrives with library scale; the threshold aligns the two) + a backfill button (one-shot indexing when enabled mid-library); while the index is active the memory consolidation threshold auto-relaxes — retrieval capability decides how large the library should be
 - Honest trade-off: the planned statistical "specificity boost" cannot change ranking under AND-per-line matching (every matched line contains all query terms → every term's file spread is identical), so it was removed with the reasoning documented in comments and a regression test
+
+**34. Runtime reliability & execution boundaries**
+Deterministic, model-independent guarantees around a model-driven loop — each with a failing test first and an independent repro script:
+
+- **Loop discipline**: the same call repeated 5 times in a row gets a notice, 15 consecutive (or 30 cumulative) force a wrap-up; answers cut off by the output limit continue from the break point; the inbox is drained once more before a run ends, so a runtime follow-up is never dropped; the cancel signal is re-checked before every tool call
+- **State lifecycle**: after a restart, in-flight runs are marked interrupted and their dangling questions / approvals cleared; background teammates end with the main loop and their tokens count toward the run; cancelled runs are accounted too
+- **Unattended runs**: scheduled / triggered runs never ask or wait — `ask_user` returns "user unavailable" and approval-required operations settle immediately instead of hanging
+- **Memory write-back**: distillation applies a line-level full-preserve merge to existing files (dropped lines → original untouched, only new lines appended), backs up before overwriting, and keeps the trust marker; evaluation sessions skip distillation
+- **Execution boundaries**: model-written code runs inside a restricted interpreter (audit hooks intercept file / process / network actions, self-checked before every run, refusing to run if enforcement fails); skill manifests declare `accepts_code` / `sandboxed`; `/ws/events` validates its origin before the handshake
 
 ---
 
@@ -180,6 +191,7 @@ Open the Chat page, describe a goal in one sentence, and the agent works autonom
 - **Local file I/O**: bind a workspace folder, then list/read/write files — writes show a diff approval card first (three permission tiers: read-only / ask / auto)
 - **Command execution**: optional shell tool (every execution requires approval)
 - **Web access**: fetch any URL and read its main content; blocked pages automatically walk a recovery ladder (archived copies → same-site API → alternate sources)
+- **Runtime reliability**: stall breaker (15 consecutive / 30 cumulative identical calls force a wrap-up), truncation continuation, end-of-run drain (terminal paths never drop a runtime follow-up), startup reconciliation (in-flight runs plus dangling questions/approvals closed out), scheduled/triggered runs that never ask or wait for approval; model-written code runs inside a restricted interpreter (code-exec)
 - **Multi-agent teams**: `team_spawn` background named teammates in parallel, step-boundary messaging, shared task board (acyclic DAG + optimistic locking), `team_wait` harvesting — team-token watchdog prevents runaway
 - **Experience recall**: `session_search` full-text search across all past conversations — "that plan we discussed" hits the original trail and final answer
 - **Self-evolution**: post-run distillation drafts skill revisions from failures, new skills from complex tasks, profile additions from conversations — all human-reviewed; version history + diff + one-click rollback
@@ -269,13 +281,13 @@ Verified against DeepSeek and DashScope; any OpenAI-compatible endpoint (OpenRou
 | Persistence | SQLite (better-sqlite3, WAL mode, versioned schema migrations) |
 | Skills | YAML frontmatter (gray-matter) + chokidar hot reload |
 | Progress protocol | in-house `[CORAL_PROGRESS]` single-line stderr JSON protocol (Python + Node SDKs, see [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)) |
-| Quality | Vitest (511 cases) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
+| Quality | Vitest (631 cases + 14 web) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
 
 ---
 
 ## Tests & Benchmarks
 
-- **Tests**: 511 cases (Vitest) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
+- **Tests**: 631 cases (Vitest, server) + 14 (web) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
 - **GAIA benchmark**: [docs/GAIA.md](./docs/GAIA.md) — official GAIA benchmark validation split, **87.1%** (85 questions, deterministic exact match). L1 90.2% / L2 96.2% / L3 66.7%.
 - **Performance**: [docs/BENCHMARK.md](./docs/BENCHMARK.md) — context-compression gains (1.2MB history → 169KB, −86%), SQLite WAL and JSONL persistence throughput. Script: `npx tsx scripts/benchmark.mts`.
 
@@ -343,7 +355,7 @@ Data stays local (`data/personalization/`); one-click wipe.
 |-------|:--:|------|
 | `data-transform` | llm_only | Data format conversion and structuring |
 | `csv-insight` | llm_only | CSV data analysis |
-| `code-exec` | script | Sandboxed Python execution (computation / conversion / data analysis) |
+| `code-exec` | script | Python inside a restricted interpreter (audit hooks intercept file/process/network actions, self-check before each run; standard-library compute modules) |
 | `chart-maker` | llm_only | Data visualization (SVG bar/line/pie) |
 | `excel-writer` | llm_only | Excel generation (openpyxl or CSV) |
 
@@ -551,6 +563,8 @@ CORAL/
 - **Review and adjudication share one LLM**: the semantic layer of independent review and self-evaluation runs on the same model — weaker independence than human review; the deterministic heuristic layer is unaffected.
 - **Gates are heuristic**: the Wrap-up Gate pattern library and Fact Gate rules cannot cover every phrasing; both have forced-release plus warning to avoid blocking delivery.
 - **MCP stdio execution boundary**: external MCP servers run as local subprocesses; their capability boundary is determined by their own implementations; the platform constrains via annotation mapping and approval tiers.
+- **code-exec is interpreter-level isolation**: audit hooks intercept *actions*; it is not an OS-level container — it does not defend against someone versed in interpreter internals deliberately bypassing it; file existence remains probeable; there is no memory cap. Only standard-library compute modules are available inside the sandbox (third-party libraries such as numpy / pandas load restricted modules during their own import)
+- **Web tests cover pure logic only**: the event window and event view are unit-tested, components are not — UI changes still rely on builds and live verification
 
 ---
 

@@ -3,7 +3,7 @@
 > 版本：**v1.1.0**（rev 2 + impl 2026-04-25）  日期：2026-04-25  状态：**已实现**
 > 关联文档：[需求文档 REQUIREMENTS.md](./REQUIREMENTS.md) ｜ [任务文档 TASKS.md](./TASKS.md) ｜ [快速使用 USE.md](../USE.md) ｜ [作者指南 AUTHORING_PROGRESS.md](./AUTHORING_PROGRESS.md) ｜ [视觉指南 DESIGN_SYSTEM_USAGE.md](./DESIGN_SYSTEM_USAGE.md)
 >
-> **rev 2 新增章节**：§5b（与 skill-creator 对比） §16（视觉设计系统） §17（公司画像） §18（information-filter Skill） §19（组合任务理解与参数提取） §20（React-Flow DAG 可视化）
+> **rev 2 新增章节**：§5b（Skill Builder 设计） §16（视觉设计系统） §17（公司画像） §18（information-filter Skill） §19（组合任务理解与参数提取） §20（React-Flow DAG 可视化）
 >
 > **impl 落地映射**（与代码对应关系）：
 > - §3 数据模型 → `packages/server/src/types/index.ts`
@@ -399,16 +399,14 @@ child.stderr.on('data', chunk => {
 
 ---
 
-## 5b. 与 anthropics/skills/skill-creator 的对比与对齐
+## 5b. Skill Builder 的渐进式生产与可评测设计
 
-> 参考来源：[anthropics/skills/skill-creator](https://github.com/anthropics/skills/tree/main/skills/skill-creator)
-> （目录结构：`SKILL.md` / `agents/` / `assets/` / `eval-viewer/` / `references/` / `scripts/` / `LICENSE.txt`）
+> 设计取向："渐进式生产 + 可评测"。Skill Builder 是**平台内置服务**而非"独立可分发 Skill"，
+> 所以在目录组织上做了适应性裁剪。
 
-CORAL 的 Skill Builder 在工程上直接借鉴了 skill-creator 的"渐进式生产 + 可评测"思路；但因为我们是**平台内置服务**而非"独立可分发 Skill"，所以做了适应性裁剪。
+### 5b.1 概念落点
 
-### 5b.1 关键概念映射
-
-| anthropics/skill-creator | CORAL Skill Builder | 说明 |
+| 概念 | CORAL Skill Builder | 说明 |
 |--------------------------|--------------------|------|
 | `SKILL.md`（自身就是一个 Skill） | `services/skill-builder-service.ts` + 前端 SkillBuilderPage | 我们把"创建 Skill"做成平台一等公民服务，而非另一个 Skill |
 | `agents/` 目录（创建专家、评测专家等） | LLM 多角色 prompt（草稿生成 + 字段校验 + 反问规划） | 对应在服务端用 prompt 段切分，未来可拆为独立 Skill |
@@ -417,9 +415,9 @@ CORAL 的 Skill Builder 在工程上直接借鉴了 skill-creator 的"渐进式�
 | `eval-viewer/`（结果对照查看器） | TaskDetailPage 中的"产物预览 + 测试面板" | 一期复用现有 Skill 测试面板，不另起 viewer |
 | `assets/`（模板素材） | `skills/_lib/coral_progress.py` + 模板 fragment | 提供给生成的脚本 import |
 
-### 5b.2 工程实践对齐点
+### 5b.2 工程实践
 
-| 方面 | skill-creator 做法 | CORAL 对齐方式 |
+| 方面 | 常见做法 | CORAL 对齐方式 |
 |------|--------------------|----------------|
 | **渐进收集** | 多文件分阶段引导 | 多轮对话状态机 `collecting → previewing → committed` |
 | **可评测** | 提供 eval 脚本与样例 | 提交后自动跑一次 dry-run 测试（默认输入），结果展示在 SkillBuilderPage |
@@ -427,10 +425,10 @@ CORAL 的 Skill Builder 在工程上直接借鉴了 skill-creator 的"渐进式�
 | **失败兜底** | 模板 fallback | LLM 反问失败时退回"表单填写"模式（用户直接编辑 frontmatter） |
 | **可拓展** | 新增专家只需加一份 markdown | CORAL prompt 模板拆为 `system_prompt` + `field_specs[]` + `examples[]`，便于后续追加新字段 |
 
-### 5b.3 故意没做的部分（与 skill-creator 的差异）
+### 5b.3 刻意收敛的部分
 
-- ❌ **不引入 eval-viewer 独立页面**：复用 SkillsPage 的测试面板足以；后续若 Skill 数量大幅增长再单独立项。
-- ❌ **不实现 agents/ 多专家分工**：当前所有逻辑在一个 prompt 内推理；当对话复杂度达到瓶颈后再拆分为多 Agent（如"分析师"+"工程师"+"评审"）。
+- ❌ **不做独立的评测查看页面**：复用 SkillsPage 的测试面板足以；后续若 Skill 数量大幅增长再单独立项。
+- ❌ **不做多专家分工**：当前所有逻辑在一个 prompt 内推理；当对话复杂度达到瓶颈后再拆分为多 Agent（如"分析师"+"工程师"+"评审"）。
 - ❌ **不引入 LICENSE 元数据**：内部使用，统一遵循平台许可。
 
 ---

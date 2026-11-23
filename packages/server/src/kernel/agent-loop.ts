@@ -1,7 +1,7 @@
 import type { ChatMessage, ChatRequest, ChatResponse, ToolDefinition } from '../providers/types.js';
 import type { Tool, ToolResult } from '../tools/types.js';
 import { makeToolContext } from '../tools/types.js';
-import { clipToolResults, compressIfNeeded, shelveOldToolResults, usageLevel, deterministicCompress, cooldownFor } from './context-window.js';
+import { clipToolResults, compressIfNeeded, shelveOldToolResults, usageLevel, deterministicCompress, cooldownFor, TOOL_RESULT_CLIP_CHARS } from './context-window.js';
 import { EvidenceStore, summarizeForEvidence, evidenceThreshold } from './evidence.js';
 import { detectRationalization, shouldGate, gatePushback, endsWithFutureWorkPromise, pendingTodoItems, todoGatePushback } from './quality-gate.js';
 import { FactGate, factsRequiredError } from './fact-gate.js';
@@ -65,9 +65,11 @@ export interface AgentLoopOptions {
   /**
    * 团队/用户邮箱（步边界投递）：下一轮请求前排空收件箱，命中注入为 user 消息。
    * 由 run-engine 注入 TeamService.drain 与"运行中用户补充"的合流闭包。
-   * kind='user' 为用户立即补充（前缀 [user follow-up]；teammate 缺省保持原格式）。
+   * kind='user' 为用户立即补充（前缀 [user follow-up]）；kind='system' 为平台自身的
+   * 提示（前缀 [system note] — 它不是用户说的话，不借用用户补充的外壳）；
+   * 缺省为 teammate 消息（原格式）。
    */
-  pollInbox?: () => Array<{ from: string; content: string; kind?: 'user' }> | Promise<Array<{ from: string; content: string; kind?: 'user' }>>;
+  pollInbox?: () => Array<{ from: string; content: string; kind?: 'user' | 'system' }> | Promise<Array<{ from: string; content: string; kind?: 'user' | 'system' }>>;
   /** 记忆 nudge 周期（步）：长任务进行中提醒持久化可复用知识；默认 12，0 = 关闭，最多提醒 2 次 */
   memoryNudgeEvery?: number;
   /** 多轮续接：本会话此前的对话历史（含上一轮的 goal/工具结果/最终回答），种子在新 goal 之前 */
@@ -131,7 +133,8 @@ export interface LoopHooks {
 }
 
 export interface LoopResult {
-  status: 'completed' | 'cancelled' | 'budget_exceeded' | 'failed';
+  /** stalled = 原地打转被平台熔断（REG-21）— 收尾内容为模型总结，库侧落 failed + end_reason=stalled */
+  status: 'completed' | 'cancelled' | 'budget_exceeded' | 'failed' | 'stalled';
   finalContent: string;
   messages: ChatMessage[];
   steps: number;
@@ -139,6 +142,9 @@ export interface LoopResult {
   tokensIn: number;
   tokensOut: number;
   error?: string;
+  /** 子代理（agent_spawn 同步派生）消耗的 token — 有独立子预算，不占主循环预算；由 run-engine 计入 run 总账 */
+  childTokensIn?: number;
+  childTokensOut?: number;
 }
 
 /** LLM 接口（llmClient 天然满足；测试注入脚本化桩） */
@@ -283,6 +289,21 @@ export class AgentLoop {
     // 失败是分级降级的事，不是永久关停的事；冷却期间由确定性摘要兜底）
     let compactFailures = 0;
     let compactCooldownUntil = 0;
+    // 原地打转熔断（REG-21）：同一签名（工具名+入参）的调用连续/累计计数。
+    // 用户实测里出现过同一 URL 连打 572 次（641 步 / 8650 万 token / 32 分钟）无人叫停
+    const stall = { lastSig: '', consecutive: 0, warnedSig: '', counts: new Map<string, number>() };
+    let stallStopped = false;
+    let stallTool = '';
+    let stallCount = 0;
+    // 输出截断续写（REG-30）：stopReason=max_tokens 的回答是被输出上限切掉的半截，
+    // 不是完整回答 — 接着写完再拼；续写有上限，到点如实告警
+    const answerParts: string[] = [];
+    let truncContinues = 0;
+    // 同步子代理（agent_spawn）消耗 — 有独立子预算，不占主循环预算，单独上报
+    let childTokensIn = 0;
+    let childTokensOut = 0;
+    // 结束前因"未送达消息"而续跑的轮数（REG-23 — 有上限，防消息源源不断把 run 拖成永不结束）
+    let lateInboxContinues = 0;
 
     try {
       while (true) {
@@ -383,28 +404,13 @@ export class AgentLoop {
 
         // 团队/用户邮箱（步边界投递）：下一轮请求前排空收件箱，命中注入为 user 消息。
         // 放在压缩之后、请求组装之前 — 消息进入本轮上下文，不丢不打断
-        if (this.options.pollInbox) {
-          try {
-            const incoming = await this.options.pollInbox();
-            for (const msg of incoming) {
-              messages.push({
-                role: 'user',
-                content: msg.kind === 'user'
-                  ? `[user follow-up]\n${msg.content}`
-                  : `[teammate message from ${msg.from}]\n${msg.content}`,
-              });
-              this.emit(msg.kind === 'user' ? 'run.user_input_injected' : 'team.message_delivered', {
-                to: this.options.agentId, ...(msg.kind === 'user' ? {} : { from: msg.from }), chars: msg.content.length,
-              });
-            }
-          } catch { /* 邮箱故障不伤主循环 */ }
-        }
+        await this.drainInbox(messages);
 
         steps++;
         const contextChars = messages.reduce((n, m) => n + (m.content ?? '').length, 0);
         this.emit('loop.step_started', {
           step: steps, tokensIn, tokensOut,
-          // 上下文用量（ZCode 风格指示器数据源 + 4 档预警）
+          // 上下文用量（用量指示器数据源 + 4 档预警）
           contextChars,
           contextMax: maxChars,
           usageLevel: usageLevel(contextChars, maxChars),
@@ -439,18 +445,69 @@ export class AgentLoop {
         if (response.degraded) this.emit('loop.llm_degraded', { step: steps });
         tokensIn += response.usage.inputTokens;
         tokensOut += response.usage.outputTokens;
+        const hasBudgetLeft = () => steps < budget.maxSteps - 1 && tokensIn + tokensOut < budget.maxTokens;
+
+        // 工具调用被输出上限截断（REG-30）：stopReason=max_tokens 时参数可能是半截 JSON —
+        // 执行半截参数等于执行一个模型没打算发的调用。不执行，让模型重发
+        if (response.stopReason === 'max_tokens' && response.toolCalls.length > 0) {
+          if (truncContinues < TRUNCATION_MAX_CONTINUES && hasBudgetLeft()) {
+            truncContinues++;
+            this.emit('loop.tool_call_truncated', { step: steps, continues: truncContinues });
+            messages.push({ role: 'assistant', content: response.content });
+            messages.push({
+              role: 'user',
+              content: '[system] Your last tool call was cut off by the output length limit and was NOT executed (its arguments may be incomplete). Re-issue that tool call now with complete arguments; keep any prose brief.',
+            });
+            this.checkpoint(steps, messages);
+            continue;
+          }
+          this.emit('loop.tool_call_truncated', { step: steps, continues: truncContinues, gaveUp: true });
+          this.closeTodos('stopped');
+          return {
+            status: 'failed',
+            finalContent: '',
+            messages,
+            steps,
+            toolCalls: toolCallCount,
+            tokensIn,
+            tokensOut,
+            error: '模型的工具调用连续被输出长度上限截断，无法继续',
+            ...(childTokensIn || childTokensOut ? { childTokensIn, childTokensOut } : {}),
+          };
+        }
 
         // 模型给出最终回答 — narration 续跑例外
         if (response.stopReason !== 'tool_use' || response.toolCalls.length === 0) {
+          // 最终回答被输出上限截断（REG-30）：半截回答不是回答 — 把已写的部分入历史，
+          // 让模型从断点接着写，最后拼接。续写上限后如实交付已得内容并告警
+          if (response.stopReason === 'max_tokens' && response.content.trim()) {
+            if (truncContinues < TRUNCATION_MAX_CONTINUES && hasBudgetLeft()) {
+              truncContinues++;
+              answerParts.push(response.content);
+              this.emit('loop.answer_continued', { step: steps, continues: truncContinues });
+              messages.push({ role: 'assistant', content: response.content });
+              messages.push({
+                role: 'user',
+                content: '[system] Your answer was cut off at the output length limit. Continue EXACTLY where you left off and output only the remainder — do not repeat or restart. Keep reasoning brief so the answer fits.',
+              });
+              this.checkpoint(steps, messages);
+              continue;
+            }
+            if (answerParts.length > 0) {
+              this.emit('loop.answer_truncated', { step: steps, continues: truncContinues, parts: answerParts.length + 1 });
+            }
+          }
+          // 完整回答 = 续写片段按序拼接（未发生截断时就是 response.content 本身）
+          const finalText = answerParts.length > 0 ? answerParts.join('') + response.content : response.content;
+
           // 空回答守卫：模型偶发返回空 content 的"假终答"（用户实测：run 显示
           // completed 但什么都没输出）。空回答绝不静默交付 — 重询 ≤2 次，
           // 仍空则强制一次无工具收尾，再不行回退最近一条非空 assistant 内容
-          if (!response.content.trim()) {
-            const budgetLeft = steps < budget.maxSteps - 1 && tokensIn + tokensOut < budget.maxTokens;
-            if (emptyFinalContinues < 2 && budgetLeft) {
+          if (!finalText.trim()) {
+            if (emptyFinalContinues < 2 && hasBudgetLeft()) {
               emptyFinalContinues++;
               this.emit('loop.empty_answer_rejected', { step: steps, continues: emptyFinalContinues });
-              messages.push({ role: 'assistant', content: response.content });
+              messages.push({ role: 'assistant', content: finalText });
               messages.push({
                 role: 'user',
                 content: '[system] Your final answer was EMPTY. Based on the work completed so far, write the actual final answer for the user now.',
@@ -467,41 +524,38 @@ export class AgentLoop {
                   content: '[system] The previous final answer was empty. Write the complete final answer now based on everything accomplished above.',
                 }],
                 signal: this.options.signal,
-                maxTokens: 8192,
+                maxTokens: 16384,
               });
               forced = wrap.content;
               tokensIn += wrap.usage.inputTokens;
               tokensOut += wrap.usage.outputTokens;
             } catch { /* 强制收尾失败 → 历史回退 */ }
-            const finalContent =
+            // 历史回退只取"纯文本回答"的 assistant 消息 — 伴随工具调用的那类是过程旁白
+            //（"现在我来写…"），拿它当最终回答交付等于把半路的话当成果（同 REG-17）
+            const fallback =
+              [...messages].reverse().find(m => m.role === 'assistant' && !m.toolCalls?.length && m.content.trim())?.content.trim();
+            const finalContent = await this.flushUndelivered(
               forced.trim() ||
-              [...messages].reverse().find(m => m.role === 'assistant' && m.content.trim())?.content.trim() ||
-              '[模型未返回最终回答 — 请查看执行过程，或发送"继续"接力完成]';
+              fallback ||
+              '[模型未返回最终回答 — 请查看执行过程，或发送"继续"接力完成]'
+            );
             messages.push({ role: 'assistant', content: finalContent });
             this.closeTodos('completed');
             this.checkpoint(steps, messages);
             this.emit('loop.step_completed', { step: steps, final: true });
-            this.emit('loop.empty_answer_fallback', { step: steps, source: forced.trim() ? 'forced' : 'history' });
-            return {
-              status: 'completed',
-              finalContent,
-              messages,
-              steps,
-              toolCalls: toolCallCount,
-              tokensIn,
-              tokensOut,
-            };
+            this.emit('loop.empty_answer_fallback', { step: steps, source: forced.trim() ? 'forced' : fallback ? 'history' : 'none' });
+            return this.finish('completed', finalContent, messages, steps, toolCallCount, tokensIn, tokensOut, childTokensIn, childTokensOut);
           }
 
           if (
             narrationContinues < NARRATION_MAX &&
             steps < budget.maxSteps - 1 &&
             tokensIn + tokensOut < budget.maxTokens &&
-            isPlanningNarration(response.content)
+            isPlanningNarration(finalText)
           ) {
             narrationContinues++;
-            this.emit('loop.narration_continued', { step: steps, content: response.content.slice(0, 120) });
-            messages.push({ role: 'assistant', content: response.content });
+            this.emit('loop.narration_continued', { step: steps, content: finalText.slice(0, 120) });
+            messages.push({ role: 'assistant', content: finalText });
             this.checkpoint(steps, messages);
             continue; // 过渡话不是答案 — 带着它继续下一轮
           }
@@ -516,7 +570,7 @@ export class AgentLoop {
             tokensIn + tokensOut < budget.maxTokens
           ) {
             const undone = pendingTodoItems(this.lastTodos);
-            if (undone.length > 0 && endsWithFutureWorkPromise(response.content)) {
+            if (undone.length > 0 && endsWithFutureWorkPromise(finalText)) {
               if (todoGateContinues < 2) {
                 todoGateContinues++;
                 this.emit('loop.todo_gate_rejected', {
@@ -524,7 +578,7 @@ export class AgentLoop {
                   undone: undone.map(t => t.content),
                   continues: todoGateContinues,
                 });
-                messages.push({ role: 'assistant', content: response.content });
+                messages.push({ role: 'assistant', content: finalText });
                 messages.push({ role: 'user', content: todoGatePushback(undone, 2 - todoGateContinues + 1) });
                 this.checkpoint(steps, messages);
                 continue;
@@ -540,12 +594,12 @@ export class AgentLoop {
             steps < budget.maxSteps - 1 && // 预算耗尽时模型已无行动能力，不打回
             tokensIn + tokensOut < budget.maxTokens
           ) {
-            const hits = detectRationalization(response.content);
+            const hits = detectRationalization(finalText);
             if (hits.length > 0) {
               if (gateContinues < 2) {
                 gateContinues++;
                 this.emit('loop.gate_rejected', { step: steps, hits, continues: gateContinues });
-                messages.push({ role: 'assistant', content: response.content });
+                messages.push({ role: 'assistant', content: finalText });
                 messages.push({ role: 'user', content: gatePushback(hits, 2 - gateContinues) });
                 this.checkpoint(steps, messages);
                 continue;
@@ -559,13 +613,13 @@ export class AgentLoop {
           // 在收工门之后：先修话术再验货；与收工门同样只在预算尚存时打回
           if (
             this.options.verifyGate &&
-            response.content.trim().length > 20 &&
+            finalText.trim().length > 20 &&
             steps < budget.maxSteps - 1 &&
             tokensIn + tokensOut < budget.maxTokens
           ) {
             let verdict: Awaited<ReturnType<NonNullable<AgentLoopOptions['verifyGate']>>> = null;
             try {
-              verdict = await this.options.verifyGate(response.content);
+              verdict = await this.options.verifyGate(finalText);
             } catch (err: any) {
               this.emit('loop.verify_error', { error: err?.message ?? String(err) });
             }
@@ -579,7 +633,7 @@ export class AgentLoop {
                   failedLines: verdict.failedLines.map(f => f.line),
                   continues: verifyContinues,
                 });
-                messages.push({ role: 'assistant', content: response.content });
+                messages.push({ role: 'assistant', content: finalText });
                 messages.push({
                   role: 'user',
                   content:
@@ -610,7 +664,7 @@ export class AgentLoop {
             let stopOutcome: Awaited<ReturnType<LoopHooks['run']>> | null = null;
             try {
               stopOutcome = await this.options.hooks.run('stop', {
-                finalContentPreview: response.content.slice(0, 2000),
+                finalContentPreview: finalText.slice(0, 2000),
                 writeOps,
                 toolCalls: toolCallCount,
               });
@@ -618,7 +672,7 @@ export class AgentLoop {
             if (stopOutcome?.decision === 'block' && hookStopContinues < 2) {
               hookStopContinues++;
               this.emit('loop.hook_stop_rejected', { step: steps, reason: stopOutcome.reason, continues: hookStopContinues });
-              messages.push({ role: 'assistant', content: response.content });
+              messages.push({ role: 'assistant', content: finalText });
               messages.push({
                 role: 'user',
                 content:
@@ -630,19 +684,25 @@ export class AgentLoop {
             }
           }
 
-          messages.push({ role: 'assistant', content: response.content });
+          // 结束前最后一眼（REG-23）：邮箱在每轮开头排空，而"模型正在写最终回答"的这几秒到
+          // 几十秒里到达的补充没人再取 — 此前 run 直接结束，消息随邮箱一起被丢弃，用户却看到
+          // "已加入注入队列"。收尾前再取一次：有新消息就交给模型再跑一轮。
+          // 续跑有上限（防消息源源不断把 run 拖成永不结束）；到上限后取出的消息不注入，
+          // 而是如实附在最终回答末尾 — 取出来的消息只有"注入"或"带出"两种下场，不会凭空消失
+          const late = await this.peekInbox();
+          if (late.length > 0 && lateInboxContinues < LATE_INBOX_MAX_CONTINUES) {
+            lateInboxContinues++;
+            this.injectInbox(messages, late);
+            messages.push({ role: 'assistant', content: finalText });
+            this.checkpoint(steps, messages);
+            continue;
+          }
+
+          messages.push({ role: 'assistant', content: finalText });
           this.closeTodos('completed');
           this.checkpoint(steps, messages);
           this.emit('loop.step_completed', { step: steps, final: true });
-          return {
-            status: 'completed',
-            finalContent: response.content,
-            messages,
-            steps,
-            toolCalls: toolCallCount,
-            tokensIn,
-            tokensOut,
-          };
+          return this.finish('completed', this.appendUndelivered(finalText, late), messages, steps, toolCallCount, tokensIn, tokensOut, childTokensIn, childTokensOut);
         }
 
         // assistant 发起工具调用 → 入历史
@@ -655,19 +715,34 @@ export class AgentLoop {
         // 逐个执行（保持模型给出的顺序）
         let lastToolMsgIndex = -1; // 本步最后一条工具结果（渐进预算提醒的挂载点）
         for (const call of response.toolCalls) {
-          toolCallCount++;
           const tool = toolMap.get(call.name);
           // 终审 P3：别名判定要用纠正结果 — toolMap 只含实名，别名调用时 tool 为 undefined
-          if (tool?.name === 'todo_write') {
-            todoWritten = true;
-          } else if (call.name !== 'todo_write') {
-            const resolved = resolveToolName(call.name, this.options.tools);
-            if (resolved?.tool.name === 'todo_write') todoWritten = true;
-          }
-          // 记忆 nudge 数据源：本 run 内是否已写过记忆（含别名纠正后的判定）
-          const effectiveForMemory = tool ?? resolveToolName(call.name, this.options.tools)?.tool;
-          if (effectiveForMemory?.name === 'memory_write') memoryWritten = true;
+          const effective = tool ?? resolveToolName(call.name, this.options.tools)?.tool;
+          const effectiveName = effective?.name ?? call.name;
 
+          // 取消检查覆盖循环体内部（REG-24）：取消可能落在同一步的第 1 个工具执行期间 —
+          // 此前只有"审批位"入口查过一次，其余工具拿着已取消的信号照常执行到底
+          signal.throwIfAborted?.();
+
+          if (effectiveName === 'todo_write') todoWritten = true;
+          // 记忆 nudge 数据源：本 run 内是否已写过记忆（含别名纠正后的判定）
+          if (effectiveName === 'memory_write') memoryWritten = true;
+
+          if (stallStopped) {
+            // 本步已触发熔断：剩余调用不执行，给出确定性的"未执行"结果（工具组保持配对完整）
+            messages.push({
+              role: 'tool', toolCallId: call.id, toolName: effectiveName,
+              content: JSON.stringify({ error: { code: 'RUN_STALLED', message: '本次调用未执行：运行时检测到原地打转，任务已进入强制收尾。', retryable: false } }),
+            });
+            lastToolMsgIndex = messages.length - 1;
+            this.emit('tool.call_failed', {
+              step: steps, tool: call.name, callId: call.id, ok: false,
+              error: { code: 'RUN_STALLED', message: '未执行（原地打转熔断）', retryable: false },
+            });
+            continue;
+          }
+
+          toolCallCount++;
           this.emit('tool.call_started', {
             step: steps,
             tool: call.name,
@@ -677,16 +752,31 @@ export class AgentLoop {
 
           const result = await this.executeTool(tool, call, messages);
           // 复杂度计数：写类操作（效果声明为准）— 收工门与 UI 指标的数据源
-          const effective = tool ?? resolveToolName(call.name, this.options.tools)?.tool;
           if (effective?.effects?.writesFilesystem) writeOps++;
+          // 同步子代理（agent_spawn）的消耗单独累计：它有独立子预算，不占主循环预算，
+          // 但必须进 run 总账（此前 run 的 token 数只算主循环，派生开销完全不可见）
+          const child = result.ok ? (result.data as any) : undefined;
+          if (child && typeof child.tokensIn === 'number' && typeof child.tokensOut === 'number') {
+            childTokensIn += child.tokensIn;
+            childTokensOut += child.tokensOut;
+          }
 
-          // 证据记录：超预算的大结果整体落盘，上下文只留摘要+记录 ID
+          // 证据记录：超预算的大结果整体落盘，上下文只留摘要+记录 ID。
+          // 归档线 = min(工具自己的预算, 单条裁剪线)：会被裁剪的结果必须先整体存证 —
+          // 否则中段既不在上下文、也没处取回（REG-27）。evidence_read 自身豁免：
+          // 它就是取回通道，再归档会套娃成"证据的证据"
           let content = JSON.stringify(
             result.ok ? result.data ?? {} : { error: result.error }
           ) ?? '{}';
-          if (this.options.evidenceStore && content.length > evidenceThreshold(this.options.tools, effective?.name ?? call.name)) {
-            const rec = this.options.evidenceStore.save(this.options.runId, effective?.name ?? call.name, content);
-            content = summarizeForEvidence(rec);
+          const evidenceCap = Math.min(
+            evidenceThreshold(this.options.tools, effectiveName),
+            effectiveName === 'evidence_read' ? Infinity : TOOL_RESULT_CLIP_CHARS
+          );
+          if (this.options.evidenceStore && content.length > evidenceCap) {
+            const rec = this.options.evidenceStore.save(this.options.runId, effectiveName, content);
+            content = summarizeForEvidence(rec, undefined, undefined, {
+              path: typeof call.input?.path === 'string' ? call.input.path : undefined,
+            });
             this.emit('tool.evidence_saved', {
               tool: rec.tool,
               callId: call.id,
@@ -695,10 +785,31 @@ export class AgentLoop {
             });
           }
 
+          // 原地打转熔断（REG-21）：签名 = 实际执行的工具名 + 入参（键序无关）。
+          // team_wait 是轮询语义（同参反复调用是正常用法），豁免
+          if (effectiveName !== 'team_wait') {
+            const sig = callSignature(effectiveName, call.input);
+            stall.consecutive = stall.lastSig === sig ? stall.consecutive + 1 : 1;
+            stall.lastSig = sig;
+            const total = (stall.counts.get(sig) ?? 0) + 1;
+            stall.counts.set(sig, total);
+            if (stall.consecutive === STALL_WARN_AT && stall.warnedSig !== sig) {
+              stall.warnedSig = sig;
+              content += `\n\n${stallWarning(effectiveName, total)}`;
+              this.emit('loop.stall_warning', { step: steps, tool: effectiveName, count: total, consecutive: stall.consecutive });
+            }
+            if (stall.consecutive >= STALL_STOP_CONSECUTIVE || total >= STALL_STOP_TOTAL) {
+              stallStopped = true;
+              stallTool = effectiveName;
+              stallCount = Math.max(stall.consecutive, total);
+            }
+          }
+
+          // 历史里记录实际执行的工具名（别名不进历史）— 事实门按名字识别"读类结果"
           messages.push({
             role: 'tool',
             toolCallId: call.id,
-            toolName: call.name,
+            toolName: effectiveName,
             content,
           });
           lastToolMsgIndex = messages.length - 1;
@@ -710,6 +821,34 @@ export class AgentLoop {
             ok: result.ok,
             error: result.ok ? undefined : result.error,
           });
+        }
+
+        if (stallStopped) {
+          // 强制收尾：同预算耗尽 — 不带工具的最后一次调用，让模型如实总结已得内容
+          let wrapUpContent = '';
+          try {
+            const w = await this.llm.chat({
+              system: this.buildSystemPrompt(),
+              messages: [...messages, { role: 'user', content: stallWrapNote(stallTool, stallCount) }],
+              signal: this.options.signal,
+              maxTokens: 16384,
+            });
+            wrapUpContent = w.content;
+            tokensIn += w.usage.inputTokens;
+            tokensOut += w.usage.outputTokens;
+          } catch { /* 收尾失败不丢已得内容 */ }
+          messages.push({ role: 'assistant', content: wrapUpContent });
+          this.closeTodos('stopped');
+          this.emit('loop.stalled', {
+            steps, tool: stallTool, count: stallCount, toolCalls: toolCallCount, tokensIn, tokensOut,
+          });
+          this.checkpoint(steps, messages);
+          return this.finish(
+            'stalled',
+            await this.flushUndelivered(wrapUpContent),
+            messages, steps, toolCallCount, tokensIn, tokensOut, childTokensIn, childTokensOut,
+            `检测到原地打转：工具 ${stallTool} 的同一调用已重复 ${stallCount} 次，运行时已强制收尾`
+          );
         }
 
         // 渐进预算提醒：步数分档提醒"收敛"，追加在本步最后一条工具结果末尾
@@ -789,17 +928,15 @@ export class AgentLoop {
             tokensIn,
             tokensOut,
           });
-          // budget_exceeded 也落 checkpoint（续接会话不丢最终总结）
+          // budget_exceeded 也落 checkpoint（续接会话不丢最终总结）。
+          // 收尾期间到达的消息已无法再处理 — 如实附在收尾内容里，不静默丢弃（REG-23）
           this.checkpoint(steps, messages);
-          return {
-            status: 'budget_exceeded',
-            finalContent: wrapUpContent,
-            messages,
-            steps,
-            toolCalls: toolCallCount,
-            tokensIn: tokensIn + wrapUpTokensIn,
-            tokensOut: tokensOut + wrapUpTokensOut,
-          };
+          return this.finish(
+            'budget_exceeded',
+            await this.flushUndelivered(wrapUpContent),
+            messages, steps, toolCallCount,
+            tokensIn + wrapUpTokensIn, tokensOut + wrapUpTokensOut, childTokensIn, childTokensOut
+          );
         }
       }
     } catch (err: any) {
@@ -807,30 +944,99 @@ export class AgentLoop {
         this.checkpoint(steps, messages);
         this.closeTodos('stopped');
         this.emit('loop.cancelled', { step: steps });
-        return {
-          status: 'cancelled',
-          finalContent: '',
-          messages,
-          steps,
-          toolCalls: toolCallCount,
-          tokensIn,
-          tokensOut,
-          error: '已取消',
-        };
+        await this.noteUndelivered();
+        return this.finish('cancelled', '', messages, steps, toolCallCount, tokensIn, tokensOut, childTokensIn, childTokensOut, '已取消');
       }
       this.emit('loop.failed', { step: steps, error: err?.message ?? String(err) });
       this.closeTodos('stopped');
-      return {
-        status: 'failed',
-        finalContent: '',
-        messages,
-        steps,
-        toolCalls: toolCallCount,
-        tokensIn,
-        tokensOut,
-        error: err?.message ?? String(err),
-      };
+      await this.noteUndelivered();
+      return this.finish('failed', '', messages, steps, toolCallCount, tokensIn, tokensOut, childTokensIn, childTokensOut, err?.message ?? String(err));
     }
+  }
+
+  /** 统一组装 LoopResult（子代理消耗仅在非零时携带） */
+  private finish(
+    status: LoopResult['status'],
+    finalContent: string,
+    messages: ChatMessage[],
+    steps: number,
+    toolCalls: number,
+    tokensIn: number,
+    tokensOut: number,
+    childIn: number,
+    childOut: number,
+    error?: string,
+  ): LoopResult {
+    return {
+      status,
+      finalContent,
+      messages,
+      steps,
+      toolCalls,
+      tokensIn,
+      tokensOut,
+      ...(error ? { error } : {}),
+      ...(childIn || childOut ? { childTokensIn: childIn, childTokensOut: childOut } : {}),
+    };
+  }
+
+  /** 邮箱消息（pollInbox 的元素形态） */
+  private async peekInbox(): Promise<Array<{ from: string; content: string; kind?: 'user' | 'system' }>> {
+    if (!this.options.pollInbox) return [];
+    try {
+      return await this.options.pollInbox();
+    } catch {
+      return []; // 邮箱故障不伤主循环
+    }
+  }
+
+  /** 把取出的消息注入历史并留事件（三类前缀：用户补充 / 平台提示 / 队友消息） */
+  private injectInbox(messages: ChatMessage[], incoming: Array<{ from: string; content: string; kind?: 'user' | 'system' }>): void {
+    for (const msg of incoming) {
+      messages.push({ role: 'user', content: inboxText(msg) });
+      this.emit(
+        msg.kind === 'user' ? 'run.user_input_injected' : msg.kind === 'system' ? 'loop.system_note_injected' : 'team.message_delivered',
+        {
+          to: this.options.agentId,
+          ...(msg.kind ? {} : { from: msg.from }),
+          chars: msg.content.length,
+        },
+      );
+    }
+  }
+
+  /** 排空邮箱并注入消息历史（每轮开头用）；返回注入条数 */
+  private async drainInbox(messages: ChatMessage[]): Promise<number> {
+    const incoming = await this.peekInbox();
+    this.injectInbox(messages, incoming);
+    return incoming.length;
+  }
+
+  /**
+   * 把没能再处理的消息如实附在收尾内容末尾并留事件（REG-23 — 此前 run 的 finally
+   * 直接删邮箱，消息凭空消失）。调用方必须保证：取出来的消息要么被注入、要么走到这里，
+   * 不存在"取了却两边都不去"的第三种下场。
+   */
+  private appendUndelivered(finalContent: string, incoming: Array<{ from: string; content: string; kind?: 'user' | 'system' }>): string {
+    if (incoming.length === 0) return finalContent;
+    this.emit('loop.inbox_undelivered', {
+      count: incoming.length,
+      chars: incoming.reduce((n, m) => n + m.content.length, 0),
+    });
+    const list = incoming
+      .map(m => `- ${m.kind === 'user' ? '[用户]' : m.kind === 'system' ? '[平台]' : `[队友 ${m.from}]`} ${m.content.slice(0, 500)}`)
+      .join('\n');
+    return `${finalContent}\n\n---\n[未处理的消息 — 以下内容在任务收尾时才送达，已来不及处理；请据此决定下一步]\n${list}`;
+  }
+
+  /** 收尾路径无法再跑一轮（预算耗尽 / 熔断 / 空回答兜底）：取出剩余消息并附在收尾内容末尾 */
+  private async flushUndelivered(finalContent: string): Promise<string> {
+    return this.appendUndelivered(finalContent, await this.peekInbox());
+  }
+
+  /** 取消/失败：剩余未送达消息只留痕（事件），不进最终内容 */
+  private async noteUndelivered(): Promise<void> {
+    this.appendUndelivered('', await this.peekInbox());
   }
 
   /** 单个工具执行：未知工具（附可用清单，模型可自纠）/ 事实门 / 审批位 / 异常兜底
@@ -908,6 +1114,8 @@ export class AgentLoop {
             this.emit('tool.hook_denied', { tool: resolvedTool.name, reason: '守卫要求人工审批但无审批通道' });
             return { ok: false, error: { code: 'HOOK_ASK_NO_CHANNEL', message: '外部守卫要求人工审批，但当前未接审批通道 — 已拒绝执行', retryable: false } };
           }
+          // REG-24：与审批位入口同样先确认 run 未被取消（否则已取消的 run 被拉回 waiting_human）
+          this.options.signal.throwIfAborted?.();
           const hookApproved = await this.options.approveTool(resolvedTool, call.input, call.id);
           if (!hookApproved) {
             return { ok: false, error: { code: 'APPROVAL_DENIED', message: `工具 ${resolvedTool.name} 被守卫升级为人工审批，未获批准`, retryable: false } };
@@ -984,7 +1192,8 @@ export class AgentLoop {
       system: this.buildSystemPrompt(),
       messages: [...messages, note],
       signal: this.options.signal,
-      maxTokens: 8192,
+      // 与主调用同一输出上限（推理模型的思考计入 maxTokens — 收尾总结被截断同样是残缺交付）
+      maxTokens: 16384,
     });
   }
 
@@ -1080,6 +1289,55 @@ export class AgentLoop {
 function preview(input: unknown): string {
   const s = JSON.stringify(input ?? {});
   return s.length > 200 ? s.slice(0, 200) + '…' : s;
+}
+
+/** 邮箱消息 → 注入历史时的文本（三类前缀：用户补充 / 平台提示 / 队友消息） */
+function inboxText(msg: { from: string; content: string; kind?: 'user' | 'system' }): string {
+  if (msg.kind === 'user') return `[user follow-up]\n${msg.content}`;
+  if (msg.kind === 'system') return `[system note]\n${msg.content}`;
+  return `[teammate message from ${msg.from}]\n${msg.content}`;
+}
+
+// ─── 原地打转熔断（REG-21）────────────────────────────────────────────────
+// 防的是"模型卡死在一个动作上反复重试"：实测同一 URL 连打 572 次
+//（641 步 / 8650 万 token / 32 分钟，其中 433 次失败）没有任何机制叫停。
+// 两级：先提醒（附在工具结果末尾，模型看得见），再熔断（强制收尾）。
+/** 连续同一调用达到此次数 → 提醒一次 */
+const STALL_WARN_AT = 5;
+/** 连续同一调用达到此次数 → 熔断 */
+const STALL_STOP_CONSECUTIVE = 15;
+/** 同一调用在整个 run 内累计达到此次数（不连续也算 — 防 A/B 交替刷）→ 熔断 */
+const STALL_STOP_TOTAL = 30;
+
+/** 输出截断的续写/重发上限（到点如实交付已得内容并告警） */
+const TRUNCATION_MAX_CONTINUES = 3;
+
+/** 收尾前因未送达消息而续跑的上限（超出部分走"未送达"如实带出） */
+const LATE_INBOX_MAX_CONTINUES = 5;
+
+/** 调用签名：实际执行的工具名 + 入参（对象键排序 — 键序不同不算不同调用） */
+export function callSignature(name: string, input: unknown): string {
+  try {
+    return `${name}:${JSON.stringify(input, (_key, value) =>
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? Object.keys(value).sort().reduce<Record<string, unknown>>((acc, k) => { acc[k] = (value as Record<string, unknown>)[k]; return acc; }, {})
+        : value)}`;
+  } catch {
+    return `${name}:${String(input)}`;
+  }
+}
+
+function stallWarning(tool: string, count: number): string {
+  return `[runtime notice] You have issued this exact same call (${tool}) ${count} times in a row. ` +
+    `Repeating an identical call will keep returning the same result. Change something: use a different tool, ` +
+    `source or parameter, fix the error described in the result, or — if this cannot work — move on and say so ` +
+    `in your final answer. The runtime stops the task after ${STALL_STOP_CONSECUTIVE} consecutive identical calls.`;
+}
+
+function stallWrapNote(tool: string, count: number): string {
+  return `[system] The runtime stopped this task: the same tool call (${tool}) was repeated ${count} times without progress. ` +
+    `Do NOT call any more tools. Write a final answer now: what was actually accomplished, what could not be done ` +
+    `and why, and which different approach you would try next.`;
 }
 
 /** 用户实测（fork）：判定"过渡话"——模型宣布要做某事但没带工具调用。

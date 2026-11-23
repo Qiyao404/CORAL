@@ -1,7 +1,7 @@
 /** dashboard 命名空间（zh 权威）*/
 export const zh: Record<string, string> = {
   'dashboard.title': '控制台',
-  'dashboard.subtitle': 'CORAL v1.1.0 · 自动化多智能体协作平台',
+  'dashboard.subtitle': 'CORAL · 个人 Agent 运行时 · 自动化多智能体协作平台',
   'dashboard.demoPrefix': '系统当前处于',
   'dashboard.demoMode': '演示模式',
   'dashboard.demoMid': '（--demo 启动）— 所有 LLM 调用返回模拟数据，任务结果带 ',

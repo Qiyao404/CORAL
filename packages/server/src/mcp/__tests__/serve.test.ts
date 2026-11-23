@@ -10,7 +10,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
  * M3-1 端到端：真实 MCP 客户端 over stdio 拉起 coral mcp serve。
  * 覆盖：initialize 握手 → tools/list（coral_run/coral_list_skills/coral_skill_*）
  * → tools/call（coral_list_skills 与一个 llm_only 技能）。
- * （Claude Desktop DoD 的自动化等价物 — 同一协议栈）
+ * （MCP 客户端接入 DoD 的自动化等价物 — 同一协议栈）
  */
 
 // 从测试文件自身位置推导（不依赖 process.cwd — 从仓库根直跑 vitest 也能通过；

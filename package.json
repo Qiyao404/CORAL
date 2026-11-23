@@ -1,6 +1,6 @@
 {
   "name": "coral-agent",
-  "version": "2.7.0",
+  "version": "2.7.1",
   "description": "CORAL — a local-first personal agent runtime (Free ReAct loop + deterministic Graph mode + MCP bridge + triggers)",
   "workspaces": [
     "packages/server",
@@ -13,7 +13,7 @@
     "dev:web": "npm run dev -w packages/web",
     "build:server": "npm run build -w packages/server",
     "build:web": "npm run build -w packages/web",
-    "test": "npm run test -w packages/server && npm run test -w packages/progress",
+    "test": "npm run test -w packages/server && npm run test -w packages/progress && npm run test -w packages/web",
     "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
     "build": "npm run build:server && npm run build:web && npm run build:sdk",
     "start": "node packages/server/bin/coral.mjs",

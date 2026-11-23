@@ -8,6 +8,10 @@ import type { EvidenceStore } from '../../kernel/evidence.js';
  * 大结果被归档后，模型（以及后续工具轮次）通过本工具按 ID 取回完整内容，
  * 支持字符级翻页（offset/limit）。只读、幂等。
  */
+/** 单页字符上限：必须小于内核的单条裁剪线（40k）— 否则页的中段被静默裁掉，
+ *  而 offset/hasMore 仍按请求的 limit 推进，模型以为读完了、实际缺一段 */
+const MAX_PAGE_CHARS = 30_000;
+
 export function makeEvidenceReadTool(store: EvidenceStore): Tool {
   return {
     name: 'evidence_read',
@@ -27,7 +31,7 @@ export function makeEvidenceReadTool(store: EvidenceStore): Tool {
     permission: 'auto',
     effects: { idempotent: true },
     isConcurrencySafe: true,
-    // 分页取回本身就是按需读取（limit 钳制 ≤60k）— 结果不再转存证据
+    // 分页取回本身就是按需读取（limit 钳制 ≤30k，见 MAX_PAGE_CHARS）— 结果不再转存证据
     //（曾出现"证据的证据"循环归档：12k 的取回页又被归档成新证据）
     maxResultSizeChars: 70_000,
 
@@ -35,7 +39,7 @@ export function makeEvidenceReadTool(store: EvidenceStore): Tool {
       const id = String(input?.evidence_id ?? '').trim();
       if (!id) return toolError('BAD_INPUT', 'evidence_id 必填');
       const offset = Math.max(0, Number(input?.offset) || 0);
-      const limit = Math.min(Math.max(Number(input?.limit) || 8000, 500), 60_000);
+      const limit = Math.min(Math.max(Number(input?.limit) || 8000, 500), MAX_PAGE_CHARS);
       const r = store.read(ctx.runId, id, offset, limit);
       if (!r) {
         const available = store.list(ctx.runId);

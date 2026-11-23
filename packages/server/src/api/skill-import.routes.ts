@@ -4,7 +4,7 @@ import { platformConfig } from '../services/config.js';
 import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-registry.js';
 
 /**
- * M1-6：技能导入 API — Anthropic Agent Skills 格式 → CORAL 技能库。
+ * M1-6：技能导入 API — Agent Skills 标准格式 → CORAL 技能库。
  * source：本地技能目录 / 含多技能的父目录 / git URL（支持 GitHub tree 子路径）/ npm:<spec>。
  */
 export function registerSkillImportRoutes(app: FastifyInstance, registry: FilesystemSkillRegistry): void {

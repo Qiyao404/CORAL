@@ -32,6 +32,21 @@ export interface SelfEvalResult {
 
 const HEDGES = /(可能|也许|大概|或许|应该是|maybe|probably|possibly|i think|i believe|it seems)/gi;
 
+/**
+ * 目标是否像"多部分任务"：并列连词 / 分号分隔 / 步骤编号 / 超长。
+ *
+ * 这是"分支"而不是"字符类"——曾写成 /[并且|以及|然后|同时|;|；|1\.|2\.]/：方括号里 `|` 与每个
+ * 汉字都只是单个字符，等于"出现 并/且/以/及/然/后/同/时/;/；/1/./2 任意一个就算大任务"，
+ * 带版本号、日期、网址的目标几乎全部中招，简洁的回答被扣"长度不成比例"（REG-33）。
+ * 步骤编号只认行首编号或连续两项的编号——小数（3.14）与日期（2024.11）不算。
+ */
+const MULTIPART = /并且|以及|然后|同时|;|；|(?:^|\n)\s*\d+\.\s|\d+\.\s*\S+\s+\d+\.\s/;
+
+export function taskLooksMultiPart(goal: string): boolean {
+  const g = String(goal ?? '');
+  return g.length > 120 || MULTIPART.test(g);
+}
+
 /** 层 1：确定性启发式评分 */
 export function evaluateDeterministic(goal: string, answer: string): SelfEvalResult {
   const text = String(answer ?? '');
@@ -53,7 +68,7 @@ export function evaluateDeterministic(goal: string, answer: string): SelfEvalRes
 
   // completeness：空/极短回答 vs 任务规模
   const isShort = text.trim().length < 50;
-  const taskLooksBig = goalChars > 120 || /[并且|以及|然后|同时|;|；|1\.|2\.]/.test(goal ?? '');
+  const taskLooksBig = taskLooksMultiPart(goal);
   if (isShort) notes.push('回答过短（<50 字符）');
   if (!isShort && taskLooksBig && text.length < goalChars / 2) notes.push('回答长度与任务规模明显不成比例');
   axes.push({

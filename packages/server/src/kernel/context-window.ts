@@ -13,7 +13,13 @@ export interface ClipOptions {
   maxToolChars: number;   // 单条工具结果上限，默认 40k 字符
 }
 
-const DEFAULT_CLIP: ClipOptions = { maxToolChars: 40_000 };
+/**
+ * 单条工具结果的裁剪上限。导出供内核判定"这个结果会不会被裁"：
+ * 会被裁剪的结果必须先整体存证（REG-27 — 两个阈值此前各管各的，裁掉的中段无处可取）。
+ */
+export const TOOL_RESULT_CLIP_CHARS = 40_000;
+
+const DEFAULT_CLIP: ClipOptions = { maxToolChars: TOOL_RESULT_CLIP_CHARS };
 
 /** 就地裁剪过长的工具结果（返回新数组；对 assistant/user 消息不动） */
 export function clipToolResults(messages: ChatMessage[], options: Partial<ClipOptions> = {}): ChatMessage[] {

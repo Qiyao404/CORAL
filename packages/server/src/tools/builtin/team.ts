@@ -136,7 +136,7 @@ export function makeTeamWaitTool(team: TeamService, selfNameRef?: string): Tool 
     permission: 'auto',
     effects: { idempotent: true },
 
-    async invoke(input: any): Promise<ToolResult> {
+    async invoke(input: any, ctx: ToolContext): Promise<ToolResult> {
       // 防护：不允许等待自己（必然空转到超时）
       const selfName = (selfNameRef !== undefined) ? selfNameRef : '';
       let names: string[];
@@ -154,7 +154,11 @@ export function makeTeamWaitTool(team: TeamService, selfNameRef?: string): Tool 
         return toolError('TEAMMATE_NOT_FOUND', `未知 teammate: ${unknown.join(', ')}（已知: ${team.listTeammates().map(t => t.name).join(', ') || '无'}）`, false);
       }
       const timeoutMs = Math.min(Math.max(Number(input?.timeout_s) || DEFAULT_WAIT_MS / 1000, 1) * 1000, MAX_WAIT_MS);
-      const handles = await team.wait(names, timeoutMs);
+      const handles = await team.wait(names, timeoutMs, ctx.signal);
+      if (handles === null) {
+        // 轮询期间 run 被取消 — 立即返回（REG-24：此前最多干等到超时）
+        return toolError('CANCELLED', '等待已被取消', false);
+      }
       const results = handles.map(h => ({
         name: h.name,
         status: h.status,

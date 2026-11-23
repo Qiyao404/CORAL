@@ -36,6 +36,9 @@ function messageHash(m: ChatMessage): string {
   return createHash('sha256').update(JSON.stringify(m), 'utf-8').digest('hex').slice(0, 40);
 }
 
+/** 存量迁移每批读取的 checkpoint 行数（任何时刻内存里只留一批内联消息） */
+export const MIGRATE_BATCH = 200;
+
 export class CheckpointStore {
   private dbProvider: () => DB;
   private cachedDb: DB | null = null;
@@ -168,30 +171,51 @@ export class CheckpointStore {
   /**
    * 存量迁移：旧内联 messages 格式的 checkpoint 全部改写为去重格式（mrefs）。
    * 由 store/compact.ts 的整体压实流程调用；返回迁移条数。
+   *
+   * 按主键分批取（keyset 分页）、每批一个事务（REG-42）：
+   *  · 此前 .all() 一次性把全部内联 checkpoint（每条带整份消息快照）读进内存 —
+   *    最需要压实的库（上 GB、全是内联格式）正是迁移时内存占用最高的时刻；
+   *  · 此前每条写入都是独立事务（各落盘一次）：实测 450 条小 checkpoint 就要二十秒。
+   * 翻页不会漏也不会重：更新只改已读过的行，迁移后它们不再匹配扫描条件；损坏的行保持原样，
+   * 留给人工排查（不会被计成"已迁移"）。
    */
   migrateInlineCheckpoints(): number {
     const db = this.db();
-    let migrated = 0;
-    const rows = db.prepare(
-      `SELECT rowid, run_id, state_json FROM checkpoints WHERE state_json LIKE '%"messages"%' ORDER BY rowid`
-    ).all() as Array<{ rowid: number; run_id: string; state_json: string }>;
+    type LegacyRow = { rowid: number; run_id: string; state_json: string };
+    const select = db.prepare(
+      `SELECT rowid, run_id, state_json FROM checkpoints WHERE state_json LIKE '%"messages"%' AND rowid > ? ORDER BY rowid LIMIT ?`
+    );
     const insMsg = db.prepare(
       `INSERT OR IGNORE INTO checkpoint_messages (run_id, hash, message_json, created_at) VALUES (?, ?, ?, ?)`
     );
     const upd = db.prepare(`UPDATE checkpoints SET state_json = ? WHERE rowid = ?`);
     const now = new Date().toISOString();
-    for (const r of rows) {
-      try {
-        const state = JSON.parse(r.state_json);
-        if (!Array.isArray(state.messages)) continue;
-        const hashes = state.messages.map((m: ChatMessage) => messageHash(m));
-        for (let i = 0; i < state.messages.length; i++) {
-          insMsg.run(r.run_id, hashes[i], JSON.stringify(state.messages[i]), now);
-        }
-        const { messages, ...rest } = state;
-        upd.run(JSON.stringify({ mrefs: hashes, ...rest }), r.rowid);
-        migrated++;
-      } catch { /* 单条损坏跳过（不阻塞整轮） */ }
+    const migrateBatch = db.transaction((rows: LegacyRow[]) => {
+      let done = 0;
+      for (const r of rows) {
+        try {
+          const state = JSON.parse(r.state_json);
+          if (!Array.isArray(state.messages)) continue;
+          const hashes = state.messages.map((m: ChatMessage) => messageHash(m));
+          for (let i = 0; i < state.messages.length; i++) {
+            insMsg.run(r.run_id, hashes[i], JSON.stringify(state.messages[i]), now);
+          }
+          const { messages, ...rest } = state;
+          upd.run(JSON.stringify({ mrefs: hashes, ...rest }), r.rowid);
+          done++;
+        } catch { /* 单条损坏跳过（不阻塞整轮） */ }
+      }
+      return done;
+    });
+
+    let migrated = 0;
+    let lastRowid = 0;
+    for (;;) {
+      const rows = select.all(lastRowid, MIGRATE_BATCH) as LegacyRow[];
+      if (rows.length === 0) break;
+      migrated += migrateBatch(rows);
+      lastRowid = rows[rows.length - 1].rowid;
+      if (rows.length < MIGRATE_BATCH) break;
     }
     return migrated;
   }

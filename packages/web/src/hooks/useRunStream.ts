@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { insertBySeq, trimEventWindow } from './run-event-window';
 
 /**
  * M1-8：v2 run 实时事件流 hook（M4 审查批次升级）。
@@ -7,6 +8,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
  *   不得回退 UI 状态——todo 清单/工具卡以 seq 为准）
  * · SSE 重连（onopen）时按 afterSeq 游标补拉断线期间的事件（REG-12：断线空洞）
  * · 事件窗口裁剪只裁高频 delta 类事件，结构性事件（todo/run 终态/审批）永久保留
+ *   （定序与裁剪的纯逻辑在 run-event-window.ts，可单测）
  */
 export interface RunEventItem {
   eventId: string;
@@ -19,12 +21,6 @@ export interface RunEventItem {
   timestamp: string;
 }
 
-/** 高频可裁剪事件（长 run 窗口淘汰只动这些 — 结构性事件保留） */
-const EVICTABLE = new Set(['loop.delta', 'skill.log', 'skill.progress']);
-
-/** 窗口上限（含保留事件的总软上限，防极端 run 撑爆内存） */
-const HARD_CAP = 4000;
-
 export function useRunStream(runId?: string) {
   const [events, setEvents] = useState<RunEventItem[]>([]);
   const [connected, setConnected] = useState(false);
@@ -36,21 +32,7 @@ export function useRunStream(runId?: string) {
     if (!ev?.eventId || seen.current.has(ev.eventId)) return;
     seen.current.add(ev.eventId);
     cursorRef.current = Math.max(cursorRef.current, ev.seq ?? 0);
-    setEvents(prev => {
-      // REG-12：按 seq 插入（找第一个更大的事件插到它前面 — 事件基本有序，尾部扫描 O(1) 均摊）
-      const next = [...prev, ev];
-      let i = next.length - 1;
-      while (i > 0 && (next[i - 1].seq ?? 0) > (ev.seq ?? 0)) {
-        [next[i - 1], next[i]] = [next[i], next[i - 1]];
-        i--;
-      }
-      // 窗口裁剪：超 800 才裁，只裁高频事件（delta/log/progress），结构性事件全保留
-      if (next.length > 800) {
-        const kept = next.filter(e => !EVICTABLE.has(e.type));
-        return kept.length > HARD_CAP ? kept.slice(-HARD_CAP) : kept;
-      }
-      return next;
-    });
+    setEvents(prev => trimEventWindow(insertBySeq(prev, ev)));
   }, []);
 
   // 初次挂载：回放持久化事件
@@ -133,6 +115,7 @@ export function deriveRunView(events: RunEventItem[]) {
   let finalContent: string | null = null;
   let runStatus: string | null = null;
   let endReason: string | null = null;
+  let runError: string | null = null;
 
   for (const ev of events) {
     const p = ev.payload ?? {};
@@ -176,9 +159,15 @@ export function deriveRunView(events: RunEventItem[]) {
         endReason = events.some(e => e.type === 'run.budget_exceeded') ? 'budget_exceeded' : 'final_answer';
         if (typeof p.finalContentPreview === 'string') finalContent = p.finalContentPreview;
         break;
-      case 'run.failed':
+      case 'run.failed': {
+        // 失败原因必须带上界面（此前只把状态标成"失败"，用户无从得知为什么）—
+        // 原地打转被终止 / 服务重启被中断 / 模型报错，原因都在这个事件的 error 里
         runStatus = 'failed';
+        const e = p.error;
+        if (typeof e === 'string' && e) runError = e;
+        else if (e && typeof e === 'object' && typeof e.message === 'string') runError = e.message;
         break;
+      }
       case 'run.cancelled':
         runStatus = 'cancelled';
         break;
@@ -186,5 +175,9 @@ export function deriveRunView(events: RunEventItem[]) {
         break;
     }
   }
-  return { todos, toolCards, pendingApprovals, finalContent, runStatus, endReason };
+  // 原地打转被运行时终止（终态事件是 run.failed，原因另发 run.stalled — 界面据此给出"继续"入口）
+  if (runStatus === 'failed' && events.some(e => e.type === 'run.stalled')) endReason = 'stalled';
+  // 任务已终态：还"挂着"的审批必然是残留（如服务重启被中断的任务，事件流里没有 resolved 事件）— 不再等人操作
+  if (runStatus && ['completed', 'failed', 'cancelled'].includes(runStatus)) pendingApprovals.length = 0;
+  return { todos, toolCards, pendingApprovals, finalContent, runStatus, endReason, runError };
 }

@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'fs';
+import { join, resolve } from 'path';
 import type { MemoryService } from './memory-service.js';
 import type { SearchStore } from '../store/search-store.js';
 import type { EvolutionService } from './evolution-service.js';
@@ -14,6 +16,7 @@ import type { EvolutionService } from './evolution-service.js';
  *  · 对账**只提议不落盘** — 改写仍走演化队列的人审闸门
  *  · 判定者是 LLM（同源偏差仍在），所以证据必须原文引用、人可复核
  *  · 每文件每次审计最多 1 条提议；同文件已有未决提议不重复提
+ *  · 每轮只核一批文件，按"最久没核对"轮转 — 多点几次就轮完全库（REG-35）
  */
 
 export interface LlmChat {
@@ -28,10 +31,52 @@ export interface DreamAuditResult {
   unverified: number;
   proposals: number; // 实际入队数（有未决提议时改写不会重复入队）
   skipped?: string;
+  /** 本轮实际完成核对的文件（出错的不在列）——轮转是否覆盖全库，一眼可查 */
+  auditedFiles?: string[];
 }
 
 const MAX_FILES_PER_AUDIT = 8;
 const MAX_MEMORY_CHARS = 3000;
+
+/** 轮转状态：记忆目录下的隐藏文件（MemoryService.list 只认 *.md，不会混入记忆列表） */
+const AUDIT_STATE_FILE = '.audit-state.json';
+
+export interface AuditState {
+  /** 文件名 → 上次被核对的时间（ISO）。没有记录 = 从未核对 = 最久 */
+  lastAudited: Record<string, string>;
+}
+
+function readAuditState(svc: MemoryService): AuditState {
+  try {
+    const p = join(resolve(svc.dirPath), AUDIT_STATE_FILE);
+    if (!existsSync(p)) return { lastAudited: {} };
+    const parsed = JSON.parse(readFileSync(p, 'utf-8'));
+    const lastAudited = parsed?.lastAudited;
+    return { lastAudited: lastAudited && typeof lastAudited === 'object' ? lastAudited : {} };
+  } catch {
+    return { lastAudited: {} }; // 状态损坏按"从未核对"处理
+  }
+}
+
+function writeAuditState(svc: MemoryService, state: AuditState): void {
+  try {
+    const p = join(resolve(svc.dirPath), AUDIT_STATE_FILE);
+    writeFileSync(`${p}.tmp`, JSON.stringify(state), 'utf-8');
+    renameSync(`${p}.tmp`, p); // 原子替换：写一半崩溃不会留下坏文件
+  } catch { /* 写不进去只影响轮转效率（下次仍从最新一批开始），不影响对账本身 */ }
+}
+
+/**
+ * 选出本轮要核对的文件：最久没核对过的优先（从没核对过 = 最久）；
+ * 时间相同时保持列表顺序（最新在前）。此前是直接取列表前 8 个（= 永远是最新的 8 个）。
+ */
+export function pickAuditBatch<T extends { name: string }>(files: T[], state: AuditState, max: number): T[] {
+  return files
+    .map((f, i) => ({ f, i, at: state.lastAudited[f.name] ?? '' }))
+    .sort((a, b) => (a.at === b.at ? a.i - b.i : a.at < b.at ? -1 : 1))
+    .slice(0, Math.max(0, max))
+    .map(x => x.f);
+}
 
 /** 从记忆内容提取检索词（标题行 + 出现频次最高的实词，取 3-6 个） */
 export function searchTerms(content: string): string[] {
@@ -60,7 +105,15 @@ export async function auditMemory(deps: {
   const result: DreamAuditResult = { audited: 0, consistent: 0, contradictory: 0, unverified: 0, proposals: 0 };
   if (!llm || llm.isDemoMode?.()) return { ...result, skipped: 'LLM 不可用（演示模式），跳过' };
 
-  const files = svc.list().slice(0, deps.maxFiles ?? MAX_FILES_PER_AUDIT);
+  const all = svc.list();
+  const state = readAuditState(svc);
+  // 只保留仍然存在的文件的记录：被整理 / 删除的文件不再占轮转名额
+  const existing = new Set(all.map(f => f.name));
+  for (const name of Object.keys(state.lastAudited)) {
+    if (!existing.has(name)) delete state.lastAudited[name];
+  }
+  const files = pickAuditBatch(all, state, deps.maxFiles ?? MAX_FILES_PER_AUDIT);
+  const auditedFiles: string[] = [];
   for (const meta of files) {
     try {
       const mem = svc.read(meta.name);
@@ -106,9 +159,14 @@ export async function auditMemory(deps: {
       } else {
         result.unverified++;
       }
-    } catch { /* 单文件失败不中断整轮 */ }
+      auditedFiles.push(meta.name);
+    } catch { /* 单文件失败不中断整轮 */ } finally {
+      // 出错的也记一笔：否则一个总失败的文件会永远排在第一位，把其余文件全部挡住
+      state.lastAudited[meta.name] = new Date().toISOString();
+    }
   }
-  return result;
+  writeAuditState(svc, state);
+  return { ...result, auditedFiles };
 }
 
 function safeJson(text: string): any | null {

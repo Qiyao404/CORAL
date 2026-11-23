@@ -247,6 +247,14 @@ const TEAMMATE_SYSTEM = (name: string) =>
 
 export interface TeamSpawnDeps extends SpawnDeps {
   team: TeamService;
+  /**
+   * run 级后台作用域（REG-25）：每个 teammate 一个取消控制器，登记进 run 的后台集合 —
+   * 主循环结束（无论是否收割）即统一终止。未注入时（SDK/测试）退化为只跟随父信号。
+   */
+  registerBackground?: (scope: AbortController) => void;
+  unregisterBackground?: (scope: AbortController) => void;
+  /** teammate 落定（完成/失败/取消）时上报其 token 消耗 — 计入 run 总账（此前 run 的 token 数只算主循环） */
+  onTeammateSettled?: (tokens: { tokensIn: number; tokensOut: number }) => void;
 }
 
 /**
@@ -358,13 +366,22 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
         payload: { name, agentId: subId, depth: childDepth, goalPreview: goal.slice(0, 200), budget },
       });
 
+      // REG-25：teammate 的取消信号 = 父信号 ∪ run 级后台作用域。
+      // 此前只跟随父信号 — 而"用户取消"和"主循环正常结束"是两件事：后者不会触发
+      // 父信号，没被 team_wait 收割的 teammate 于是在 run 终态后继续烧 token（僵尸）。
+      const scope = new AbortController();
+      const forwardAbort = () => { if (!scope.signal.aborted) scope.abort(ctx.signal.reason); };
+      if (ctx.signal.aborted) forwardAbort();
+      else ctx.signal.addEventListener('abort', forwardAbort, { once: true });
+      deps.registerBackground?.(scope);
+
       const loop = new AgentLoop(deps.llm, {
         runId: ctx.runId,
         agentId: subId,
         goal,
         tools: subTools,
         budget,
-        signal: ctx.signal,
+        signal: scope.signal,
         workspaceDir: ctx.workspaceDir,
         extraSystem,
         onEvent: ev => ctx.emit(ev),
@@ -377,8 +394,14 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
       });
 
       // 后台执行：不阻塞调用方循环；终态（含取消/失败）回写名册，team_wait 收割
+      const settle = () => {
+        ctx.signal.removeEventListener('abort', forwardAbort);
+        deps.unregisterBackground?.(scope);
+      };
       void loop.run().then(result => {
-        if (result.status === 'cancelled' || ctx.signal.aborted) {
+        // 消耗上报先行（三条落定分支都要计入 run 总账）
+        deps.onTeammateSettled?.({ tokensIn: result.tokensIn, tokensOut: result.tokensOut });
+        if (result.status === 'cancelled' || scope.signal.aborted) {
           deps.team.settleTeammate(name, 'failed', { status: 'cancelled', finalContent: '', tokensIn: result.tokensIn, tokensOut: result.tokensOut });
           ctx.emit({ type: 'team.teammate_failed', payload: { name, agentId: subId, status: 'cancelled' } });
           return;
@@ -402,7 +425,7 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
       }).catch(err => {
         deps.team.settleTeammate(name, 'failed', { status: 'crashed', finalContent: String(err?.message ?? err) });
         ctx.emit({ type: 'team.teammate_failed', payload: { name, agentId: subId, status: 'crashed', error: String(err?.message ?? err) } });
-      });
+      }).finally(settle);
 
       return toolOk(
         { name, agentId: subId, status: 'running', note: `teammate "${name}" 已在后台启动 — 用 team_wait(["${name}"]) 收割结果，team_send(to="${name}") 发消息` },

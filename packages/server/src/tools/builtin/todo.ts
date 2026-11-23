@@ -3,7 +3,7 @@ import { toolOk, toolError } from '../types.js';
 
 /**
  * M1-3（D19）：todo_write — agent 的可见任务清单。
- * 整体替换式写入（Claude TodoWrite 模式）；清单状态通过事件流出，
+ * 整体替换式写入（全量替换语义）；清单状态通过事件流出，
  * run-engine 落库、前端（M1-8）渲染为进度 checklist。
  */
 

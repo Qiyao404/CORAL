@@ -121,6 +121,8 @@ export const zh: Record<string, string> = {
   'chat.approveExecution': '批准执行',
   'chat.budgetExceeded': '⚠ 预算达到上限，以上为部分成果总结',
   'chat.continueRun': '继续执行',
+  'chat.failedReason': '失败原因：{reason}',
+  'chat.stalledNote': '⚠ 任务在同一个动作上反复打转，已被运行时终止；以上是到此为止的总结',
   'chat.eventCount': '{count} 个事件',
   'chat.waitingEvents': '等待事件…',
   'chat.waitingEventsDesc': 'run 已创建，正在等待第一条事件',

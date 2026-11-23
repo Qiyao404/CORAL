@@ -32,7 +32,7 @@ export const en: Record<string, string> = {
   'connectors.guideEx2B': ', please analyze the possible causes" → after creating, copy the URL shown on the page and paste it into the notification URL of your monitoring system (e.g. Uptime Kuma / GitHub webhook). As soon as an alert fires, the agent starts analyzing automatically.',
   'connectors.guideTriggerListHint': 'The list shows the fire count / last fired time / next fired time of each trigger, and displays errors when something goes wrong.',
   'connectors.addMcpServer': 'Add MCP Server',
-  'connectors.claudeDesktop': 'Connect Claude Desktop to CORAL',
+  'connectors.mcpClientConfig': 'MCP client config',
   'connectors.mcpEmpty': 'No external MCP servers yet — once added, their tools automatically join the agent toolset in conversation mode (e.g. community filesystem / fetch / everything)',
   'connectors.enabled': 'Enabled',
   'connectors.disabled': 'Disabled',

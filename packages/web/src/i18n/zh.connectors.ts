@@ -32,7 +32,7 @@ export const zh: Record<string, string> = {
   'connectors.guideEx2B': '，请分析可能原因』 → 创建后复制页面显示的 URL，粘到监控系统（如 Uptime Kuma / GitHub webhook）的通知地址里。监控系统一报警，Agent 自动开始分析。',
   'connectors.guideTriggerListHint': '列表里能看到每个触发器"已触发几次 / 最近触发时间 / 下次触发时间"，出问题会显示错误。',
   'connectors.addMcpServer': '添加 MCP Server',
-  'connectors.claudeDesktop': 'Claude Desktop 接入 CORAL',
+  'connectors.mcpClientConfig': 'MCP 客户端接入配置',
   'connectors.mcpEmpty': '还没有外部 MCP server — 添加后其工具自动进入对话模式的 agent 工具集（如社区 filesystem / fetch / everything）',
   'connectors.enabled': '启用',
   'connectors.disabled': '停用',

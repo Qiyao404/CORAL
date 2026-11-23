@@ -5,7 +5,7 @@ import { RunEventStore } from '../store/run-event-store.js';
 import { CheckpointStore } from '../store/checkpoint-store.js';
 import { eventBus } from '../event/event-bus.js';
 import { createAbortController, abortTask, releaseAbortController } from '../services/task-abort-registry.js';
-import { platformConfig } from '../services/config.js';
+import { platformConfig, PLATFORM_DEFAULT_BUDGET } from '../services/config.js';
 import { createDefaultToolRegistry } from '../tools/registry.js';
 import { makeTodoTool } from '../tools/builtin/todo.js';
 import { makePastRunsTool } from '../tools/builtin/past-runs.js';
@@ -85,6 +85,12 @@ export interface StartRunInput {
    * 未指定 = 使用当前 active 配置。适用于"图像题切视觉模型 / 简单题切便宜模型"场景。
    */
   modelProfileId?: string;
+  /**
+   * 无人值守（定时/触发任务形态）：现场没有人可以回答问题或点审批。
+   * ask_user 不挂起直接返回"用户不可用"；开工歧义不再要求"立即澄清"。
+   *（REG-26：此前只有"评测会话"一种识别方式，普通会话标识的定时任务一开工就永远等在反问上）
+   */
+  unattended?: boolean;
 }
 
 export interface RunEngineDeps {
@@ -115,6 +121,15 @@ function loopBudgetValue(v: number | undefined, fallback: number): number {
     : typeof fallback === 'number' && Number.isFinite(fallback) ? fallback
     : 10_000_000;
   return n <= 0 ? Infinity : n;
+}
+
+/**
+ * 派生预算的名义值（REG-34）：子代理预算按"生效预算 ÷ 3 / ÷ 2"派生 — 预算为 0（无上限）时
+ * 不能直接拿来除（只会得到一个几步就用完的废上限），改用平台默认量级。
+ */
+function nominalBudgetValue(v: number | undefined, fallback: number): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : fallback;
+  return n > 0 ? n : fallback;
 }
 
 export class RunEngine {
@@ -153,6 +168,9 @@ export class RunEngine {
   private runMeta = new Map<string, { sessionId: string; goal: string }>();
   /** 运行中用户补充的注入邮箱（runId → 有序消息；步边界与团队邮箱合流排空） */
   private userInboxByRun = new Map<string, Array<{ queuedAt: number; content: string }>>();
+  /** 平台自身的步边界提示（runId → 有序提示）— 与用户补充分开存放：它不是用户说的话，
+   * 不能借用 [user follow-up] 的外壳，也不该发"用户补充已送达"事件（UI 会误显示） */
+  private systemInboxByRun = new Map<string, string[]>();
   /** 反问生命周期（与审批同构）：questionId → 挂起的 ask_user 调用 */
   private pendingQuestions = new Map<string, { runId: string; payload: AskUserPayload; resolve: (a: AskUserAnswer) => void; timer?: ReturnType<typeof setTimeout> }>();
   /** 每 run 已问数（上限 3 — 防模型把反问当逃逸口） */
@@ -163,6 +181,16 @@ export class RunEngine {
   private verdictByRun = new Map<string, VerifyVerdict & { rounds: number }>();
   /** callId → 工具输入预览（观察在 call_completed 时落笔，需要 started 的输入） */
   private pendingObs = new Map<string, { tool: string; inputPreview: string; agentId: string; runId: string }>();
+  /** 本进程内有执行管线的 run（startRun 登记、finally 注销）— "立即补充"只收进真正在跑的 run */
+  private liveRunIds = new Set<string>();
+  /** 无人值守的 run（定时/触发任务形态）— 现场没有人点审批：审批按"未获批准"即时落定，不挂起 */
+  private unattendedRuns = new Set<string>();
+  /** run 级后台作用域：后台 teammate 的取消控制器。主循环结束即整体终止（REG-25 — 没收割的 teammate 不再成为僵尸） */
+  private backgroundScopes = new Map<string, Set<AbortController>>();
+  /** 等待后台 teammate 落定的回调（主循环返回后等它们收尾，再把消耗计入总账） */
+  private backgroundWaiters = new Map<string, Array<() => void>>();
+  /** 后台 teammate 的 token 消耗（runId → 累计）— 计入 run 总账（此前只算主循环） */
+  private teamTokensByRun = new Map<string, { in: number; out: number }>();
 
   constructor(deps: RunEngineDeps) {
     this.deps = deps;
@@ -208,6 +236,75 @@ export class RunEngine {
   }
 
   /**
+   * 启动收尸（REG-25）：执行管线只存在于进程内存里 — 进程一走，库里留在途状态
+   *（running / waiting_human / created）的 run 就永远不会推进，而前端照旧把它们当"正在运行"，
+   * 用户发进去的补充石沉大海。服务启动时把上次遗留的 free run 统一落为 failed/interrupted。
+   * graph run 有自己的恢复语义（markInterruptedGraphRuns），不在此列。返回收尸数量。
+   */
+  reconcileInterruptedRuns(): number {
+    let n = 0;
+    for (const status of ['running', 'waiting_human', 'created'] as const) {
+      // 标记会改变状态 → 每轮重新查询，直到该状态下没有 free run（上限防死循环）
+      for (let round = 0; round < 1000; round++) {
+        const { items } = this.deps.runStore.list({ status, mode: 'free', limit: 200 });
+        if (items.length === 0) break;
+        for (const run of items) {
+          if (!run.id) continue;
+          this.deps.runStore.update(run.id, {
+            status: 'failed',
+            endReason: 'interrupted',
+            error: {
+              message:
+                (status === 'waiting_human'
+                  ? '服务停止或重启：任务在等待人工处理（审批/反问）时被中断，未完成。'
+                  : '服务停止或重启：任务在执行中被中断，未完成。') + '在原会话发送"继续"可接力。',
+            },
+          });
+          // 先把"发出过但没有下文"的反问与审批落定，再发终态事件 —
+          // 界面是从事件流派生问题卡/审批卡的：只改任务状态，卡片会一直挂着等人操作
+          this.closeDanglingInteractions(run.id);
+          this.emitRunEvent(run.id, 'run.failed', { error: '服务停止或重启，任务被中断', interrupted: true, previousStatus: status });
+          n++;
+        }
+      }
+    }
+    return n;
+  }
+
+  /**
+   * 收尸配套：把事件流里悬空的反问（question.asked 无 answered）与审批
+   *（tool.approval_required 无 resolved）补上落定事件。挂起项永远在事件流尾部（run 正因它而停），
+   * 只扫最后 2000 条。
+   */
+  private closeDanglingInteractions(runId: string): void {
+    try {
+      const maxSeq = this.deps.eventStore.maxSeq(runId);
+      const evs = this.deps.eventStore.listByRun(runId, Math.max(0, maxSeq - 2000), 2000);
+      const asked = new Set<string>();
+      const answered = new Set<string>();
+      const approvals = new Map<string, string>();
+      const resolved = new Set<string>();
+      for (const e of evs) {
+        const p = (e.payload ?? {}) as any;
+        if (e.type === 'question.asked' && p.questionId) asked.add(p.questionId);
+        else if (e.type === 'question.answered' && p.questionId) answered.add(p.questionId);
+        else if (e.type === 'tool.approval_required' && p.approvalId) approvals.set(p.approvalId, String(p.tool ?? ''));
+        else if (e.type === 'tool.approval_resolved' && p.approvalId) resolved.add(p.approvalId);
+      }
+      for (const questionId of asked) {
+        if (!answered.has(questionId)) {
+          this.emitRunEvent(runId, 'question.answered', { questionId, source: 'cancelled', answer: null });
+        }
+      }
+      for (const [approvalId, tool] of approvals) {
+        if (!resolved.has(approvalId)) {
+          this.emitRunEvent(runId, 'tool.approval_resolved', { approvalId, approved: false, tool, interrupted: true });
+        }
+      }
+    } catch { /* 事件读取失败不影响收尸本身（任务状态已落） */ }
+  }
+
+  /**
    * 运行中用户补充（立即补充模式）：消息进入该 run 的注入邮箱，
    * 下一**步边界**（本轮 LLM/工具完成后、下轮请求组装前）送达模型 —
    * 与 teammate 消息同门（不丢、不打断正在执行的步骤）。
@@ -221,6 +318,11 @@ export class RunEngine {
     if (!run) return { ok: false, message: 'run 不存在' };
     if (!['running', 'waiting_human'].includes(run.status)) {
       return { ok: false, message: `run 已终态（${run.status}），请直接发送开启下一轮（会话上下文自动续接）` };
+    }
+    // REG-25：状态是"在途"但本进程里没有它的执行管线（上次进程遗留的僵尸）— 明确拒绝，
+    // 让前端回落到"开启新一轮"，而不是收下一条永远不会被读到的消息
+    if (!this.liveRunIds.has(runId)) {
+      return { ok: false, message: '该任务当前没有在执行（可能已被中断），请直接发送开启下一轮（会话上下文自动续接）' };
     }
     let inbox = this.userInboxByRun.get(runId);
     if (!inbox) { inbox = []; this.userInboxByRun.set(runId, inbox); }
@@ -240,6 +342,14 @@ export class RunEngine {
       // 大方向改变的引导：todo 全量替换是模型的既有操作 — 注入即提醒先重排计划
       content: `${m.content}\n\n[system note] If this changes the plan significantly, rewrite your todo list FIRST (todo_write), then continue from the new plan. Keep already-done work that is still useful.`,
     }));
+  }
+
+  /** 步边界排空平台提示（pollInbox 合流用 — kind=system，前缀 [system note]） */
+  private drainSystemNotes(runId: string): Array<{ from: string; content: string; kind: 'system' }> {
+    const notes = this.systemInboxByRun.get(runId);
+    if (!notes || notes.length === 0) return [];
+    this.systemInboxByRun.set(runId, []);
+    return notes.map(content => ({ from: 'runtime', kind: 'system' as const, content }));
   }
 
 
@@ -340,21 +450,24 @@ export class RunEngine {
   answerQuestion(runId: string, questionId: string, body: { choice?: number[]; free?: string }): { ok: boolean; message: string } {
     const entry = this.pendingQuestions.get(questionId);
     if (!entry || entry.runId !== runId) return { ok: false, message: '问题不存在或已作答' };
-    this.pendingQuestions.delete(questionId);
-    if (entry.timer) clearTimeout(entry.timer);
+    // REG-29：先校验、后落定 — 无效作答（下标越界 / 既无选项也无文本）不改任何状态。
+    // 此前先删后验：手滑一次，问题就从待答列表消失，而 run 永远挂在 waiting_human 上。
     let answer: AskUserAnswer;
     const freeText = typeof body.free === 'string' ? body.free.trim() : '';
     if (freeText) {
       answer = { source: 'free', answer: freeText.slice(0, 2000) };
     } else if (Array.isArray(body.choice) && body.choice.length > 0) {
-      const labels = body.choice
-        .map(i => entry.payload.options[i]?.label)
-        .filter((l): l is string => Boolean(l));
-      if (labels.length === 0) return { ok: false, message: '选项下标无效' };
+      const indexes = body.choice.map(Number);
+      if (indexes.some(i => !Number.isInteger(i) || i < 0 || i >= entry.payload.options.length)) {
+        return { ok: false, message: `选项下标无效（有效范围 0–${entry.payload.options.length - 1}）` };
+      }
+      const labels = [...new Set(indexes)].map(i => entry.payload.options[i].label);
       answer = { source: 'choice', answer: labels.join(', ') };
     } else {
       return { ok: false, message: '需要 choice（下标数组）或 free（自由文本）' };
     }
+    this.pendingQuestions.delete(questionId);
+    if (entry.timer) clearTimeout(entry.timer);
     this.emitRunEvent(runId, 'question.answered', { questionId, source: answer.source, answer: answer.answer });
     this.restoreAfterQuestion(runId);
     entry.resolve(answer);
@@ -443,8 +556,11 @@ export class RunEngine {
       ...(input.parentRunId ? { forkFrom: input.parentRunId, forkFromSeq: input.forkFromSeq } : {}),
       budget,
       ...(workspace ? { workspace: { id: workspace.id, name: workspace.name, permission: workspace.permission } } : {}),
+      ...(input.unattended ? { unattended: true } : {}),
     });
 
+    this.liveRunIds.add(runId); // executeRun 的 finally 注销
+    if (input.unattended) this.unattendedRuns.add(runId);
     const controller = createAbortController(runId);
     // 斜杠展开后的 goal 传给 executeRun（此前传的是原始 input.goal — 展开结果从未到达模型）
     const execInput = { ...input, goal };
@@ -487,14 +603,20 @@ export class RunEngine {
 
   /** 删除整个会话（含全部 run；证据目录与检索文档一并清理） */
   deleteSession(sessionId: string): number {
-    const { items } = this.deps.runStore.list({ sessionId, limit: 200 });
-    for (const run of items) {
-      if (['running', 'waiting_human'].includes(run.status)) {
-        this.cancelRun(run.id);
+    // 列表接口单次最多 200 条 — 大会话（评测会话实测 231 个 run）必须翻页：否则排在 200 名之外的
+    // run 只从数据库消失，证据目录 / 检索文档 / 挂起审批留在原地（REG-37）。
+    // 数据库删除放在最后，翻页期间列表是稳定的
+    for (let offset = 0; ; offset += 200) {
+      const { items } = this.deps.runStore.list({ sessionId, limit: 200, offset });
+      for (const run of items) {
+        if (['running', 'waiting_human'].includes(run.status)) {
+          this.cancelRun(run.id);
+        }
+        this.rejectAllApprovals(run.id); // 挂起审批一并落定（防悬挂）
+        this.evidence.deleteRun(run.id); // 证据目录不随 DB 级联 — 显式清理
+        this.search.deleteRun(run.id);   // 检索文档同理
       }
-      this.rejectAllApprovals(run.id); // 挂起审批一并落定（防悬挂）
-      this.evidence.deleteRun(run.id); // 证据目录不随 DB 级联 — 显式清理
-      this.search.deleteRun(run.id);   // 检索文档同理
+      if (items.length < 200) break;
     }
     return this.deps.runStore.deleteSession(sessionId);
   }
@@ -590,19 +712,21 @@ export class RunEngine {
 
       // 验证工程（B4 标准前置）：工作区交互 run 开工即预热验收清单（memoized —
       // 验证门复用同一 promise，保证清单只依赖 goal+CHECKS.md，永不含产物）。
-      // 生成时发现的歧义经注入通道提示模型用 ask_user 澄清（该问的在开工前问）。
+      // 生成时发现的歧义经平台提示通道告知模型：实质性的用 ask_user 澄清，其余自行取默认。
       const verifyEligible = Boolean(workspace)
         && !this.isAutomationSession(input.sessionId)
         && this.budgetSettings.effective().verificationEnabled !== false;
       if (verifyEligible) {
         void this.ensureCriteria(runId, input.goal, workspace!.dir).then(cr => {
-          if (cr && cr.ambiguities.length > 0) {
-            const inbox = this.userInboxByRun.get(runId) ?? [];
-            inbox.push({
-              queuedAt: Date.now(),
-              content: `验收清单生成时发现以下任务歧义：${cr.ambiguities.join('；')}。请立即用 ask_user 向用户澄清后再继续，不要猜。`,
-            });
-            this.userInboxByRun.set(runId, inbox);
+          if (cr && cr.ambiguities.length > 0 && !input.unattended) {
+            // REG-26：无人值守的 run 现场没有人 — 不提示反问（模型按最合理假设继续并注明）
+            const notes = this.systemInboxByRun.get(runId) ?? [];
+            notes.push(
+              `开工检查发现任务有几处没说死：${cr.ambiguities.join('；')}。` +
+              `只有当不同理解会明显改变交付物（范围/受众/输出格式）时才用 ask_user 向用户确认；` +
+              `其余按常规默认处理，并在最终回答里说明所采用的假设。`
+            );
+            this.systemInboxByRun.set(runId, notes);
           }
           if (cr) {
             this.emitRunEvent(runId, 'verify.criteria', {
@@ -643,7 +767,7 @@ export class RunEngine {
         }
       }
 
-      const { tools, team } = this.buildTools(runId, workspace, runLlm, input.sessionId);
+      const { tools, team } = this.buildTools(runId, workspace, runLlm, input.sessionId, input.unattended === true);
       // 精确重放：模型配置快照（路由优先；否则取当前 active 配置）
       let modelInfo: { model: string; provider?: string; baseUrl?: string; profileId?: string };
       if (input.modelProfileId && routedModel) {
@@ -674,9 +798,9 @@ export class RunEngine {
         // 精确重放：fork 携带历史系统提示时一字不差复现（优先于现场组装）
         ...(input.forkSystem ? { exactSystem: input.forkSystem } : {}),
         modelInfo,
-        // 团队/用户邮箱合流（主循环）：步边界排空 — teammate 消息与"运行中用户补充"
+        // 团队/用户邮箱合流（主循环）：步边界排空 — teammate 消息、"运行中用户补充"与平台提示
         // 同门注入（不丢、不打断当前步骤）
-        pollInbox: () => [...team.drain('main'), ...this.drainUserInput(runId)],
+        pollInbox: () => [...team.drain('main'), ...this.drainUserInput(runId), ...this.drainSystemNotes(runId)],
         // D18：记忆使用指引常驻系统提示；调用方的 extraSystem 追加在后
         // D18 记忆指引 + 个人画像（越聊越懂用户）+ 协作习惯 + 具名子代理目录 + 个性化（6维度，默认关）+ 调用方 extraSystem
         extraSystem: [
@@ -723,26 +847,45 @@ export class RunEngine {
       });
 
       const result = await loop.run();
+      // 主循环已返回 — 之后再没有人收割 teammate：立即终止 run 级后台作用域（REG-25）
+      this.abortBackground(runId);
       outcomeStatus = result.status;
       if (signal.aborted) {
+        // 取消也要记账（REG-41）：已经花掉的 token 是真实成本 — 此前直接返回，库里永远记 0。
+        // 只写 token 数，状态仍由 cancelRun / markCancelled 决定
+        const teamTokens = this.teamTokensByRun.get(runId) ?? { in: 0, out: 0 };
+        this.deps.runStore.update(runId, {
+          tokensIn: result.tokensIn + (result.childTokensIn ?? 0) + teamTokens.in,
+          tokensOut: result.tokensOut + (result.childTokensOut ?? 0) + teamTokens.out,
+        });
         this.markCancelled(runId);
         return;
       }
+      await this.settleBackground(runId);
+      // run 总账 = 主循环 + 同步子代理（agent_spawn）+ 后台 teammate
+      const teamTokens = this.teamTokensByRun.get(runId) ?? { in: 0, out: 0 };
+      const totalTokensIn = result.tokensIn + (result.childTokensIn ?? 0) + teamTokens.in;
+      const totalTokensOut = result.tokensOut + (result.childTokensOut ?? 0) + teamTokens.out;
 
-      const status = result.status === 'completed' || result.status === 'budget_exceeded' ? 'completed' : result.status;
+      // 原地打转（stalled）是平台终止的失败态：库里落 failed + end_reason=stalled（词表不变，同 002 迁移惯例）
+      const failed = result.status === 'failed' || result.status === 'stalled';
+      const status = result.status === 'completed' || result.status === 'budget_exceeded' ? 'completed' : 'failed';
       this.deps.runStore.update(runId, {
         status,
         endReason: result.status === 'budget_exceeded' ? 'budget_exceeded'
           : result.status === 'completed' ? 'final_answer'
           : result.status,
         finalContent: result.finalContent,
-        tokensIn: result.tokensIn,
-        tokensOut: result.tokensOut,
-        ...(result.status === 'failed' ? { error: { message: result.error } } : {}),
+        tokensIn: totalTokensIn,
+        tokensOut: totalTokensOut,
+        ...(failed ? { error: { message: result.error } } : {}),
       });
 
       if (result.status === 'budget_exceeded') {
-        this.emitRunEvent(runId, 'run.budget_exceeded', { steps: result.steps, tokensIn: result.tokensIn, tokensOut: result.tokensOut });
+        this.emitRunEvent(runId, 'run.budget_exceeded', { steps: result.steps, tokensIn: totalTokensIn, tokensOut: totalTokensOut });
+      }
+      if (result.status === 'stalled') {
+        this.emitRunEvent(runId, 'run.stalled', { steps: result.steps, toolCalls: result.toolCalls, tokensIn: totalTokensIn, tokensOut: totalTokensOut, error: result.error });
       }
       // 验证工程（A2）：终态判决事件 — 带级别（4=全过带证据/3=全过部分不可验/2=有失败）、
       // 逐行结果（失败行可被人工采纳进 CHECKS.md）。未验证的 run 不发（UI 显示"未验证"）
@@ -773,21 +916,12 @@ export class RunEngine {
 
       this.emitRunEvent(
         runId,
-        result.status === 'failed' ? 'run.failed' : 'run.completed',
-        result.status === 'failed'
+        failed ? 'run.failed' : 'run.completed',
+        failed
           ? { error: result.error }
-          : { finalContentPreview: result.finalContent.slice(0, 500), steps: result.steps, toolCalls: result.toolCalls, tokensIn: result.tokensIn, tokensOut: result.tokensOut }
+          : { finalContentPreview: result.finalContent.slice(0, 500), steps: result.steps, toolCalls: result.toolCalls, tokensIn: totalTokensIn, tokensOut: totalTokensOut }
       );
-
-      // 记忆使用记账：本 run 读过/命中过的文件 — 命中计数；failed 收尾的读取
-      // 做误导弱归因（只记录：失败未必是记忆的锅，处置权留给人）
-      const memReads = this.memoryReadsByRun.get(runId);
-      if (memReads && memReads.size > 0) {
-        try {
-          this.memoryUsage.recordUse([...memReads]);
-          if (result.status === 'failed') this.memoryUsage.recordSuspect([...memReads]);
-        } catch { /* 记账失败不影响 run */ }
-      }
+      // （记忆使用记账统一在 finally — 任何收尾路径都且只记一次，REG-29）
 
       // 会话全文检索：终态时（重）索引本 run 的检索文档（goal + 最终回答 + 消息轨迹）
       if (result.status === 'completed') {
@@ -832,8 +966,15 @@ export class RunEngine {
         }
       }
 
-      // M1-11（D18）：会话结束记忆整理 — 仅正常完成时；demo 模式与开关关闭时跳过
-      if (result.status === 'completed' && platformConfig.memoryDistillEnabled && !(this.deps.llm as any).isDemoMode?.()) {
+      // M1-11（D18）：会话结束记忆整理 — 仅正常完成时；demo 模式与开关关闭时跳过。
+      // REG-20：评测/自动化会话不整理 — 它的转录只服务评测本身。此前隔离只做在
+      // memory_write 一个入口，评测会话跑完照常蒸馏，长期记忆被评测题的碎片灌满。
+      if (
+        result.status === 'completed'
+        && platformConfig.memoryDistillEnabled
+        && !(this.deps.llm as any).isDemoMode?.()
+        && !this.isAutomationSession(input.sessionId)
+      ) {
         await this.distillAfterRun(runId, result.messages, input.sessionId);
         // 习惯蒸馏：观察攒够阈值才跑（个人量级：约每 20 次工具调用一次）
         if (this.habits.observationsSinceLastDistill() >= 20) {
@@ -858,22 +999,87 @@ export class RunEngine {
       this.releaseSeq(runId);
       this.runMeta.delete(runId);
       // 记忆使用记账：本 run 读过/命中过的文件 — 命中计数；failed 收尾的读取做
-      // 误导弱归因（只记录：失败未必是记忆的锅，处置权留给人）
+      // 误导弱归因（只记录：失败未必是记忆的锅，处置权留给人）。
+      // 只在 finally 记（任何收尾路径都且只记一次 — REG-29）
       const memReads = this.memoryReadsByRun.get(runId);
       if (memReads && memReads.size > 0) {
         try {
           this.memoryUsage.recordUse([...memReads]);
-          if (outcomeStatus === 'failed') this.memoryUsage.recordSuspect([...memReads]);
+          if (outcomeStatus === 'failed' || outcomeStatus === 'stalled') this.memoryUsage.recordSuspect([...memReads]);
         } catch { /* 记账失败不影响 run */ }
       }
       this.memoryReadsByRun.delete(runId);
       this.userInboxByRun.delete(runId);
+      // run 级内部状态一律随 run 释放（REG-29：清单 promise / 判决 / 已问数 / 平台提示 —
+      // 此前只在部分路径清理，长驻进程里只增不减）
+      this.systemInboxByRun.delete(runId);
+      this.criteriaByRun.delete(runId);
+      this.verdictByRun.delete(runId);
+      this.questionsAskedByRun.delete(runId);
+      // 兜底：仍有挂起的反问 → 以 cancelled 落定（正常路径此时不可能有；异常路径防悬挂）
+      this.resolveAllQuestions(runId);
+      // 终止 run 的全部后台作用域（幂等；取消 → 主循环结束 → run 收尾 各调用一次）
+      this.abortBackground(runId);
+      this.backgroundScopes.delete(runId); // 作用域均已 abort；teammate 侧稍后的注销是空操作
+      this.teamTokensByRun.delete(runId);
       // 按 runId 精准清理——clear() 会误杀其他并发 run 的观察记录
       for (const [cid, obs] of this.pendingObs) {
         if (obs.runId === runId) this.pendingObs.delete(cid);
       }
       this.rejectAllApprovals(runId); // 挂起的审批随 run 结束一并落定（防泄漏/悬挂）
       releaseAbortController(runId);
+      this.liveRunIds.delete(runId);
+      this.unattendedRuns.delete(runId);
+    }
+  }
+
+  /** 后台 teammate 注册（team_spawn 调用 — 主循环结束时统一终止） */
+  private registerBackground(runId: string, scope: AbortController): void {
+    let set = this.backgroundScopes.get(runId);
+    if (!set) { set = new Set(); this.backgroundScopes.set(runId, set); }
+    set.add(scope);
+  }
+
+  private unregisterBackground(runId: string, scope: AbortController): void {
+    const set = this.backgroundScopes.get(runId);
+    if (!set) return;
+    set.delete(scope);
+    if (set.size === 0) {
+      // 最后一个 teammate 落定 → 唤醒等待方
+      const waiters = this.backgroundWaiters.get(runId);
+      if (waiters) {
+        this.backgroundWaiters.delete(runId);
+        for (const w of [...waiters]) w();
+      }
+    }
+  }
+
+  /** 等待 run 的后台 teammate 全部落定（上限 timeoutMs — 不让收尾被个别 teammate 拖住） */
+  private async settleBackground(runId: string, timeoutMs = 2000): Promise<void> {
+    const set = this.backgroundScopes.get(runId);
+    if (!set || set.size === 0) return;
+    this.abortBackground(runId);
+    await new Promise<void>(resolve => {
+      const waiters = this.backgroundWaiters.get(runId) ?? [];
+      const finish = () => {
+        clearTimeout(timer);
+        const i = waiters.indexOf(finish);
+        if (i >= 0) waiters.splice(i, 1);
+        if (waiters.length === 0) this.backgroundWaiters.delete(runId);
+        resolve();
+      };
+      const timer = setTimeout(finish, timeoutMs);
+      waiters.push(finish);
+      this.backgroundWaiters.set(runId, waiters);
+    });
+  }
+
+  /** 终止 run 的全部后台作用域（幂等；取消 → 主循环结束 → run 收尾 各调用一次） */
+  private abortBackground(runId: string): void {
+    const set = this.backgroundScopes.get(runId);
+    if (!set) return;
+    for (const scope of set) {
+      if (!scope.signal.aborted) scope.abort(new Error('run 已结束，后台 teammate 终止'));
     }
   }
 
@@ -1023,7 +1229,7 @@ export class RunEngine {
    *  · ask（默认） → fs 全量（写改 approval）+ shell（如启用，approval）
    *  · auto        → fs 权限位提为 auto；shell 保持 approval（D13）
    *  注意：todo_write 的 emit 是构造时注入的闭包（不走 ctx.emit），必须显式路由到本 run 的事件流 */
-  private buildTools(runId: string, workspace: Workspace | null, llmOverride?: any, sessionId?: string): { tools: Tool[]; team: TeamService } {
+  private buildTools(runId: string, workspace: Workspace | null, llmOverride?: any, sessionId?: string, unattended = false): { tools: Tool[]; team: TeamService } {
     const registry = createDefaultToolRegistry({
       skillRegistry: this.deps.skillRegistry,
       skillExecutor: this.deps.skillExecutor,
@@ -1079,7 +1285,16 @@ export class RunEngine {
     // M1-4：spawn 工具 — 子预算上限为平台默认的 1/2 量级，spawn 限额 run 级共享
     // Teams：run 级协作内核（任务板 + 邮箱 + 名册）；team_* 工具按代理各配副本
     //（selfName 不同 — teammate 的 team_send 落名是自己，主循环是 'main'）
-    const team = new TeamService(runId, ev => this.emitRunEvent(runId, ev.type, ev.payload ?? {}), platformConfig.runMaxTokens);
+    // 派生预算的基准 = 用户设置的预算（0 = 无上限）：与主循环同一来源，而不是绕过设置直接读平台默认
+    const effectiveBudget = this.budgetSettings.effective();
+    const nominalSteps = nominalBudgetValue(effectiveBudget.maxSteps, PLATFORM_DEFAULT_BUDGET.steps);
+    const nominalTokens = nominalBudgetValue(effectiveBudget.maxTokens, PLATFORM_DEFAULT_BUDGET.tokens);
+    // 团队看门狗：与主循环同一语义（≤0 = 不限）
+    const team = new TeamService(
+      runId,
+      ev => this.emitRunEvent(runId, ev.type, ev.payload ?? {}),
+      loopBudgetValue(effectiveBudget.maxTokens, platformConfig.runMaxTokens),
+    );
     const spawn = makeSpawnTool({
       llm: this.deps.llm,
       summarize: async transcript => this.summarizeTranscript(transcript),
@@ -1092,10 +1307,10 @@ export class RunEngine {
       depth: 0,
       spawnCounter: { count: 0 },
       subBudget: {
-        defaultSteps: Math.max(3, Math.floor(platformConfig.runMaxSteps / 3)),
-        defaultTokens: Math.max(5000, Math.floor(platformConfig.runMaxTokens / 3)),
-        maxSteps: Math.max(5, Math.floor(platformConfig.runMaxSteps / 2)),
-        maxTokens: Math.max(10000, Math.floor(platformConfig.runMaxTokens / 2)),
+        defaultSteps: Math.max(3, Math.floor(nominalSteps / 3)),
+        defaultTokens: Math.max(5000, Math.floor(nominalTokens / 3)),
+        maxSteps: Math.max(5, Math.floor(nominalSteps / 2)),
+        maxTokens: Math.max(10000, Math.floor(nominalTokens / 2)),
       },
     });
     const teamSpawn = makeTeamSpawnTool({
@@ -1109,11 +1324,18 @@ export class RunEngine {
       depth: 0,
       team,
       spawnCounter: { count: 0 },
+      // REG-25：后台 teammate 挂进 run 级后台作用域 — 主循环结束即终止
+      registerBackground: scope => this.registerBackground(runId, scope),
+      unregisterBackground: scope => this.unregisterBackground(runId, scope),
+      onTeammateSettled: t => {
+        const cur = this.teamTokensByRun.get(runId) ?? { in: 0, out: 0 };
+        this.teamTokensByRun.set(runId, { in: cur.in + (t.tokensIn || 0), out: cur.out + (t.tokensOut || 0) });
+      },
       subBudget: {
-        defaultSteps: Math.max(3, Math.floor(platformConfig.runMaxSteps / 3)),
-        defaultTokens: Math.max(5000, Math.floor(platformConfig.runMaxTokens / 3)),
-        maxSteps: Math.max(5, Math.floor(platformConfig.runMaxSteps / 2)),
-        maxTokens: Math.max(10000, Math.floor(platformConfig.runMaxTokens / 2)),
+        defaultSteps: Math.max(3, Math.floor(nominalSteps / 3)),
+        defaultTokens: Math.max(5000, Math.floor(nominalTokens / 3)),
+        maxSteps: Math.max(5, Math.floor(nominalSteps / 2)),
+        maxTokens: Math.max(10000, Math.floor(nominalTokens / 2)),
       },
     });
     tools.push(spawn);
@@ -1127,7 +1349,8 @@ export class RunEngine {
     // 此处返回新数组使 teammate 不带此工具（其问题由主循环代问，一期决策）
     const askTool = makeAskUserTool({
       ask: payload => this.askUser(runId, payload),
-      automationSession: this.isAutomationSession(sessionId),
+      // 评测会话与无人值守（定时/触发）run：现场没有人 — 不挂起，直接返回"用户不可用"（REG-26）
+      automationSession: this.isAutomationSession(sessionId) || unattended,
     });
     return { tools: [...tools, askTool], team };
   }
@@ -1190,6 +1413,18 @@ export class RunEngine {
         workspace: { id: workspace.id, name: workspace.name },
       });
       return true;
+    }
+
+    if (this.unattendedRuns.has(runId)) {
+      // REG-26：无人值守时审批请求没有人会来回应 — 挂起就是永久悬挂（与反问同一个病根）。
+      // fail-closed：按"未获批准"即时落定并留痕；需要写权限的定时任务应使用 auto 档工作区
+      const approvalId = nanoid(10);
+      this.emitRunEvent(runId, 'tool.approval_resolved', {
+        approvalId, approved: false, tool: tool.name, unattended: true,
+        ...(callId ? { callId } : {}),
+        reason: '无人值守任务：需要人工审批的操作已跳过',
+      });
+      return false;
     }
 
     const approvalId = nanoid(10);

@@ -143,6 +143,10 @@ export interface ParsedSkillManifest {
   scriptRuntime?: ScriptRuntime;
   scriptTimeoutMs?: number;
   humanGate: boolean;
+  /** 该技能的入参里包含**模型写的代码**（而非纯数据）— 必须同时声明 sandboxed（REG-22） */
+  acceptsCode?: boolean;
+  /** 该技能在自己的脚本里实现了执行沙箱（声明；由技能自身负责，工具层只做契约校验） */
+  sandboxed?: boolean;
   estimatedDurationMs: number;
   costLevel: CostLevel;
   status: SkillStatus;

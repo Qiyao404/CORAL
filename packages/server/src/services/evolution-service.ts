@@ -365,7 +365,7 @@ export class EvolutionService {
       if (p.kind === 'memory_rewrite') {
         // 离线对账产物：改写前备份原文件进 memory/.history/（改写也是可回退的）
         if (!this.deps.memoryDir) return { ok: false, message: '未配置记忆目录，无法落盘' };
-        const { MemoryService } = await import('./memory-service.js');
+        const { MemoryService, rewriteCoverage, isLossyRewrite } = await import('./memory-service.js');
         const svc = new MemoryService(this.deps.memoryDir);
         const name = p.skillName!;
         if (!svc.exists(name)) {
@@ -373,13 +373,20 @@ export class EvolutionService {
           this.persist();
           return { ok: false, message: `记忆文件 ${name} 已不存在（可能已被整理/删除），提议作废` };
         }
-        const { mkdirSync: mk, copyFileSync: cp } = { mkdirSync, copyFileSync };
-        const histDir = join(resolve(this.deps.memoryDir), '.history');
-        mk(histDir, { recursive: true });
-        cp(
-          join(resolve(this.deps.memoryDir), name),
-          join(histDir, `${new Date().toISOString().replace(/[:.]/g, '-')}.md`),
-        );
+        // 内容保护（REG-38）：改写只应修正矛盾的那一两处。原文的条目整条整条消失（超过三分之一）、
+        // 或整体内容大半不在改写稿里 = 疑似丢内容 — 拒绝落盘（原文件一字未动），提议作废；
+        // 确需精简由用户直接编辑记忆文件。阈值经真实数据校准（正常改写不拦）
+        const coverage = rewriteCoverage(svc.read(name)?.content ?? '', String(p.content ?? ''));
+        if (isLossyRewrite(coverage)) {
+          p.status = 'rejected'; p.decidedAt = new Date().toISOString();
+          this.persist();
+          return {
+            ok: false,
+            message: `改写稿让原文 ${coverage.total} 条内容里的 ${coverage.vanished} 条整个消失（整体保留 ${Math.round(coverage.recall * 100)}%），疑似丢失内容 — 已拒绝落盘（原文件未动）。如确需精简，请直接编辑记忆文件。`,
+          };
+        }
+        // 改写前备份原文件进 memory/.history/（改写也是可回退的）— 文件名带原文件名，便于找回
+        svc.backup(name);
         svc.write(name, String(p.content));
         p.status = 'accepted'; p.decidedAt = new Date().toISOString();
         this.persist();

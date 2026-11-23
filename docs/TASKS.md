@@ -7,7 +7,7 @@
 > - ✅ M2: T-210（PlanningEngine 智能参数提取与组合任务规划）
 > - ✅ M3a: T-307~T-310（公司画像 + information-filter Skill + 端到端组合任务）
 > - ✅ M4 视觉子里程碑: T-410 / T-411 / T-412 全部落地
-> - ✅ M2: T-211（Skill Builder 与 skill-creator 对齐 prompt 模板）
+> - ✅ M2: T-211（Skill Builder 的渐进式生产 prompt 模板）
 >
 > **impl 实现进度**：v1.1.0 全部 P0 任务已交付（见每个里程碑下的 ✅ 标记）。
 > P1/P2 任务部分留待 v1.2.0（如 .history/ 编辑历史 UI、A/B 测试不同画像）。
@@ -179,7 +179,7 @@ M5:  联调、测试、验收（含视觉走查）                           →
 - **验收**：TC-I1 / TC-I2 / TC-I3 / TC-I4 / TC-I5 / TC-I6 / TC-I7 / TC-I8
 - **交付物**：`planning-engine.ts`、`dag-scheduler.ts`、`reference-loader.ts`（新建）
 
-### T-211  Skill Builder 与 anthropics/skill-creator 对齐
+### T-211  Skill Builder 渐进式生产与可评测设计
 - **优先级**：P1 · **依赖**：T-208 · **预估**：0.75d
 - **范围**：
   - 抽取 prompt 段为 `system_prompt` + `field_specs[]` + `examples[]`（DESIGN §5b.2）
@@ -499,7 +499,7 @@ T-101 ──┬─▶ T-102 ──┬─▶ T-203 ─┬─▶ T-403
         ├─▶ T-103 ─▶ T-201 ─▶ T-206 ─▶ T-207 ─▶ T-208┼▶ T-209
         │              │                              │   │
         │              ├─▶ T-202                      │   ▼
-        │              │                              │  T-211（与 skill-creator 对齐）
+        │              │                              │  T-211（Skill Builder 设计）
         │              │
         │              └─▶ T-307 ──▶ T-308 ─▶ T-310
         │                              ▲
@@ -604,4 +604,4 @@ T-101 ──┬─▶ T-102 ──┬─▶ T-203 ─┬─▶ T-403
 - **公司画像多版本对比**（A/B 测试不同画像的筛选效果）
 - **information-filter 历史决策回流**（用户在前端勾选「保留/剔除」覆盖结果，下次 prompt 中作为 few-shot 示例）
 - **多公司多租户**（公司画像按 workspace 隔离）
-- **Skill 评测面板**（参考 anthropics/skill-creator/eval-viewer 实现）
+- **Skill 评测面板**（结果对照查看器）

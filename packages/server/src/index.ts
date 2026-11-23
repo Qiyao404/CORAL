@@ -26,6 +26,7 @@ import { registerWorkspaceRoutes } from './api/workspace.routes.js';
 import { registerWorkspaceFileRoutes } from './api/workspace-file.routes.js';
 import { registerMemoryRoutes } from './api/memory.routes.js';
 import { registerRunExportRoutes } from './api/run-export.routes.js';
+import { makeWsOriginGuard } from './api/ws-origin.js';
 import { ensureLlmConfigsInitialized } from './services/llm-config-service.js';
 import { getCompanyProfile } from './services/company-profile-service.js';
 import { registerTaskRoutes } from './api/task.routes.js';
@@ -48,7 +49,7 @@ import { llmClient } from './services/llm-client.js';
 async function main() {
   console.log('╔═══════════════════════════════════════════╗');
   console.log('║        CORAL — 通用智能体运行时平台        ║');
-  console.log('║        版本: 2.4.0                         ║');
+  console.log('║        版本: 2.7.1                         ║');
   console.log('╚═══════════════════════════════════════════╝');
 
   // 确保必要目录存在
@@ -114,6 +115,12 @@ async function main() {
     if (entries.length > 0) {
       console.log(`[服务启动] 外部守卫已装载: ${entries.map(([k, v]) => `${k}×${v.length}`).join(', ')}`);
     }
+  }
+  // 启动收尸（REG-25）：执行管线只存在于进程内存 — 上次进程退出时还在途的 free run
+  // 永远不会推进，而前端照旧把它们当"正在运行/等待中"。这里统一落为 failed/interrupted
+  const interruptedFreeRuns = runEngine.reconcileInterruptedRuns();
+  if (interruptedFreeRuns > 0) {
+    console.log(`[服务启动] 检测到 ${interruptedFreeRuns} 个被上次退出中断的任务（已标记为中断；在原会话发送"继续"可接力）`);
   }
 
   // M2：Graph 模式（GraphEngine 接线：durable execution + HITL + resume）
@@ -227,10 +234,12 @@ async function main() {
           workspaceId: action.workspaceId,
         });
       }
-      // 持久 inbox 语义：触发器带 sessionId 时不开新对话，续写既有会话（checkpoint 续接）
+      // 持久 inbox 语义：触发器带 sessionId 时不开新对话，续写既有会话（checkpoint 续接）。
+      // unattended：定时/触发任务现场没有人 — 不反问、不等人点审批（REG-26）
       return runEngine.startRun({
         goal: action.goal,
         workspaceId: action.workspaceId,
+        unattended: true,
         ...(action.sessionId ? { sessionId: action.sessionId, continueSession: true } : {}),
       });
     },
@@ -242,8 +251,15 @@ async function main() {
   registerMemoryRoutes(app, { getSearch: () => runEngine.searchStore, getEvolution: () => runEngine.evolutionService });
   registerRunExportRoutes(app, runEngine);
 
-  // WebSocket 事件推送
-  app.get('/ws/events', { websocket: true }, (socket, _request) => {
+  // WebSocket 事件推送。
+  // Origin 校验在握手之前（路由级 preValidation — REG-31）：CORS 白名单管不到 WebSocket，
+  // 浏览器会替任意网页发起跨站连接；事件通道推送全部 run 事件，不校验 = 任何打开着的网页都能旁听。
+  // 白名单与 HTTP 的 CORS 共用一份（页面自己的源已在其中）。
+  const wsOriginGuard = makeWsOriginGuard(
+    () => corsOrigins,
+    reason => console.warn(`[WebSocket] 已拒绝连接: ${reason}`),
+  );
+  app.get('/ws/events', { websocket: true, preValidation: wsOriginGuard }, (socket, _request) => {
     console.log('[WebSocket] 客户端已连接');
 
     const sender = (event: any) => {
@@ -296,6 +312,9 @@ async function main() {
       console.log(`[关闭中] 已中止 ${aborted} 个在跑任务（脚本子进程按进程树强杀）`);
       await new Promise(resolve => setTimeout(resolve, 200)); // 给强杀与事件落库留出时间
     }
+    // 宽限后仍在途的 run（含还在等审批/反问的）直接落为中断（REG-25）— 不留给下次启动当僵尸
+    const stranded = runEngine.reconcileInterruptedRuns();
+    if (stranded > 0) console.log(`[关闭中] ${stranded} 个任务未及收尾，已标记为中断`);
     watcher.stop();
     await app.close();
     // SQLite WAL 下写即持久；close 放在 app.close 之后，避免关闭期间事件写入失败
