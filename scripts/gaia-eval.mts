@@ -112,15 +112,27 @@ function extractAnswer(final: string): string {
   const text = String(final ?? '').trim();
   // 同时匹配英文和中文的"最终答案"前缀
   const m = text.match(/(?:final answer|最终答案)\s*[:：]\s*(.+)$/im);
-  if (m) return m[1].trim();
+  if (m) return stripMarkdown(m[1].trim());
   // 去掉常见前缀后的最后一行（若非空且短）；末行也剥一次中文前缀
   const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i--) {
     let l = lines[i].replace(/^[#>*\-\s]+/, '').trim();
     l = l.replace(/^最终答案\s*[:：]\s*/, '').trim();
-    if (l && l.length <= 80) return l;
+    l = l.replace(/^#{1,6}\s*(?:answer|答案)\s*[:：]\s*/i, '').trim();
+    if (l && l.length <= 80) return stripMarkdown(l);
   }
-  return text.slice(0, 80);
+  return stripMarkdown(text.slice(0, 80));
+}
+
+/** 剥离 Markdown 格式标记（## 标题、**加粗**、__下划线__、`code`）——评分口径与 gold 对齐 */
+function stripMarkdown(s: string): string {
+  return s
+    .replace(/^#{1,6}\s*/gm, '')          // 行首标题标记
+    .replace(/\*\*(.+?)\*\*/g, '$1')      // 加粗
+    .replace(/__(.+?)__/g, '$1')          // 下划线
+    .replace(/`([^`]+)`/g, '$1')          // 行内代码
+    .replace(/\*(.+?)\*/g, '$1')          // 斜体（在加粗之后处理，避免误伤）
+    .trim();
 }
 
 // ── CORAL API ──────────────────────────────────────────────────────────────
@@ -149,8 +161,10 @@ const PROMPT = (q: string) =>
   `- Use evidence_read for large results, session_search for past experience.\n` +
   `- When quoting or decoding, preserve original spelling exactly.\n` +
   `- If the answer is a number, write digits (not words).\n` +
+  `- When the question asks for a specific value (a number, price, date, time), output ONLY that value — do not include the address, item name, or surrounding context it came from.\n` +
+  `- Never declare "Cannot be determined" unless you have tried at least 3 different search strategies with different keyword formulations.\n` +
   `\nEnd your reply with a line exactly of the form:\nFinal Answer: <short answer>\n` +
-  `The short answer must be only a word, number, name or short phrase.`;
+  `The short answer must be only the specific value asked for — a word, number, name, or short phrase. Do not include addresses, explanations, or multiple values.`;
 
 async function ensureWorkspace(dir: string): Promise<string> {
   const existing = await api('/api/workspaces');

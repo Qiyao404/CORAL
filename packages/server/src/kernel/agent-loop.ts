@@ -716,8 +716,11 @@ export class AgentLoop {
         //（不改系统提示词前缀 — 前缀一动整条会话的 KV Cache 全失效，反而更贵）。
         // 每档只触发一次；maxSteps 有限时按 70%/85% 相对阈值，无上限时按绝对步数
         //（20/40 — 无上限是用户的明确选择，只提醒不硬停）。
+        // fired 标记在此处（实际发射时）而非 budgetNudgeText 内部——
+        // 防御：如果本步无工具调用（lastToolMsgIndex === -1），提醒被丢弃但档位不消耗
         const nudge = budgetNudgeText(steps, budget, nudgedTiers);
         if (nudge && lastToolMsgIndex >= 0) {
+          nudgedTiers.add(nudge.tier); // 只在真正发射时标记（下一步不重试）
           const m = messages[lastToolMsgIndex] as any;
           m.content = `${m.content}\n\n${nudge.text}`;
           this.emit('loop.budget_nudge', {
@@ -1143,8 +1146,10 @@ export function budgetNudgeText(
     ? Math.floor(budget.maxSteps * 0.85)
     : BUDGET_NUDGE_FREE_STEPS.converge;
 
+  // 注意：此处不调用 fired.add()——标记由调用方在实际发射时执行。
+  // 防御性设计：如果本步无工具调用（lastToolMsgIndex === -1），提醒被静默丢弃，
+  // 但档位不应被消耗（下一步会重试）——否则 converge 永远不触发（实测 bug）
   if (step >= convergeAt && step < ceiling && !fired.has('converge')) {
-    fired.add('converge');
     return {
       tier: 'converge',
       text:
@@ -1164,7 +1169,6 @@ export function budgetNudgeText(
     step < ceiling && // 预算内最后一轮已无"收敛"余地 — 不发噪音
     !fired.has('consolidate')
   ) {
-    fired.add('consolidate');
     return {
       tier: 'consolidate',
       text:

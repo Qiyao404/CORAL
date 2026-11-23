@@ -34,42 +34,69 @@ const echo: Tool = {
 };
 
 describe('budgetNudgeText — 阈值计算（单元）', () => {
+  /** 模拟调用方的发射行为：返回 nudge 时标记 fired（与 agent-loop 一致） */
+  function fire(step: number, budget: any, fired: Set<string>) {
+    const n = budgetNudgeText(step, budget, fired);
+    if (n) fired.add(n.tier);
+    return n;
+  }
+
   it('有限预算：70%/85% 相对阈值，高档优先，各只触发一次', () => {
     const fired = new Set<string>();
     // maxSteps=10 → consolidate@7, converge@8（floor）
-    expect(budgetNudgeText(6, { maxSteps: 10, maxTokens: 0 }, fired)).toBeNull();
-    const c = budgetNudgeText(7, { maxSteps: 10, maxTokens: 0 }, fired);
+    expect(fire(6, { maxSteps: 10, maxTokens: 0 }, fired)).toBeNull();
+    const c = fire(7, { maxSteps: 10, maxTokens: 0 }, fired);
     expect(c?.tier).toBe('consolidate');
     expect(c?.detail?.usage).toBe('70%');
     // 同档不重复
-    expect(budgetNudgeText(7, { maxSteps: 10, maxTokens: 0 }, fired)).toBeNull();
-    const v = budgetNudgeText(8, { maxSteps: 10, maxTokens: 0 }, fired);
+    expect(fire(7, { maxSteps: 10, maxTokens: 0 }, fired)).toBeNull();
+    const v = fire(8, { maxSteps: 10, maxTokens: 0 }, fired);
     expect(v?.tier).toBe('converge');
     expect(v?.detail?.usage).toBe('80%');
     // 全部触发后静默
-    expect(budgetNudgeText(9, { maxSteps: 10, maxTokens: 0 }, fired)).toBeNull();
+    expect(fire(9, { maxSteps: 10, maxTokens: 0 }, fired)).toBeNull();
   });
 
   it('converge 在预算耗尽前的最后一步不再触发（step < maxSteps）', () => {
     const fired = new Set<string>();
     // maxSteps=4 → consolidate@2, converge@3；step=4 已到预算 → null
-    expect(budgetNudgeText(4, { maxSteps: 4, maxTokens: 0 }, fired)).toBeNull();
+    expect(fire(4, { maxSteps: 4, maxTokens: 0 }, fired)).toBeNull();
     // converge@3 可以
-    expect(budgetNudgeText(3, { maxSteps: 4, maxTokens: 0 }, fired)?.tier).toBe('converge');
+    expect(fire(3, { maxSteps: 4, maxTokens: 0 }, fired)?.tier).toBe('converge');
   });
 
   it('无上限预算（Infinity）：20/40 绝对步数档', () => {
     const fired = new Set<string>();
     const inf = { maxSteps: Infinity, maxTokens: 0 };
-    expect(budgetNudgeText(19, inf, fired)).toBeNull();
-    expect(budgetNudgeText(20, inf, fired)?.tier).toBe('consolidate');
-    expect(budgetNudgeText(40, inf, fired)?.tier).toBe('converge');
+    expect(fire(19, inf, fired)).toBeNull();
+    expect(fire(20, inf, fired)?.tier).toBe('consolidate');
+    expect(fire(40, inf, fired)?.tier).toBe('converge');
     expect(fired).toEqual(new Set(['consolidate', 'converge']));
   });
 
   it('maxSteps ≤ 0 按无上限兜底（SDK 直连/测试路径）', () => {
     const fired = new Set<string>();
-    expect(budgetNudgeText(20, { maxSteps: 0, maxTokens: 0 }, fired)?.tier).toBe('consolidate');
+    expect(fire(20, { maxSteps: 0, maxTokens: 0 }, fired)?.tier).toBe('consolidate');
+  });
+
+  it('防御性：预算提醒不标记 fired 时，下一步可重试（Bug 2 修复的回归测试）', () => {
+    const fired = new Set<string>();
+    const inf = { maxSteps: Infinity, maxTokens: 0 };
+    // 步 20：budgetNudgeText 返回 consolidate 但调用方"没发射"（不 add 到 fired）
+    const n1 = budgetNudgeText(20, inf, fired);
+    expect(n1?.tier).toBe('consolidate');
+    expect(fired.has('consolidate')).toBe(false); // 未标记！
+    // 步 21：重试——同一档仍然返回（因为没有标记）
+    const n2 = budgetNudgeText(21, inf, fired);
+    expect(n2?.tier).toBe('consolidate'); // 可以重试
+    // 步 40：converge 也不标记
+    fired.add('consolidate'); // 现在标记 consolidate（模拟某步实际发射了）
+    const n3 = budgetNudgeText(40, inf, fired);
+    expect(n3?.tier).toBe('converge');
+    expect(fired.has('converge')).toBe(false); // 未标记
+    // 步 41：converge 重试成功
+    const n4 = budgetNudgeText(41, inf, fired);
+    expect(n4?.tier).toBe('converge'); // 仍然返回 converge
   });
 });
 
