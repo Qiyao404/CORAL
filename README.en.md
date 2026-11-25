@@ -290,13 +290,13 @@ Verified against DeepSeek and DashScope; any OpenAI-compatible endpoint (OpenRou
 | Persistence | SQLite (better-sqlite3, WAL mode, versioned schema migrations) |
 | Skills | YAML frontmatter (gray-matter) + chokidar hot reload |
 | Progress protocol | in-house `[CORAL_PROGRESS]` single-line stderr JSON protocol (Python + Node SDKs, see [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)) |
-| Quality | Vitest (801 cases + 33 web) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
+| Quality | Vitest (802 cases + 33 web) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
 
 ---
 
 ## Tests & Benchmarks
 
-- **Tests**: 801 cases (Vitest, server) + 33 (web) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
+- **Tests**: 802 cases (Vitest, server) + 33 (web) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
 - **GAIA benchmark**: [docs/GAIA.md](./docs/GAIA.md) — official GAIA benchmark validation split, **87.1%** (85 questions, deterministic exact match). L1 90.2% / L2 96.2% / L3 66.7%.
 - **Performance**: [docs/BENCHMARK.md](./docs/BENCHMARK.md) — context-compression gains (1.2MB history → 169KB, −86%), SQLite WAL and JSONL persistence throughput. Script: `npx tsx scripts/benchmark.mts`.
 
@@ -572,7 +572,7 @@ CORAL/
 - **Review and adjudication share one LLM**: the semantic layer of independent review and self-evaluation runs on the same model — weaker independence than human review; the deterministic heuristic layer is unaffected.
 - **Gates are heuristic**: the Wrap-up Gate pattern library and Fact Gate rules cannot cover every phrasing; both have forced-release plus warning to avoid blocking delivery.
 - **MCP stdio execution boundary**: external MCP servers run as local subprocesses; their capability boundary is determined by their own implementations; the platform constrains via annotation mapping and approval tiers.
-- **code-exec is interpreter-level isolation**: audit hooks intercept *actions*; it is not an OS-level container — it does not defend against someone versed in interpreter internals deliberately bypassing it; file existence remains probeable; there is no memory cap. Only standard-library compute modules are available inside the sandbox (third-party libraries such as numpy / pandas load restricted modules during their own import)
+- **code-exec is interpreter-level isolation**: audit hooks intercept *actions*; it is not an OS-level container — it does not defend against someone versed in interpreter internals deliberately bypassing it; file existence remains probeable; there is no memory cap. Only standard-library compute modules are available inside the sandbox (third-party libraries such as numpy / pandas load restricted modules during their own import); the trusted root is the interpreter's own directory — on Linux with the system Python that is /usr or /usr/local, which sandboxed code can open read-only
 - **Readable-page extraction is heuristic**: it keeps visible text in reading order, folds navigation link lists and does not run page scripts — pages that need script rendering yield no text (the tool result says so), and complex layouts are approximated; the link tiers (content / link lists / site menus) are heuristic too, so pages with very many links inline only part of them and the rest is looked up by keyword in the evidence record
 - **Web tests cover pure logic only**: the event window, run view and thinking detection are unit-tested, components are not — UI changes still rely on builds and live verification
 

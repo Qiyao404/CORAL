@@ -140,6 +140,8 @@ d('code-exec · 上次审计列出的绕过手法逐个封堵', () => {
 });
 
 d('code-exec · 临时目录不泄漏', () => {
+  // 要连续启动 4 个 Python 进程：单独跑约 1.2 秒，但机器繁忙时（实测并行跑全量时）会超过默认的 5 秒上限 —
+  // 那是进程启动慢，不是被测行为有问题，所以只放宽这条的时间上限，断言不变
   it('连续执行后临时目录下不留下 coral-code-* 残留', () => {
     // 本测试把 TEMP/TMP 指到了 work（见 runCode 的 env）— 残留只可能出现在这里，就数这里
     const count = () => readdirSync(work).filter(f => f.startsWith('coral-code-')).length;
@@ -147,5 +149,58 @@ d('code-exec · 临时目录不泄漏', () => {
     const before = count();
     for (let i = 0; i < 3; i++) runCode(`print(${i})`, work);
     expect(count()).toBe(before);
+  }, 60_000);
+});
+
+d('code-exec · 可信根目录的自检按结构判，不按长度判', () => {
+  // 线上问题：自检曾要求可信根"长度不少于 12"。Linux 上系统自带的 Python，解释器目录就是 /usr 或 /usr/local
+  //（长度 4 / 10）— 合法的可信根被判成异常，所有用系统 Python 的 Linux 用户都用不了代码执行。
+  // 这个测试在 Windows 上也能验证那种情况：把前导脚本当模块加载，直接给它喂各种可信根组合。
+  // （不能在沙箱里跑：沙箱里的代码读不了技能目录下的前导文件）
+  const ROOTS_HARNESS = [
+    'import importlib.util, json, os, sys',
+    "spec = importlib.util.spec_from_file_location('sandbox_prelude_under_test', sys.argv[1])",
+    'mod = importlib.util.module_from_spec(spec)',
+    'spec.loader.exec_module(mod)',
+    'sep = os.sep',
+    'root = os.path.abspath(sep)',
+    "base = root if root.endswith(sep) else root + sep",
+    "short = base + 'usr'",
+    'cases = [',
+    "    ('system_prefix', {short}, True),",
+    "    ('system_prefix_subdir', {short + sep + 'lib'}, True),",
+    "    ('long_prefix', {base + 'tools' + sep + 'python311'}, True),",
+    "    ('filesystem_root', {root}, False),",
+    "    ('split_into_chars', set(sys.prefix), False),",
+    "    ('root_without_separator', {root.rstrip(sep)}, False),",
+    "    ('empty', {''}, False),",
+    "    ('not_a_string', {None}, False),",
+    ']',
+    'out = {}',
+    'for name, roots, expected in cases:',
+    '    mod._TRUSTED_ROOTS = roots',
+    '    sane, why = mod._roots_look_sane()',
+    "    out[name] = {'sane': bool(sane), 'expected': expected, 'why': why, 'sample': sorted(str(r) for r in roots)[:3]}",
+    'print(json.dumps(out))',
+  ].join('\n');
+
+  it('/usr、/usr/local 这类短前缀是合法的；文件系统根、被拆成单字符的列表、空值、非字符串都要拒绝', () => {
+    const prelude = resolve(__dirname, '../../../../../skills/code-exec/scripts/sandbox_prelude.py');
+    const harness = join(work, 'roots_harness.py');
+    writeFileSync(harness, ROOTS_HARNESS, 'utf-8');
+    const python = process.platform === 'win32' ? 'python' : 'python3';
+    const r = spawnSync(python, ['-I', harness, prelude], {
+      encoding: 'utf-8',
+      cwd: work,
+      env: { PATH: process.env.PATH ?? '', PATHEXT: process.env.PATHEXT ?? '', SYSTEMROOT: process.env.SYSTEMROOT ?? process.env.SystemRoot ?? '', PYTHONUTF8: '1' },
+    });
+    const out = JSON.parse(String(r.stdout ?? '').trim().split('\n').pop() ?? 'null');
+    expect(out, r.stderr || String(r.stdout)).not.toBeNull();
+    // 前提：这两个"短前缀"在本平台上确实短于 12 个字符，否则这个测试证明不了长度判据的问题
+    expect(out.system_prefix.sample[0].length).toBeLessThan(12);
+    expect(out.system_prefix_subdir.sample[0].length).toBeLessThan(12);
+    for (const [name, v] of Object.entries<any>(out)) {
+      expect(v.sane, `${name}: ${v.sample.join(' ')} → ${v.why}`).toBe(v.expected);
+    }
   });
 });

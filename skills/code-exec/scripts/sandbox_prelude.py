@@ -29,6 +29,9 @@
     这是解释器级隔离，不是操作系统级容器。它防的是"模型被诱导去读写文件、发网络请求、
     起子进程"，不防熟悉 CPython 内部的人蓄意绕过；文件是否存在（os.stat）仍可探测；
     没有内存用量上限。需要更强隔离时应换成容器 / 虚拟机。
+    可信根 = 解释器自身目录（含用户级 site-packages）：沙箱内代码可以只读打开这个目录。
+    Windows 上它通常是一个独立的安装目录；Linux 上若用系统自带的 Python，则是 /usr 或 /usr/local —
+    范围因此大一些（系统文件，本就对所有用户可读；用户自己的文件与密钥不在其中）。
 """
 import os
 import sys
@@ -63,11 +66,19 @@ _READONLY_PREFIXES = tuple(
 
 
 def _roots_look_sane():
-    """可信根必须是"够长的绝对路径"。短条目（单字符 / 盘符）会匹配到远超预期的范围 —
-    宁可拒绝执行，也不能带着一份可疑的白名单放行文件读取。"""
+    """可信根必须是"文件系统根之下的绝对路径"。
+
+    按结构判，不按长度判。要拦的是会让白名单覆盖远超预期范围的条目：字符串被拆成的单个字符、
+    不带斜杠的盘符（都不是绝对路径）；'/'、'C:\\' 这类文件系统根 — 宁可拒绝执行，
+    也不能带着一份可疑的白名单放行文件读取。
+    Linux 上系统自带的 Python，解释器目录就是 /usr 或 /usr/local（长度 4 / 10）：它们是合法的可信根，
+    按长度卡会把所有用系统 Python 的 Linux 用户挡在门外。"""
     for p in _TRUSTED_ROOTS:
-        if not isinstance(p, str) or len(p) < 12 or not os.path.isabs(p):
+        if not isinstance(p, str) or not p or not os.path.isabs(p):
             return False, f'可信根目录异常: {p!r}'
+        norm = os.path.normpath(p)
+        if os.path.dirname(norm) == norm:
+            return False, f'可信根目录异常（指向整个文件系统根）: {p!r}'
     return True, ''
 _WRITE_FLAGS = os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND
 

@@ -285,13 +285,13 @@ npm run dev            # 后端 3001 + 前端 5173
 | 持久化 | SQLite（better-sqlite3，WAL 模式，schema 版本化迁移） |
 | Skill | YAML frontmatter（gray-matter）+ chokidar 热重载 |
 | 进度协议 | 自研 `[CORAL_PROGRESS]` stderr 单行 JSON 协议（Python + Node 双 SDK，见 [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)） |
-| 质量 | Vitest（801 用例 + 前端 33）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
+| 质量 | Vitest（802 用例 + 前端 33）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
 
 ---
 
 ## 测试与基准
 
-- **测试**：801 个用例（Vitest，服务端）+ 33 个（前端），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时 / 外部守卫 / 团队协作等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
+- **测试**：802 个用例（Vitest，服务端）+ 33 个（前端），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时 / 外部守卫 / 团队协作等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
 - **GAIA 基准**：[docs/GAIA.md](./docs/GAIA.md) —— 官方 GAIA benchmark validation split，**87.1%**（85 题，确定性 exact match）。L1 90.2% / L2 96.2% / L3 66.7%。
 - **性能基准**：[docs/BENCHMARK.md](./docs/BENCHMARK.md) —— 上下文压缩收益（1.2MB 历史 → 169KB，-86%）、SQLite WAL 与 JSONL 持久化吞吐。脚本：`npx tsx scripts/benchmark.mts`。
 
@@ -567,7 +567,7 @@ CORAL/
 - **评审与裁决依赖同一 LLM**：独立评审与自评的语义层由同一模型执行，独立性弱于人工评审；确定性启发式层不受此限。
 - **门禁为启发式**：收工门的话术模式库与事实门的规则无法覆盖全部表述形态；均设有强制放行与告警，避免误拦阻塞交付。
 - **MCP stdio 执行边界**：外部 MCP server 以本机子进程运行，其能力边界由各自实现决定；平台侧以注解映射与审批档位约束。
-- **code-exec 是解释器级隔离**：审计钩子拦的是"动作"，不是操作系统级容器——不防熟悉解释器内部的人蓄意绕过；文件是否存在仍可探测；没有内存用量上限。沙箱内只支持标准库计算模块（numpy / pandas 等第三方库在导入时自身会加载受限模块）
+- **code-exec 是解释器级隔离**：审计钩子拦的是"动作"，不是操作系统级容器——不防熟悉解释器内部的人蓄意绕过；文件是否存在仍可探测；没有内存用量上限。沙箱内只支持标准库计算模块（numpy / pandas 等第三方库在导入时自身会加载受限模块）；可信根是解释器自身目录，Linux 上用系统自带的 Python 时即 /usr 或 /usr/local，沙箱内代码可只读打开该目录
 - **正文提取是启发式的**：按阅读顺序保留可见文字、折叠导航链接区，不执行页面脚本——需要脚本渲染的页面取不到正文（工具结果会提示），复杂版式的还原度有限；链接的分级（正文 / 链接列表 / 站点菜单）同样是启发式的，链接极多的页面只内联一部分，其余在证据记录里按关键词查
 - **前端只有纯逻辑单测**：事件窗口、运行视图与等待判定有测试，组件层没有——界面改动仍依赖构建与真机验证
 
