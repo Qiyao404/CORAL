@@ -146,4 +146,22 @@ export const zh: Record<string, string> = {
   'chat.verifyRounds': '（验证 {r} 轮）',
   'chat.verifyPromote': '采纳为永久检查',
   'chat.verifyPromoted': '已采纳 ✓',
+  // 等待可见：模型思考计时 + 思考过程直播
+  'chat.thinkingTimer': '模型思考中 · {sec} 秒',
+  'chat.reasoningShow': '看它在想什么',
+  'chat.reasoningHide': '收起思考过程',
+  'chat.reasoningHint': '思考过程只用于让你看到进展，不进对话历史，也不是最终回答',
+  // 先汇报
+  'chat.reportNow': '先汇报阶段性结论',
+  'chat.reportNowSent': '已通知：请它先给出目前的结论',
+  'chat.reportNowMessage': '请先暂停进一步探索：基于目前已经核实的内容，现在就给出阶段性结论，并列出还没做完的部分。',
+  // 结果可信度
+  'chat.fetchFailuresNote': '⚠ 本次有 {n} 次网页抓取失败（其中网络层 {net} 次）——结论可能不完整，关键信息建议核对',
+  'chat.networkDownNote': '⚠ 网络不可用：以上回答基于中断前已核实的内容，没能核实的部分已在回答里说明。网络恢复后可点"继续"',
+  // 失败原因的人话归类（原始报错另起一行显示）
+  'chat.fail.quota': '模型服务的用量额度用完了（过一会儿会恢复）',
+  'chat.fail.auth': '模型服务的密钥无效（到设置页检查模型配置）',
+  'chat.fail.network': '网络连接失败',
+  'chat.fail.timeout': '模型服务响应超时',
+  'chat.fail.interrupted': '服务重启，任务被中断（可点"继续"接着做）',
 };

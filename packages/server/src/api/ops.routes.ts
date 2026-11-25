@@ -97,7 +97,11 @@ export function registerOpsRoutes(app: FastifyInstance, runEngine: RunEngine, ll
   });
 
   app.put('/api/settings/run-budget', async (request, reply) => {
-    const body = (request.body || {}) as { maxTokens?: number | null; maxSteps?: number | null };
+    const body = (request.body || {}) as {
+      maxTokens?: number | null; maxSteps?: number | null; maxSpawns?: number | null;
+      askUserTimeoutMin?: number; verificationEnabled?: boolean;
+      entityIndexEnabled?: boolean; entityIndexThreshold?: number; consolidateMaxFiles?: number;
+    };
     const svc = new RunBudgetSettingsService(dataDir);
     const saved = svc.set(body);
     return { ...saved, effective: svc.effective() };

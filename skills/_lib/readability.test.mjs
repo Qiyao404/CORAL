@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractReadable } from './readability.mjs';
+import { extractReadable, balancedEnd } from './readability.mjs';
 
 const PAGE = `
 <html><head><title>测试页面标题</title></head>
@@ -53,5 +53,55 @@ describe('readability.mjs — 正文抽取（创新点⑤）', () => {
   it('length 反映截断后内容', () => {
     const big = extractReadable(`<article><p>${'长'.repeat(60000)}</p></article>`);
     expect(big.length).toBeLessThanOrEqual(50_000);
+  });
+});
+
+describe('readability.mjs — 嵌套容器不再提前截断', () => {
+  const para = (name) => `<p>${name}：这一段要足够长，才能通过正文策略的两百字符阈值检查，所以这里多写一些字来凑长度。${'补充说明文字。'.repeat(30)}</p>`;
+
+  it('<div id="content"> 里有嵌套 div：内容取到配对的闭合标签，而不是第一个内层 </div>', () => {
+    const html = `<html><body><div id="content"><div class="inner">${para('第一段')}</div><div>${para('第二段')}<div>${para('第三段')}</div></div></div></body></html>`;
+    const r = extractReadable(html);
+    expect(r.strategy).toBe('#content');
+    expect(r.content).toContain('第一段');
+    expect(r.content).toContain('第二段');
+    expect(r.content).toContain('第三段');
+  });
+
+  it('旧实现的问题复现：惰性正则只取到第一个内层 </div>', () => {
+    // 对照：同样结构用旧的正则取法，第二、三段取不到
+    const html = `<div id="content"><div class="inner">AAA</div><div>BBB</div></div>`;
+    const old = /<div[^>]*id=["']content["'][^>]*>([\s\S]*?)<\/div>/i.exec(html)[1];
+    expect(old).toContain('AAA');
+    expect(old).not.toContain('BBB');
+  });
+
+  it('[role=main] 落在任意标签上、且内部有嵌套同名标签', () => {
+    const html = `<html><body><section role="main"><div>${para('甲')}</div><div>${para('乙')}</div></section></body></html>`;
+    const r = extractReadable(html);
+    expect(r.strategy).toBe('[role=main]');
+    expect(r.content).toContain('甲');
+    expect(r.content).toContain('乙');
+  });
+
+  it('同一个选择器命中多处：取第一个内容够长的；前面的短命中（导航条）跳过', () => {
+    const html = `<html><body><div class="content"><span>菜单</span></div><div class="content">${para('正文')}</div></body></html>`;
+    const r = extractReadable(html);
+    expect(r.strategy).toBe('.content');
+    expect(r.content).toContain('正文');
+    expect(r.content).not.toContain('菜单');
+  });
+
+  it('容器没闭合（文档被截断）：取到文末，不抛异常', () => {
+    const html = `<main><p>${para('开头')}</p><div>${para('后面')}`;
+    const r = extractReadable(html);
+    expect(r.content).toContain('开头');
+    expect(r.content).toContain('后面');
+  });
+
+  it('balancedEnd：自闭合标签不开新层', () => {
+    const html = '<div><div class="x"/><p>a</p></div><p>b</p>';
+    // 不跳过自闭合的话，层数会多算一层，最后的 </div> 配不上对 → 只能取到文末
+    expect(balancedEnd(html, 'div', 5)).toBe(html.indexOf('</div>'));
   });
 });

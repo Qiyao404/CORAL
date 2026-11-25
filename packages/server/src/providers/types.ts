@@ -70,8 +70,12 @@ export interface ChatProvider {
   readonly id: ProviderId;
   /** 非流式补全 — agent loop 主路径（工具调用在此返回） */
   complete(req: ChatRequest): Promise<ChatResponse>;
-  /** 文本流式 — skill llm_only 路径（onChunk 实时收增量；返回值含完整结果） */
-  stream(req: ChatRequest, onChunk: (delta: string) => void): Promise<ChatResponse>;
+  /**
+   * 文本流式 — skill llm_only 路径（onChunk 实时收增量；返回值含完整结果）。
+   * onReasoning：推理模型的思考过程增量（可选）。思考不计入 content、不进对话历史，
+   * 只用于实时展示 — 推理模型常常先思考几十秒才吐第一个字，期间界面上 otherwise 一片空白。
+   */
+  stream(req: ChatRequest, onChunk: (delta: string) => void, onReasoning?: (delta: string) => void): Promise<ChatResponse>;
 }
 
 export type ProviderId = 'openai-compat' | 'anthropic';

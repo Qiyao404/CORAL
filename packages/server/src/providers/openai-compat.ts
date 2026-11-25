@@ -122,7 +122,7 @@ export class OpenAICompatProvider implements ChatProvider {
     return normalizeDegradedToolCalls(result);
   }
 
-  async stream(req: ChatRequest, onChunk: (delta: string) => void): Promise<ChatResponse> {
+  async stream(req: ChatRequest, onChunk: (delta: string) => void, onReasoning?: (delta: string) => void): Promise<ChatResponse> {
     const params: Record<string, any> = {
       model: this.model,
       messages: this.toOpenAIMessages(req),
@@ -186,6 +186,12 @@ export class OpenAICompatProvider implements ChatProvider {
               inputTokens: chunk.usage.prompt_tokens ?? usage.inputTokens,
               outputTokens: chunk.usage.completion_tokens ?? usage.outputTokens,
             };
+          }
+          // 推理模型的思考过程：reasoning_content（多数兼容端点）或 reasoning（个别网关）。
+          // 只转发给界面，不计入 full — 思考不是回答，不能进对话历史
+          const reasoning = delta?.reasoning_content ?? delta?.reasoning;
+          if (typeof reasoning === 'string' && reasoning) {
+            try { onReasoning?.(reasoning); } catch { /* 消费者异常不中断流 */ }
           }
           if (delta?.content) {
             full += delta.content;

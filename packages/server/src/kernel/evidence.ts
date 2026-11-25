@@ -76,6 +76,17 @@ export class EvidenceStore {
     }
   }
 
+  /** 读取整条记录（不分页 — evidence_read 的检索 / 结构概览 / 按字段跳读用） */
+  load(runId: string, id: string): EvidenceRecord | null {
+    const path = this.recordPath(runId, id);
+    if (!existsSync(path)) return null;
+    try {
+      return JSON.parse(readFileSync(path, 'utf-8')) as EvidenceRecord;
+    } catch {
+      return null;
+    }
+  }
+
   /** 列出某 run 的全部记录（新→旧） */
   list(runId: string): Array<Pick<EvidenceRecord, 'id' | 'tool' | 'chars' | 'createdAt'>> {
     const dir = this.runDir(runId);

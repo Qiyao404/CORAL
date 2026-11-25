@@ -46,6 +46,8 @@ interface CompanyProfile {
 export default function SettingsPage() {
   const { t, lang, setLang } = useI18n();
   const [config, setConfig] = useState<ConfigState | null>(null);
+  // 平台版本：与健康接口同源（侧边栏也是这么读的）— 此前这里写死 v2.4.0，早已与实际版本不符
+  const [version, setVersion] = useState('…');
   const [profiles, setProfiles] = useState<LlmProfile[]>([]);
   const [selectedProfileId, setSelectedProfileId] = useState<string>('');
   const [llmForm, setLlmForm] = useState({
@@ -72,10 +74,10 @@ export default function SettingsPage() {
   }>({ settings: { interestTags: false, styleAdaptive: false, rhythmAware: false, knowledgeGraph: false, proactive: false, implicitPrefs: false } });
   // 运行预算（用户可调 — data/run-budget.json，对新 run 生效）
   const [runBudget, setRunBudget] = useState<{
-    draftTokens: string; draftSteps: string; draftAskTimeout: string;
-    effectiveTokens: number; effectiveSteps: number; effectiveAskTimeout: number;
+    draftTokens: string; draftSteps: string; draftAskTimeout: string; draftSpawns: string;
+    effectiveTokens: number; effectiveSteps: number; effectiveAskTimeout: number; effectiveSpawns: number;
     saving: boolean; saved: boolean; error: string;
-  }>({ draftTokens: '', draftSteps: '', draftAskTimeout: '', effectiveTokens: 1_000_000, effectiveSteps: 40, effectiveAskTimeout: 0, saving: false, saved: false, error: '' });
+  }>({ draftTokens: '', draftSteps: '', draftAskTimeout: '', draftSpawns: '', effectiveTokens: 1_000_000, effectiveSteps: 40, effectiveAskTimeout: 0, effectiveSpawns: 16, saving: false, saved: false, error: '' });
   const wan = (n: number) => lang === 'en'
     ? (n >= 1_000_000 && n % 1_000_000 === 0 ? `${n / 1_000_000}M` : String(n))
     : (n >= 10000 ? `${(n / 10000).toFixed(0)}万` : String(n));
@@ -86,12 +88,14 @@ export default function SettingsPage() {
         maxTokens: runBudget.draftTokens.trim() === '' ? null : Number(runBudget.draftTokens),
         maxSteps: runBudget.draftSteps.trim() === '' ? null : Number(runBudget.draftSteps),
         askUserTimeoutMin: runBudget.draftAskTimeout.trim() === '' ? 0 : Number(runBudget.draftAskTimeout),
+        maxSpawns: runBudget.draftSpawns.trim() === '' ? null : Number(runBudget.draftSpawns),
       });
       setRunBudget(b => ({
         ...b, saving: false, saved: true, error: '',
         effectiveTokens: r.effective?.maxTokens ?? b.effectiveTokens,
         effectiveSteps: r.effective?.maxSteps ?? b.effectiveSteps,
         effectiveAskTimeout: r.effective?.askUserTimeoutMin ?? b.effectiveAskTimeout,
+        effectiveSpawns: r.effective?.maxSpawns ?? b.effectiveSpawns,
       }));
       setTimeout(() => setRunBudget(b => ({ ...b, saved: false })), 2500);
     } catch (err: any) {
@@ -111,12 +115,14 @@ export default function SettingsPage() {
   const [memoryContent, setMemoryContent] = useState('');
 
   const loadAll = async () => {
-    const [configRes, llmRes, profileRes] = await Promise.all([
+    const [configRes, llmRes, profileRes, healthRes] = await Promise.all([
       api.config(),
       api.listLlmConfigs(),
       api.getUserProfile(),
+      api.health().catch(() => null),
     ]);
     setConfig(configRes);
+    if (healthRes?.version) setVersion(healthRes.version);
     const items: LlmProfile[] = llmRes.items || [];
     setProfiles(items);
     const active = items.find(p => p.profileId === llmRes.activeProfileId) || items[0];
@@ -248,8 +254,11 @@ export default function SettingsPage() {
         draftTokens: r.maxTokens != null ? String(r.maxTokens) : '',
         draftSteps: r.maxSteps != null ? String(r.maxSteps) : '',
         draftAskTimeout: r.askUserTimeoutMin ? String(r.askUserTimeoutMin) : '',
+        // 0 是有效设置（不允许派生）：只有 null / undefined 才显示为空
+        draftSpawns: r.maxSpawns != null ? String(r.maxSpawns) : '',
         effectiveTokens: r.effective?.maxTokens ?? b.effectiveTokens,
         effectiveSteps: r.effective?.maxSteps ?? b.effectiveSteps,
+        effectiveSpawns: r.effective?.maxSpawns ?? b.effectiveSpawns,
       }));
     }).catch(() => {});
     // 个性化设置初值
@@ -464,7 +473,7 @@ export default function SettingsPage() {
         <h2 className="font-heading font-semibold text-fg-primary mb-4 flex items-center gap-2">
           <Cpu className="w-5 h-5" /> {t('settings.budget.title')}
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label className="text-xs text-fg-muted mb-1 block">{t('settings.budget.tokenLabel')}</label>
             <Input
@@ -498,6 +507,19 @@ export default function SettingsPage() {
             />
             <p className="text-[11px] text-fg-muted mt-1">{t('settings.budget.askTimeoutHint')}</p>
           </div>
+          <div>
+            <label className="text-xs text-fg-muted mb-1 block">{t('settings.budget.spawnLabel')}</label>
+            <Input
+              type="number"
+              min={0}
+              max={64}
+              value={runBudget.draftSpawns}
+              disabled={runBudget.saving}
+              onChange={e => setRunBudget(b => ({ ...b, draftSpawns: e.target.value }))}
+              placeholder={t('settings.budget.defaultPlaceholder', { v: runBudget.effectiveSpawns })}
+            />
+            <p className="text-[11px] text-fg-muted mt-1">{t('settings.budget.spawnHint')}</p>
+          </div>
         </div>
         <div className="flex items-center gap-2 mt-3">
           <label className="flex items-center gap-1.5 text-xs cursor-pointer">
@@ -520,7 +542,7 @@ export default function SettingsPage() {
           {runBudget.saved && <span className="text-xs text-status-success">{t('settings.budget.saved')}</span>}
           {runBudget.error && <span className="text-xs text-status-danger">{runBudget.error}</span>}
           <span className="text-xs text-fg-muted ml-auto">
-            {t('settings.budget.current', { tokens: wan(runBudget.effectiveTokens), steps: runBudget.effectiveSteps })}
+            {t('settings.budget.current', { tokens: wan(runBudget.effectiveTokens), steps: runBudget.effectiveSteps, spawns: runBudget.effectiveSpawns })}
           </span>
         </div>
         <p className="text-xs text-fg-muted mt-2">{t('settings.budget.desc')}</p>
@@ -895,7 +917,7 @@ export default function SettingsPage() {
           <ConfigItem label={t('settings.platform.sandbox')} value={config?.sandboxMode} />
           <ConfigItem label={t('settings.platform.maxTasks')} value={config?.maxConcurrentTasks} />
           <ConfigItem label={t('settings.platform.maxAgents')} value={config?.maxConcurrentAgentsPerTask} />
-          <ConfigItem label={t('settings.platform.version')} value="CORAL v2.4.0" />
+          <ConfigItem label={t('settings.platform.version')} value={`CORAL v${version}`} />
         </div>
       </Card>
     </div>

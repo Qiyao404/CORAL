@@ -5,6 +5,7 @@ import { clipToolResults, compressIfNeeded, shelveOldToolResults, usageLevel, de
 import { EvidenceStore, summarizeForEvidence, evidenceThreshold } from './evidence.js';
 import { detectRationalization, shouldGate, gatePushback, endsWithFutureWorkPromise, pendingTodoItems, todoGatePushback } from './quality-gate.js';
 import { FactGate, factsRequiredError } from './fact-gate.js';
+import { FetchHealth } from '../tools/builtin/fetch-health.js';
 import { platformConfig } from '../services/config.js';
 import { resolveToolName } from '../tools/alias.js';
 
@@ -134,7 +135,8 @@ export interface LoopHooks {
 
 export interface LoopResult {
   /** stalled = 原地打转被平台熔断（REG-21）— 收尾内容为模型总结，库侧落 failed + end_reason=stalled */
-  status: 'completed' | 'cancelled' | 'budget_exceeded' | 'failed' | 'stalled';
+  /** network_down = 网络不可用后模型仍坚持抓取，平台强制收尾 — 内容是"基于已有信息"的回答，可续跑 */
+  status: 'completed' | 'cancelled' | 'budget_exceeded' | 'failed' | 'stalled' | 'network_down';
   finalContent: string;
   messages: ChatMessage[];
   steps: number;
@@ -149,9 +151,10 @@ export interface LoopResult {
 
 /** LLM 接口（llmClient 天然满足；测试注入脚本化桩） */
 export interface LoopLLM {
-  /** LLM 接口（llmClient 天然满足；测试注入脚本化桩）。chatStream 可选 — 未注入回退 chat */
+  /** LLM 接口（llmClient 天然满足；测试注入脚本化桩）。chatStream 可选 — 未注入回退 chat；
+   *  第三个参数是推理过程的增量回调（可选） */
   chat(req: ChatRequest): Promise<ChatResponse>;
-  chatStream?(req: ChatRequest, onDelta: (delta: string) => void): Promise<ChatResponse>;
+  chatStream?(req: ChatRequest, onDelta: (delta: string) => void, onReasoning?: (delta: string) => void): Promise<ChatResponse>;
 }
 
 const BASE_SYSTEM = `You are CORAL, a personal local-first agent runtime. You accomplish the user's goal autonomously.
@@ -189,6 +192,8 @@ export class AgentLoop {
   private contextOps: Array<{ step: number; kind: 'shelve' | 'compress' | 'deterministic'; reclaimedChars: number; keptMessages: number }> = [];
   // 记忆 nudge 周期（步）；0 = 关闭。run() 内按选项初始化
   private memoryNudgeEvery = 12;
+  // 运行级草稿本：同一个 loop 的所有工具调用共用（抓取网络状态等）— 每个 AgentLoop 实例一份
+  private runState = new Map<string, unknown>();
 
   constructor(
     private llm: LoopLLM,
@@ -304,6 +309,12 @@ export class AgentLoop {
     let childTokensOut = 0;
     // 结束前因"未送达消息"而续跑的轮数（REG-23 — 有上限，防消息源源不断把 run 拖成永不结束）
     let lateInboxContinues = 0;
+    // 下一次模型调用的输出上限：默认值；上一轮被输出上限截断（多半是推理模型的思考写满了额度）时
+    // 临时放大——"想得太久被掐断"给更多空间，而不是拿掉工具 / 压低推理强度把它逼成仓促作答
+    let pendingOutputTokens = LOOP_OUTPUT_TOKENS;
+    // 网络不可用（fetch-health 判定）之后，模型仍在抓取的步数
+    let netDownSteps = 0;
+    let netDownAttemptsSeen = 0;
 
     try {
       while (true) {
@@ -421,27 +432,48 @@ export class AgentLoop {
 
         // 创新①：流式直播 — 支持则逐 token 聚为 loop.delta 事件（前端逐字渲染）
         let deltaBuf = '';
+        // 推理模型的思考过程单独成流（loop.reasoning，只直播不落库）：
+        // 实测从发出任务到看见第一个字中位要 14.8 秒、p90 49 秒——这段时间模型在思考，
+        // 界面上只有一个转圈。把思考过程实时传出去，等待就从"卡住了"变成"看得见它在想什么"
+        let reasoningBuf = '';
         const flushTimer = this.llm.chatStream
           ? setInterval(() => {
               if (deltaBuf) {
                 this.emit('loop.delta', { step: steps, delta: deltaBuf });
                 deltaBuf = '';
               }
+              if (reasoningBuf) {
+                this.emit('loop.reasoning', { step: steps, delta: reasoningBuf }, true);
+                reasoningBuf = '';
+              }
             }, 120) // 120ms 聚合批次（防事件风暴）
           : null;
         const onDelta = (d: string) => { deltaBuf += d; };
+        const onReasoning = (d: string) => { reasoningBuf += d; };
 
         let response: ChatResponse;
+        const outputTokens = pendingOutputTokens;
+        pendingOutputTokens = LOOP_OUTPUT_TOKENS;
         try {
           // 推理模型（GLM-5.3 等）的 reasoning 计入 maxTokens——4096 时推理花 3900
-          // 只剩不到 200 给正文（GAIA 实测 4 题空回答的根因）。提到 16384。
-          response = this.llm.chatStream
-            ? await this.llm.chatStream({ system, messages, tools: toolDefs, signal, maxTokens: 16384 }, onDelta)
-            : await this.llm.chat({ system, messages, tools: toolDefs, signal, maxTokens: 16384 });
+          // 只剩不到 200 给正文（GAIA 实测 4 题空回答的根因）。16384 是常态；上一轮被截断时用放大值。
+          const callWith = (maxTokens: number) =>
+            this.llm.chatStream
+              ? this.llm.chatStream({ system, messages, tools: toolDefs, signal, maxTokens }, onDelta, onReasoning)
+              : this.llm.chat({ system, messages, tools: toolDefs, signal, maxTokens });
+          try {
+            response = await callWith(outputTokens);
+          } catch (err: any) {
+            // 放大后的额度被服务端拒绝（模型输出上限更低）→ 退回默认额度重发，不让一次收紧把整个任务带崩
+            if (outputTokens === LOOP_OUTPUT_TOKENS || !isOutputLimitRejection(err)) throw err;
+            this.emit('loop.output_limit_clamped', { requested: outputTokens, fallback: LOOP_OUTPUT_TOKENS });
+            response = await callWith(LOOP_OUTPUT_TOKENS);
+          }
         } finally {
           if (flushTimer) clearInterval(flushTimer);
         }
         if (deltaBuf) this.emit('loop.delta', { step: steps, delta: deltaBuf });
+        if (reasoningBuf) this.emit('loop.reasoning', { step: steps, delta: reasoningBuf }, true);
         if (response.degraded) this.emit('loop.llm_degraded', { step: steps });
         tokensIn += response.usage.inputTokens;
         tokensOut += response.usage.outputTokens;
@@ -452,6 +484,7 @@ export class AgentLoop {
         if (response.stopReason === 'max_tokens' && response.toolCalls.length > 0) {
           if (truncContinues < TRUNCATION_MAX_CONTINUES && hasBudgetLeft()) {
             truncContinues++;
+            pendingOutputTokens = LOOP_OUTPUT_TOKENS_OVERFLOW;
             this.emit('loop.tool_call_truncated', { step: steps, continues: truncContinues });
             messages.push({ role: 'assistant', content: response.content });
             messages.push({
@@ -483,6 +516,7 @@ export class AgentLoop {
           if (response.stopReason === 'max_tokens' && response.content.trim()) {
             if (truncContinues < TRUNCATION_MAX_CONTINUES && hasBudgetLeft()) {
               truncContinues++;
+              pendingOutputTokens = LOOP_OUTPUT_TOKENS_OVERFLOW;
               answerParts.push(response.content);
               this.emit('loop.answer_continued', { step: steps, continues: truncContinues });
               messages.push({ role: 'assistant', content: response.content });
@@ -502,16 +536,22 @@ export class AgentLoop {
 
           // 空回答守卫：模型偶发返回空 content 的"假终答"（用户实测：run 显示
           // completed 但什么都没输出）。空回答绝不静默交付 — 重询 ≤2 次，
-          // 仍空则强制一次无工具收尾，再不行回退最近一条非空 assistant 内容
+          // 仍空则强制一次无工具收尾，再不行回退最近一条非空 assistant 内容。
+          //
+          // 两种空回答分开处理（实测 50 次里 45 次属于第一种）：
+          //  · 思考溢出（stopReason=max_tokens）：推理模型把输出额度全花在思考上，正文 / 工具调用
+          //    一个字没发出来就被掐断——多发生在任务前几步，它并没做完，也不是不肯答。
+          //    重询时照常带着工具、把输出额度放大，提示语只说"继续"，不催它作答；
+          //    催它"现在就写最终回答"、拿掉工具或压低推理强度，都会把它逼成没做完就仓促作答。
+          //  · 真·空回答：其余情况，沿用"请写出最终回答"的重询。
           if (!finalText.trim()) {
             if (emptyFinalContinues < 2 && hasBudgetLeft()) {
               emptyFinalContinues++;
-              this.emit('loop.empty_answer_rejected', { step: steps, continues: emptyFinalContinues });
+              const overflow = response.stopReason === 'max_tokens';
+              this.emit('loop.empty_answer_rejected', { step: steps, continues: emptyFinalContinues, overflow });
+              if (overflow) pendingOutputTokens = LOOP_OUTPUT_TOKENS_OVERFLOW;
               messages.push({ role: 'assistant', content: finalText });
-              messages.push({
-                role: 'user',
-                content: '[system] Your final answer was EMPTY. Based on the work completed so far, write the actual final answer for the user now.',
-              });
+              messages.push({ role: 'user', content: overflow ? REASONING_OVERFLOW_NOTE : EMPTY_ANSWER_NOTE });
               this.checkpoint(steps, messages);
               continue;
             }
@@ -524,7 +564,7 @@ export class AgentLoop {
                   content: '[system] The previous final answer was empty. Write the complete final answer now based on everything accomplished above.',
                 }],
                 signal: this.options.signal,
-                maxTokens: 16384,
+                maxTokens: LOOP_OUTPUT_TOKENS,
               });
               forced = wrap.content;
               tokensIn += wrap.usage.inputTokens;
@@ -831,7 +871,7 @@ export class AgentLoop {
               system: this.buildSystemPrompt(),
               messages: [...messages, { role: 'user', content: stallWrapNote(stallTool, stallCount) }],
               signal: this.options.signal,
-              maxTokens: 16384,
+              maxTokens: LOOP_OUTPUT_TOKENS,
             });
             wrapUpContent = w.content;
             tokensIn += w.usage.inputTokens;
@@ -849,6 +889,45 @@ export class AgentLoop {
             messages, steps, toolCallCount, tokensIn, tokensOut, childTokensIn, childTokensOut,
             `检测到原地打转：工具 ${stallTool} 的同一调用已重复 ${stallCount} 次，运行时已强制收尾`
           );
+        }
+
+        // 网络不可用后的兜底（fetch-health）：工具已经在失败信息里明确说过"网络不可用、不要再抓取"。
+        // 模型下一步仍在抓取 → 再记一步；连续两步都在撞墙就强制收尾——基于已核实的内容作答并说明
+        // 哪些没核实（不是失败：结果可用，网络恢复后可"继续"）。冷却期放行的探测一旦成功，这里自动复位。
+        const fetchHealth = this.runState.get('fetchHealth');
+        if (fetchHealth instanceof FetchHealth && fetchHealth.dead) {
+          if (fetchHealth.attemptsWhileDead > netDownAttemptsSeen) netDownSteps++;
+          netDownAttemptsSeen = fetchHealth.attemptsWhileDead;
+          if (netDownSteps >= NETWORK_DOWN_MAX_STEPS) {
+            let wrapUpContent = '';
+            try {
+              const w = await this.llm.chat({
+                system: this.buildSystemPrompt(),
+                messages: [...messages, { role: 'user', content: networkDownWrapNote(fetchHealth) }],
+                signal: this.options.signal,
+                maxTokens: LOOP_OUTPUT_TOKENS,
+              });
+              wrapUpContent = w.content;
+              tokensIn += w.usage.inputTokens;
+              tokensOut += w.usage.outputTokens;
+            } catch { /* 收尾失败不丢已得内容 */ }
+            messages.push({ role: 'assistant', content: wrapUpContent });
+            this.closeTodos('stopped');
+            const snap = fetchHealth.snapshot();
+            this.emit('loop.network_down', {
+              steps, ...snap, attempts: fetchHealth.attemptsWhileDead, toolCalls: toolCallCount, tokensIn, tokensOut,
+            });
+            this.checkpoint(steps, messages);
+            return this.finish(
+              'network_down',
+              await this.flushUndelivered(wrapUpContent),
+              messages, steps, toolCallCount, tokensIn, tokensOut, childTokensIn, childTokensOut,
+              `网络不可用：连续 ${snap.streakAtDead} 次抓取在网络层失败（涉及 ${snap.hostsAtDead} 个不同站点），模型仍在抓取，运行时已基于已有信息收尾`
+            );
+          }
+        } else {
+          netDownSteps = 0;
+          netDownAttemptsSeen = 0;
         }
 
         // 渐进预算提醒：步数分档提醒"收敛"，追加在本步最后一条工具结果末尾
@@ -1142,6 +1221,11 @@ export class AgentLoop {
         signal: this.options.signal,
         workspaceDir: this.options.workspaceDir,
         emit: ev => this.emit(ev.type, { tool: call.name, ...ev.payload }),
+        // 运行级草稿本（抓取网络状态）+ 工具侧部分存档（完整内容落证据层，上下文只留开头）
+        runState: this.runState,
+        ...(this.options.evidenceStore
+          ? { saveEvidence: (content: string) => this.options.evidenceStore!.save(this.options.runId, resolvedTool.name, content).id }
+          : {}),
       }));
       // 结果预览进事件（M1-8 工具卡片「结果可展开」）。
       // 展示层摘要优先（toolOk(data, display) 的第二通道）：UI 看人话摘要，
@@ -1193,7 +1277,7 @@ export class AgentLoop {
       messages: [...messages, note],
       signal: this.options.signal,
       // 与主调用同一输出上限（推理模型的思考计入 maxTokens — 收尾总结被截断同样是残缺交付）
-      maxTokens: 16384,
+      maxTokens: LOOP_OUTPUT_TOKENS,
     });
   }
 
@@ -1272,9 +1356,9 @@ export class AgentLoop {
     return parts.join('\n\n');
   }
 
-  private emit(type: string, payload?: Record<string, any>): void {
+  private emit(type: string, payload?: Record<string, any>, transient = false): void {
     // agentId 注入：主循环 'main'，sub-agent 各自 id（M1-4 — 事件流区分来源）
-    const enriched: Record<string, any> = { agentId: this.options.agentId, ...payload };
+    const enriched: Record<string, any> = { agentId: this.options.agentId, ...payload, ...(transient ? { __transient: true } : {}) };
     // 清单跟踪：todo_write 的每次全量替换都记下最新版本（终态收口用）。
     // 审查 P3：子代理（agentId 不同）的清单不覆盖主循环的 — 否则终态收口收的是子代理清单
     if (type === 'todo.updated' && Array.isArray(enriched.todos) && enriched.agentId === this.options.agentId) {
@@ -1312,6 +1396,19 @@ const STALL_STOP_TOTAL = 30;
 /** 输出截断的续写/重发上限（到点如实交付已得内容并告警） */
 const TRUNCATION_MAX_CONTINUES = 3;
 
+/**
+ * 模型调用的输出上限（推理模型的思考也计入）。
+ * 常态 16384；上一轮被输出上限截断时，下一轮临时放大到 2 倍——
+ * 实测 50 次空回答里 45 次是"思考把 16384 写满、正文一个字没出来"（多在任务前几步）：
+ * 这不是它不肯答，是想得太久被掐断。给它更多空间，而不是拿掉工具 / 压低推理强度逼它仓促作答。
+ * 服务端若不接受放大值（模型输出上限更低），isOutputLimitRejection 兜底退回常态值。
+ */
+const LOOP_OUTPUT_TOKENS = 16384;
+const LOOP_OUTPUT_TOKENS_OVERFLOW = 32768;
+
+/** 网络不可用后，模型连续多少步仍在抓取 → 强制收尾（第一步是提醒，第二步才收尾） */
+const NETWORK_DOWN_MAX_STEPS = 2;
+
 /** 收尾前因未送达消息而续跑的上限（超出部分走"未送达"如实带出） */
 const LATE_INBOX_MAX_CONTINUES = 5;
 
@@ -1338,6 +1435,33 @@ function stallWrapNote(tool: string, count: number): string {
   return `[system] The runtime stopped this task: the same tool call (${tool}) was repeated ${count} times without progress. ` +
     `Do NOT call any more tools. Write a final answer now: what was actually accomplished, what could not be done ` +
     `and why, and which different approach you would try next.`;
+}
+
+/** 思考溢出的重询：只说"继续"，不催作答 — 它多半还在任务前几步，远没到收尾的时候 */
+const REASONING_OVERFLOW_NOTE =
+  '[system] Your previous response was cut off by the output length limit while you were still reasoning — ' +
+  'no content and no tool call reached the runtime. This is NOT a request to wrap up: continue the task exactly ' +
+  'where you were (issue the next tool call, or write the answer if the work is done). Keep your reasoning focused ' +
+  'so that it fits; the output limit for this turn has been raised.';
+
+/** 其余空回答的重询（沿用原有语义） */
+const EMPTY_ANSWER_NOTE =
+  '[system] Your final answer was EMPTY. Based on the work completed so far, write the actual final answer for the user now.';
+
+function networkDownWrapNote(health: FetchHealth): string {
+  const snap = health.snapshot();
+  return `[system] The network is unavailable: ${snap.streakAtDead} consecutive fetches failed at the network level ` +
+    `across ${snap.hostsAtDead} different hosts (each one retried), and the runtime will not send further requests for now. ` +
+    `Stop fetching. Write your final answer now based ONLY on what you have verified so far, and list explicitly ` +
+    `what you could not verify because of the network. Do not guess missing values.`;
+}
+
+/** 服务端拒绝放大后的输出上限（模型 / 端点的输出上限更低）：退回常态值重发即可 */
+export function isOutputLimitRejection(err: any): boolean {
+  const status = typeof err?.status === 'number' ? err.status : typeof err?.statusCode === 'number' ? err.statusCode : undefined;
+  if (status !== undefined && status !== 400 && status !== 422 && status !== 500) return false;
+  const msg = `${err?.message ?? ''} ${err?.error?.message ?? ''} ${typeof err?.error === 'string' ? err.error : ''}`;
+  return /max_tokens|max output|max_output|output token|completion_tokens|上限|超过.*token/i.test(msg);
 }
 
 /** 用户实测（fork）：判定"过渡话"——模型宣布要做某事但没带工具调用。

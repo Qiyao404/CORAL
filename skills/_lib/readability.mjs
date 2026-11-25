@@ -5,6 +5,10 @@
  *  2. 全文回退：剔除 script/style/nav/header/footer/aside 后取最长文本块
  * 保留标题（title/h1）、段落、列表、标题层级 → Markdown-ish 输出。
  * 注：单文件启发式，不追求 Readability 库的完备 — 个人工具够用即可。
+ *
+ * 容器配对按嵌套层数走（balancedEnd）：此前用惰性正则 `<div …>([\s\S]*?)<\/div>` 取内容，
+ * 遇到嵌套的 div 会在第一个内层 </div> 处提前收口——命中的"正文"只有开头一小截，
+ * 之后的内容静默丢失（抓取方还以为读完了）。
  */
 
 /**
@@ -25,18 +29,20 @@ export function extractReadable(html) {
   const title = matchFirst(html, /<title[^>]*>([\s\S]*?)<\/title>/i) || matchFirst(html, /<h1[^>]*>([\s\S]*?)<\/h1>/i) || '';
   const links = collectLinks(html);
 
+  // 候选容器：open = 起始标签；tag = 用于配对的标签名（role=main 的标签名从命中处取）
   const candidates = [
-    { sel: '<article', re: /<article[^>]*>([\s\S]*?)<\/article>/i },
-    { sel: '<main', re: /<main[^>]*>([\s\S]*?)<\/main>/i },
-    { sel: '[role=main]', re: /<[^>]*role=["']?main["']?[^>]*>([\s\S]*?)<\/div>/i },
-    { sel: '#content', re: /<div[^>]*id=["']content["'][^>]*>([\s\S]*?)<\/div>/i },
-    { sel: '.content', re: /<div[^>]*class=["'][^"']*content[^"']*["'][^>]*>([\s\S]*?)<\/div>/i },
-    { sel: '.post', re: /<div[^>]*class=["'][^"']*(?:post|entry|article)[^"']*["'][^>]*>([\s\S]*?)<\/div>/i },
+    { sel: '<article', open: /<article\b[^>]*>/gi, tag: () => 'article' },
+    { sel: '<main', open: /<main\b[^>]*>/gi, tag: () => 'main' },
+    { sel: '[role=main]', open: /<[a-z][^>]*\brole\s*=\s*["']?main["']?[^>]*>/gi, tag: m => tagOf(m[0]) },
+    { sel: '#content', open: /<div\b[^>]*\bid\s*=\s*["']content["'][^>]*>/gi, tag: () => 'div' },
+    { sel: '.content', open: /<div\b[^>]*\bclass\s*=\s*["'][^"']*content[^"']*["'][^>]*>/gi, tag: () => 'div' },
+    { sel: '.post', open: /<div\b[^>]*\bclass\s*=\s*["'][^"']*(?:post|entry|article)[^"']*["'][^>]*>/gi, tag: () => 'div' },
   ];
   for (const c of candidates) {
-    const m = html.match(c.re);
-    if (m) {
-      const md = htmlToMarkdown(m[1]);
+    // 同一种选择器可能命中多个：取第一个内容够长的（外层命中优先于内层）
+    for (const m of html.matchAll(c.open)) {
+      const start = m.index + m[0].length;
+      const md = htmlToMarkdown(html.slice(start, balancedEnd(html, c.tag(m), start)));
       if (md.length >= 200) {
         return finish(title, md, c.sel, links);
       }
@@ -52,6 +58,26 @@ export function extractReadable(html) {
     .replace(/<footer[\s\S]*?<\/footer>/gi, '')
     .replace(/<aside[\s\S]*?<\/aside>/gi, '');
   return finish(title, htmlToMarkdown(stripped), 'full-page-fallback', links);
+}
+
+function tagOf(openTag) {
+  return (/^<([a-zA-Z][\w-]*)/.exec(openTag)?.[1] ?? 'div').toLowerCase();
+}
+
+/**
+ * 从 from 起找到与"已打开一层"的 tagName 配对的闭合标签位置（按同名标签的嵌套层数计数）。
+ * 找不到闭合（文档被截断）→ 到文末。
+ */
+export function balancedEnd(html, tagName, from) {
+  const re = new RegExp(`<(/?)${tagName}\\b[^>]*>`, 'gi');
+  re.lastIndex = from;
+  let depth = 1;
+  for (let m = re.exec(html); m; m = re.exec(html)) {
+    if (m[0].endsWith('/>')) continue; // 自闭合不开新层
+    depth += m[1] ? -1 : 1;
+    if (depth === 0) return m.index;
+  }
+  return html.length;
 }
 
 function collectLinks(html) {

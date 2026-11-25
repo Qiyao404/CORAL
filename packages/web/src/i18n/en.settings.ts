@@ -37,7 +37,7 @@ export const en: Record<string, string> = {
   'settings.budget.saving': 'Saving…',
   'settings.budget.save': 'Save budget',
   'settings.budget.saved': 'Saved — takes effect for newly started tasks immediately',
-  'settings.budget.current': 'Current: {tokens} tokens · {steps} steps',
+  'settings.budget.current': 'Current: {tokens} tokens · {steps} steps · {spawns} spawns',
   'settings.budget.desc': 'Live consumption of a running task is shown in the Chat page header (🪙 icon). When the budget runs out the agent wraps up gracefully; send "continue" to resume from the breakpoint',
 
   'settings.llm.title': 'LLM Profiles',
@@ -150,6 +150,8 @@ export const en: Record<string, string> = {
   'settings.budget.askTimeoutLabel': 'Ask-user timeout (minutes)',
   'settings.budget.askTimeoutPlaceholder': 'Default 0 (wait indefinitely)',
   'settings.budget.askTimeoutHint': 'Max wait when the agent asks you a question; 0 = wait forever, >0 = proceed with the recommended/best guess and state the assumption',
+  'settings.budget.spawnLabel': 'Sub-agent spawn limit (per run)',
+  'settings.budget.spawnHint': 'Total for agent_spawn + team_spawn; leave blank for the default, 0 = no spawning. Once the quota is used up further spawns are rejected, and each rejected spawn wastes a step',
   'settings.budget.verifyLabel': 'Delivery verification (acceptance checklist + independent checker)',
   'settings.budget.verifyHint': 'Workspace tasks generate an acceptance checklist at start and verify before delivery (default-deny, evidence-backed failures, 3-round cap)',
   'settings.memory.entityTitle': 'Entity index:',

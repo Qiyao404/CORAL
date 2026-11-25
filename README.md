@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **版本：v2.7.1** · [快速导览（DEMO.md）](DEMO.md) · [CHANGELOG](CHANGELOG.md)
+> **版本：v2.8.0** · [快速导览（DEMO.md）](DEMO.md) · [CHANGELOG](CHANGELOG.md)
 > **定位：本地优先、单命令启动、单文件存储的个人级 Agent 运行时**
 
 ---
@@ -63,7 +63,7 @@ AbortSignal 全链路贯穿（LLM 调用、脚本进程树终止）；错误按�
 每个工具在 `ToolEffects` 中声明效果位（写文件 / 起进程 / 联网 / 幂等），审批档位由 `derivePermission` 按效果组合推导而非手工标注；注册期校验声明与推导的一致性——声明只能使审批更严格，宽松于推导下限的标注在注册时被自动收紧。外部 MCP 工具的标准注解（readOnly / destructive / idempotent）映射进同一契约。
 
 **10. 证据记录层**
-超过工具级结果预算（`maxResultSizeChars`）的输出整体写入 `data/evidence/{runId}/`（只写不改，随 run 删除级联清理），上下文中以"摘要预览 + 记录 ID"对象替换原文；模型需要细节时通过 `evidence_read` 按 offset/limit 分页取回，收纳层压缩旧结果时同样归档进证据层。
+超过工具级结果预算（`maxResultSizeChars`）的输出整体写入 `data/evidence/{runId}/`（只写不改，随 run 删除级联清理），上下文中以"摘要预览 + 记录 ID"对象替换原文；模型需要细节时通过 `evidence_read` 取回（分页、按字段跳读、关键词检索、结构概览），收纳层压缩旧结果时同样归档进证据层。
 
 **11. 三层上下文压缩与用量预警**
 单条裁剪（常态启用）→ 收纳旧工具结果（软水位，归档进证据层可回溯）→ 全量 LLM 摘要（硬水位）；四级用量预警（正常/警告/危急/阻塞）。
@@ -176,6 +176,15 @@ checkpoint 此前每步存全量消息快照，相邻步 90%+ 内容重复——
 - **记忆写回**：蒸馏对既有文件做行级全保留合并（丢行 → 原文不动、只追加新增行），覆盖前备份，信任标记随文件保留；评测会话不触发蒸馏
 - **执行边界**：模型写的代码在受限解释器内执行（审计钩子拦截文件 / 进程 / 网络动作，每次执行前自检，拦不住就拒绝运行），技能清单用 `accepts_code` / `sandboxed` 声明契约；`/ws/events` 在握手前校验来源
 
+**35. 网页正文提取与等待可见**
+以真实运行数据为依据的一次效率与体验改造：
+
+- **网页可读化**：`http_fetch` 默认把网页转成可读内容——标题、按阅读顺序的正文、表格（表头分隔线，跨行跨列展开到每一格）、带上下文的链接（提示文字，外站 / 链接列表 / 站点菜单标记）、图片、元信息与结构化数据；导航类链接区从正文折叠（链接仍保留），不执行页面脚本，按声明的字符集解码（GBK / Big5 等不再解成乱码）。链接是一份列表：正文里的在前，站点菜单在后；链接密集的页面（目录、列表）放宽预算，仍放不下的把完整页面存为证据记录并给出续读位置。长页面内联开头并附标题目录（`sections`）；传 `focus` 时再给出与它最相关的几段原文（`excerpts`）
+- **证据检索**：`evidence_read` 在分页之外支持按字段跳读（`path`）、关键词检索（`query`，返回命中位置与上下文）和结构概览（`outline`）——在大存档里找一句话从顺序翻页变成一两次调用
+- **抓取韧性**：连接被中断这类瞬时错误在工具内直接重试（一次抓取失败等于一整步模型往返）；失败信息带底层错误码与近期网络状态；连续多次且跨多个站点都失败才判定"网络不可用"——冷却后放行探测，模型仍坚持抓取才基于已有信息收尾（`end_reason=network_down`，可续跑）
+- **等待可见**：对话页显示"模型思考中 · N 秒"，模型的思考过程实时直播（只直播不落库）；运行中可一键"先汇报阶段性结论"；抓取失败较多的回答旁给出提示；失败原因归类成人话（用量额度 / 密钥 / 中断 / 超时 / 网络）
+- **派生额度**：`agent_spawn` 与 `team_spawn` 共用一个可设置的上限（设置页"子代理派生上限"），工具描述里写明额度，用完后的拒绝说明下一步怎么做；设为 0 时不提供派生工具
+
 ---
 
 ## 功能范围
@@ -276,13 +285,13 @@ npm run dev            # 后端 3001 + 前端 5173
 | 持久化 | SQLite（better-sqlite3，WAL 模式，schema 版本化迁移） |
 | Skill | YAML frontmatter（gray-matter）+ chokidar 热重载 |
 | 进度协议 | 自研 `[CORAL_PROGRESS]` stderr 单行 JSON 协议（Python + Node 双 SDK，见 [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)） |
-| 质量 | Vitest（631 用例 + 前端 14）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
+| 质量 | Vitest（801 用例 + 前端 33）+ GitHub Actions（ubuntu/windows/macos × Node 20/22） |
 
 ---
 
 ## 测试与基准
 
-- **测试**：631 个用例（Vitest，服务端）+ 14 个（前端），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时 / 外部守卫 / 团队协作等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
+- **测试**：801 个用例（Vitest，服务端）+ 33 个（前端），覆盖内核循环 / 门禁 / 上下文管理 / 持久化 / MCP / 技能运行时 / 外部守卫 / 团队协作等模块；CI 在三平台（ubuntu / windows / macos × Node 20/22）全部通过。
 - **GAIA 基准**：[docs/GAIA.md](./docs/GAIA.md) —— 官方 GAIA benchmark validation split，**87.1%**（85 题，确定性 exact match）。L1 90.2% / L2 96.2% / L3 66.7%。
 - **性能基准**：[docs/BENCHMARK.md](./docs/BENCHMARK.md) —— 上下文压缩收益（1.2MB 历史 → 169KB，-86%）、SQLite WAL 与 JSONL 持久化吞吐。脚本：`npx tsx scripts/benchmark.mts`。
 
@@ -319,14 +328,14 @@ npm run dev            # 后端 3001 + 前端 5173
 | `fs_list` / `fs_read` / `fs_search` | 列目录 / 读文本 / 关键词搜索（二进制自动跳过并提示） | auto（只读） |
 | `fs_write` / `fs_edit` | 写文件 / 精确片段编辑（产出统一 diff，走审批；改已有文件须先读过——事实门强制） | 随工作区档位 |
 | `docx_read` / `docx_write` | Word .docx 读写（纯标准库 OOXML） | 读 auto / 写随档位 |
-| `http_fetch` | 抓取任意 URL 并阅读 | auto |
+| `http_fetch` | 抓取 URL（网页转为可读正文 / 表格 / 链接 / 元信息，长页面带标题目录与关注点片段；`raw` 取源码） | auto |
 | `shell_run` | 执行命令（沙箱 env 白名单 + 进程树终止） | 恒审批 |
 | `memory_list` / `memory_read` / `memory_write` / `memory_search` / `memory_review` | 长期记忆读写（Markdown 文件；写入默认 create-only，覆盖需显式 overwrite；review 标记用户确认） | auto |
 | `agent_spawn` | 派出子代理（独立上下文 / 工具子集 / 深度 ≤ 2 / 统一安全基线） | auto |
 | `team_spawn` / `team_send` / `team_tasks` / `team_wait` | 多代理团队：后台具名 teammate / 步边界直接消息 / 共享任务板（CAS + 无环 DAG）/ 收割最终回答 | auto |
 | `session_search` | 跨全部历史 run 的全文检索（FTS5 中英混合，经历回溯） | auto |
 | `past_runs` | 检索历史运行 | auto |
-| `evidence_read` | 取回证据记录（超大工具结果的不可变存档，支持分页） | auto |
+| `evidence_read` | 取回证据记录（超大工具结果的不可变存档；分页、按字段跳读与关键词检索） | auto |
 | `dual_review` | 双独立评审与分歧仲裁 | auto |
 
 ---
@@ -559,7 +568,8 @@ CORAL/
 - **门禁为启发式**：收工门的话术模式库与事实门的规则无法覆盖全部表述形态；均设有强制放行与告警，避免误拦阻塞交付。
 - **MCP stdio 执行边界**：外部 MCP server 以本机子进程运行，其能力边界由各自实现决定；平台侧以注解映射与审批档位约束。
 - **code-exec 是解释器级隔离**：审计钩子拦的是"动作"，不是操作系统级容器——不防熟悉解释器内部的人蓄意绕过；文件是否存在仍可探测；没有内存用量上限。沙箱内只支持标准库计算模块（numpy / pandas 等第三方库在导入时自身会加载受限模块）
-- **前端只有纯逻辑单测**：事件窗口与事件归并有测试，组件层没有——界面改动仍依赖构建与真机验证
+- **正文提取是启发式的**：按阅读顺序保留可见文字、折叠导航链接区，不执行页面脚本——需要脚本渲染的页面取不到正文（工具结果会提示），复杂版式的还原度有限；链接的分级（正文 / 链接列表 / 站点菜单）同样是启发式的，链接极多的页面只内联一部分，其余在证据记录里按关键词查
+- **前端只有纯逻辑单测**：事件窗口、运行视图与等待判定有测试，组件层没有——界面改动仍依赖构建与真机验证
 
 ---
 

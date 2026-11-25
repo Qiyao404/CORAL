@@ -76,6 +76,16 @@ export interface ToolContext {
   signal: AbortSignal;
   workspaceDir?: string;
   emit(ev: { type: string; payload?: Record<string, any> }): void;
+  /**
+   * 运行级草稿本（同一个 agent loop 的所有工具调用共用；子代理各有一份）。
+   * 工具自己决定放什么 — 目前只有抓取网络状态（fetch-health.ts）在用。
+   */
+  runState?: Map<string, unknown>;
+  /**
+   * 工具侧部分存档：结果超出内联预算时，由工具把"完整内容"存为证据记录并拿到 ID，
+   * 返回给模型的是开头 + evidenceId。未注入（没有证据层 / 单测）时为 undefined，工具应自行截断。
+   */
+  saveEvidence?(content: string): string | null;
 }
 
 export interface ToolResult<T = unknown> {
@@ -111,5 +121,7 @@ export function makeToolContext(over: Partial<ToolContext> = {}): ToolContext {
     signal: over.signal ?? new AbortController().signal,
     workspaceDir: over.workspaceDir,
     emit: over.emit ?? (() => {}),
+    ...(over.runState ? { runState: over.runState } : {}),
+    ...(over.saveEvidence ? { saveEvidence: over.saveEvidence } : {}),
   };
 }

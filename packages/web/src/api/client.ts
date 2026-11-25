@@ -48,7 +48,7 @@ export const api = {
   commands: () => request<{ items: Array<{ name: string; description: string; argumentHint?: string }> }>('/commands'),
   // 运行预算（设置页）
   getRunBudget: () => request<any>('/settings/run-budget'),
-  saveRunBudget: (payload: { maxTokens?: number | null; maxSteps?: number | null; askUserTimeoutMin?: number; verificationEnabled?: boolean; entityIndexEnabled?: boolean; entityIndexThreshold?: number }) =>
+  saveRunBudget: (payload: { maxTokens?: number | null; maxSteps?: number | null; maxSpawns?: number | null; askUserTimeoutMin?: number; verificationEnabled?: boolean; entityIndexEnabled?: boolean; entityIndexThreshold?: number }) =>
     request<any>('/settings/run-budget', { method: 'PUT', body: JSON.stringify(payload) }),
   // 会话产物（回复底部的"本次生成文件"chips）
   sessionArtifacts: (sessionId: string) =>

@@ -37,7 +37,7 @@ export const zh: Record<string, string> = {
   'settings.budget.saving': '保存中…',
   'settings.budget.save': '保存预算设置',
   'settings.budget.saved': '已保存 — 对新发起的任务立即生效',
-  'settings.budget.current': '当前生效：Token {tokens} · 步数 {steps}',
+  'settings.budget.current': '当前生效：Token {tokens} · 步数 {steps} · 派生 {spawns}',
   'settings.budget.desc': '运行中任务的实时消耗显示在「会话」页标题栏（🪙 图标）；预算耗尽会优雅收尾，发送"继续"可从断点接力',
 
   'settings.llm.title': 'LLM 配置管理',
@@ -150,6 +150,8 @@ export const zh: Record<string, string> = {
   'settings.budget.askTimeoutLabel': '反问等待超时（分钟）',
   'settings.budget.askTimeoutPlaceholder': '默认 0（无限等待）',
   'settings.budget.askTimeoutHint': 'Agent 反问时的最长等待；0 = 一直等你答，>0 超时后按推荐选项/最合理假设继续并标注假设',
+  'settings.budget.spawnLabel': '子代理派生上限（每个任务）',
+  'settings.budget.spawnHint': 'agent_spawn 与 team_spawn 合计；留空用默认值，填 0 = 不允许派生。额度用完后模型再派生会被拒绝，每次被拒都会白跑一步',
   'settings.budget.verifyLabel': '交付验证（验收清单 + 独立检查）',
   'settings.budget.verifyHint': '工作区任务开工生成验收清单、交付前独立验证（默认否、失败带证据、3 轮上限）',
   'settings.memory.entityTitle': '实体索引：',

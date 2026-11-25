@@ -146,4 +146,22 @@ export const en: Record<string, string> = {
   'chat.verifyRounds': '({r} verify rounds)',
   'chat.verifyPromote': 'Promote to permanent check',
   'chat.verifyPromoted': 'Promoted ✓',
+  // Visible waiting: thinking timer + live reasoning
+  'chat.thinkingTimer': 'Thinking · {sec}s',
+  'chat.reasoningShow': 'See what it is thinking',
+  'chat.reasoningHide': 'Hide reasoning',
+  'chat.reasoningHint': 'The reasoning is shown only so you can see progress — it is not part of the conversation history and not the final answer',
+  // Interim report
+  'chat.reportNow': 'Ask for interim findings',
+  'chat.reportNowSent': 'Asked for an interim report',
+  'chat.reportNowMessage': 'Please pause further exploration for now: based on what you have verified so far, give an interim conclusion right away and list what is still unfinished.',
+  // Result trust
+  'chat.fetchFailuresNote': '⚠ {n} web fetches failed in this run ({net} at the network level) — the answer may be incomplete; double-check key facts',
+  'chat.networkDownNote': '⚠ Network unavailable: the answer above is based on what was verified before the outage, and whatever could not be verified is stated in the answer. Click "Continue" once the network is back',
+  // Plain-language failure classes (the raw error is shown on the next line)
+  'chat.fail.quota': 'The model service usage quota is exhausted (it recovers after a while)',
+  'chat.fail.auth': 'The model service API key is invalid (check the model settings)',
+  'chat.fail.network': 'Network connection failed',
+  'chat.fail.timeout': 'The model service timed out',
+  'chat.fail.interrupted': 'The server restarted and the run was interrupted (click "Continue" to resume)',
 };

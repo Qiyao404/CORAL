@@ -43,7 +43,7 @@ export class AnthropicProvider implements ChatProvider {
     return this.fromAnthropicMessage(response);
   }
 
-  async stream(req: ChatRequest, onChunk: (delta: string) => void): Promise<ChatResponse> {
+  async stream(req: ChatRequest, onChunk: (delta: string) => void, onReasoning?: (delta: string) => void): Promise<ChatResponse> {
     const params = { ...this.buildParams(req), stream: true };
 
     let text = '';
@@ -80,6 +80,9 @@ export class AnthropicProvider implements ChatProvider {
                 text += d.text;
                 delivered = true;
                 try { onChunk(d.text); } catch { /* 消费者异常不中断流 */ }
+              } else if (d?.type === 'thinking_delta' && d.thinking) {
+                // 思考过程只转发给界面，不计入 text（思考不是回答，不能进对话历史）
+                try { onReasoning?.(d.thinking); } catch { /* 消费者异常不中断流 */ }
               } else if (d?.type === 'input_json_delta' && d.partial_json) {
                 const slot = toolBlocks.get(ev.index);
                 if (slot) slot.json += d.partial_json;

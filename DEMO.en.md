@@ -4,7 +4,7 @@
 
 > Audience: you (verification) and interviewers/friends (demo). Ordered by "performance impact" — each act takes 1-3 minutes, all doable in a browser + one terminal.
 > Prereq: service running (http://127.0.0.1:3001) with a real model in `.env` (demo mode halves the effect).
-> Covers: v2.7.1. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
+> Covers: v2.8.0. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
 
 ---
 
@@ -253,5 +253,6 @@ Search for plain-language explanations of these four concepts — entropy, photo
 | Quality | Double-blind review, five-axis self-eval (low scores must cite evidence), skill quality gate, config self-cleanup |
 | Ops | coral doctor 8 channels, ESTOP sentinel, approval session memory, triggers continuing existing sessions (persistent inbox) |
 | Runtime reliability | Stall breaker (same signature 15 consecutive / 30 cumulative), truncation continuation, end-of-run drain (terminal paths never drop messages), cancel checkpoints, startup reconciliation (in-flight runs + dangling interactions closed out), unattended runs (no questions / approvals settle immediately), rotating offline audit across the whole library, checklist verdicts aligned by line number, full cleanup when deleting large sessions, batched legacy-checkpoint migration in compact (450 rows: 13+ seconds → under half a second) |
+| Visible waiting | Thinking timer with live reasoning (broadcast only), "Ask for interim findings", failed-fetch note, plain-language failures; readable-page extraction and evidence search (by field / keyword / outline) |
 | Execution boundaries | code-exec restricted interpreter (audit hooks + import finder + minimal environment + fail-closed self-check), skill contract (accepts_code / sandboxed), event-channel origin check before the handshake |
 | Extensibility | Skill / named-sub-agent / slash-command user directories + hooks open interface + `coral install` packages (npm/git/local) + `@coral/sdk` library embedding — all hot-reloading; bilingual UI |

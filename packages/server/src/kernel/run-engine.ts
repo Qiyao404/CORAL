@@ -99,7 +99,7 @@ export interface RunEngineDeps {
   llm: {
     chat(req: ChatRequest): Promise<ChatResponse>;
     /** 创新①：流式 chat — 存在时 loop 走逐 token 直播 */
-    chatStream?(req: ChatRequest, onDelta: (delta: string) => void): Promise<ChatResponse>;
+    chatStream?(req: ChatRequest, onDelta: (delta: string) => void, onReasoning?: (delta: string) => void): Promise<ChatResponse>;
     complete(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, options?: any): Promise<{ content: string }>;
   };
   skillRegistry: FilesystemSkillRegistry;
@@ -113,6 +113,8 @@ const GOAL_LIMIT = 10_000;
 const MAX_STEPS_CAP = 100_000;
 // 无上限语义：数值 ≤0 视为无上限（存储仍存原值，进入循环前翻译为 Infinity）
 const MAX_TOKENS_CAP = 1_000_000_000;
+/** 只直播、不落库的循环事件：推理过程的流式增量（一次长思考可能上万 token，落库只会把事件表撑大；断线重连后也不需要回放） */
+const TRANSIENT_LOOP_EVENTS = new Set(['loop.reasoning']);
 
 /** 数值预算 → 循环预算：≤0 视为无上限 */
 function loopBudgetValue(v: number | undefined, fallback: number): number {
@@ -220,8 +222,12 @@ export class RunEngine {
     return this.habits;
   }
 
-  /** 评测/演示隔离：已知自动化会话标识（GAIA/PawBench/评测驱动）→ 记忆写入默认拒 */
-  private isAutomationSession(sessionId?: string): boolean {
+  /**
+   * 评测 / 演示隔离：已知自动化会话标识（GAIA/PawBench/评测驱动）→ 记忆写入默认拒。
+   * 这是"哪些会话是自动化的"唯一出处：运行列表接口用它给每个运行打 automation_session 标记，
+   * 对话页据此不自动选中这类会话（在里面接着提问，会把最近一道评测题的完整过程带进新任务）
+   */
+  isAutomationSession(sessionId?: string): boolean {
     if (!sessionId) return false;
     return /^(gaia-eval|pawbench|eval-|benchmark-)/.test(sessionId);
   }
@@ -868,11 +874,13 @@ export class RunEngine {
       const totalTokensOut = result.tokensOut + (result.childTokensOut ?? 0) + teamTokens.out;
 
       // 原地打转（stalled）是平台终止的失败态：库里落 failed + end_reason=stalled（词表不变，同 002 迁移惯例）
+      // 网络不可用后的收尾（network_down）不是失败：回答是基于已核实内容写的、可续跑 → completed + end_reason
       const failed = result.status === 'failed' || result.status === 'stalled';
-      const status = result.status === 'completed' || result.status === 'budget_exceeded' ? 'completed' : 'failed';
+      const status = result.status === 'completed' || result.status === 'budget_exceeded' || result.status === 'network_down' ? 'completed' : 'failed';
       this.deps.runStore.update(runId, {
         status,
         endReason: result.status === 'budget_exceeded' ? 'budget_exceeded'
+          : result.status === 'network_down' ? 'network_down'
           : result.status === 'completed' ? 'final_answer'
           : result.status,
         finalContent: result.finalContent,
@@ -886,6 +894,9 @@ export class RunEngine {
       }
       if (result.status === 'stalled') {
         this.emitRunEvent(runId, 'run.stalled', { steps: result.steps, toolCalls: result.toolCalls, tokensIn: totalTokensIn, tokensOut: totalTokensOut, error: result.error });
+      }
+      if (result.status === 'network_down') {
+        this.emitRunEvent(runId, 'run.network_down', { steps: result.steps, toolCalls: result.toolCalls, tokensIn: totalTokensIn, tokensOut: totalTokensOut, error: result.error });
       }
       // 验证工程（A2）：终态判决事件 — 带级别（4=全过带证据/3=全过部分不可验/2=有失败）、
       // 逐行结果（失败行可被人工采纳进 CHECKS.md）。未验证的 run 不发（UI 显示"未验证"）
@@ -924,46 +935,48 @@ export class RunEngine {
       // （记忆使用记账统一在 finally — 任何收尾路径都且只记一次，REG-29）
 
       // 会话全文检索：终态时（重）索引本 run 的检索文档（goal + 最终回答 + 消息轨迹）
-      if (result.status === 'completed') {
+      // （网络不可用收尾的 run 也索引 — 它的回答是基于已核实内容写的，续跑与会话检索都要用）
+      if (result.status === 'completed' || result.status === 'network_down') {
         try {
           this.search.indexRun(runId, input.goal, result.finalContent, result.messages);
         } catch { /* 索引失败不影响 run */ }
+      }
 
-        // 运行后蒸馏管线（fire-and-forget）：技能修订/新技能/画像提议，至多一次 LLM 调用
-        if (result.steps >= 8 && !(this.deps.llm as any).isDemoMode?.()) {
-          try {
-            const evs = this.deps.eventStore.listByRun(runId, 0, 10_000);
-            const skillsUsed = new Set<string>();
-            const skillFailures: Array<{ tool: string; errorPreview: string }> = [];
-            let gateRejections = 0;
-            let subagentFailures = 0;
-            for (const e of evs) {
-              const tool = (e.payload as any)?.tool;
-              if ((e.type === 'tool.call_completed' || e.type === 'tool.call_failed') && typeof tool === 'string' && tool.startsWith('skill_')) {
-                skillsUsed.add(tool.replace(/^skill_/, ''));
-                if (e.type === 'tool.call_failed') {
-                  skillFailures.push({ tool, errorPreview: JSON.stringify((e.payload as any)?.error ?? '').slice(0, 120) });
-                }
+      // 运行后蒸馏管线（fire-and-forget）：技能修订/新技能/画像提议，至多一次 LLM 调用
+      // （只看正常完成的 run — 网络不可用收尾的 run 是残缺过程，不拿去学习）
+      if (result.status === 'completed' && result.steps >= 8 && !(this.deps.llm as any).isDemoMode?.()) {
+        try {
+          const evs = this.deps.eventStore.listByRun(runId, 0, 10_000);
+          const skillsUsed = new Set<string>();
+          const skillFailures: Array<{ tool: string; errorPreview: string }> = [];
+          let gateRejections = 0;
+          let subagentFailures = 0;
+          for (const e of evs) {
+            const tool = (e.payload as any)?.tool;
+            if ((e.type === 'tool.call_completed' || e.type === 'tool.call_failed') && typeof tool === 'string' && tool.startsWith('skill_')) {
+              skillsUsed.add(tool.replace(/^skill_/, ''));
+              if (e.type === 'tool.call_failed') {
+                skillFailures.push({ tool, errorPreview: JSON.stringify((e.payload as any)?.error ?? '').slice(0, 120) });
               }
-              if (e.type === 'loop.gate_rejected') gateRejections++;
-              if (e.type === 'subagent.failed' || e.type === 'team.teammate_failed') subagentFailures++;
             }
-            void this.evolution.considerRun({
-              runId,
-              goal: input.goal,
-              steps: result.steps,
-              toolCalls: result.toolCalls,
-              skillsUsed: [...skillsUsed],
-              skillFailures,
-              gateRejections,
-              subagentFailures,
-              transcriptTail: result.messages
-                .slice(-15)
-                .map(m => `${m.role}: ${String(m.content ?? '').slice(0, 300)}`)
-                .join('\n'),
-            });
-          } catch { /* 信号收集失败不影响 run */ }
-        }
+            if (e.type === 'loop.gate_rejected') gateRejections++;
+            if (e.type === 'subagent.failed' || e.type === 'team.teammate_failed') subagentFailures++;
+          }
+          void this.evolution.considerRun({
+            runId,
+            goal: input.goal,
+            steps: result.steps,
+            toolCalls: result.toolCalls,
+            skillsUsed: [...skillsUsed],
+            skillFailures,
+            gateRejections,
+            subagentFailures,
+            transcriptTail: result.messages
+              .slice(-15)
+              .map(m => `${m.role}: ${String(m.content ?? '').slice(0, 300)}`)
+              .join('\n'),
+          });
+        } catch { /* 信号收集失败不影响 run */ }
       }
 
       // M1-11（D18）：会话结束记忆整理 — 仅正常完成时；demo 模式与开关关闭时跳过。
@@ -1094,6 +1107,10 @@ export class RunEngine {
   private onLoopEvent(runId: string, e: LoopEvent): void {
     const payload = { runId, ...(e.payload ?? {}) };
     const agentId = typeof (payload as any).agentId === 'string' ? (payload as any).agentId : 'main';
+    if (TRANSIENT_LOOP_EVENTS.has(e.type)) {
+      this.bridgeToBus({ type: e.type, runId, payload: { ...payload, __transient: true } });
+      return;
+    }
     const toolName = typeof (payload as any).tool === 'string' ? (payload as any).tool : undefined;
     const stored = this.deps.eventStore.insert({
       runId,
@@ -1295,54 +1312,60 @@ export class RunEngine {
       ev => this.emitRunEvent(runId, ev.type, ev.payload ?? {}),
       loopBudgetValue(effectiveBudget.maxTokens, platformConfig.runMaxTokens),
     );
-    const spawn = makeSpawnTool({
-      llm: this.deps.llm,
-      summarize: async transcript => this.summarizeTranscript(transcript),
-      baseTools: tools,
-      evidenceStore: this.evidence,
-      presets: this.agentPresets,
-      hooks: this.loopHooks,
-      // 审查 P2：审批通道透传（与主循环同一 requestApproval — waiting_human 语义一致）
-      ...(workspace ? { approveTool: (tool, inp, callId) => this.requestApproval(runId, tool, inp, callId, workspace) } : {}),
-      depth: 0,
-      spawnCounter: { count: 0 },
-      subBudget: {
-        defaultSteps: Math.max(3, Math.floor(nominalSteps / 3)),
-        defaultTokens: Math.max(5000, Math.floor(nominalTokens / 3)),
-        maxSteps: Math.max(5, Math.floor(nominalSteps / 2)),
-        maxTokens: Math.max(10000, Math.floor(nominalTokens / 2)),
-      },
-    });
-    const teamSpawn = makeTeamSpawnTool({
-      llm: this.deps.llm,
-      summarize: async transcript => this.summarizeTranscript(transcript),
-      baseTools: tools,
-      evidenceStore: this.evidence,
-      presets: this.agentPresets,
-      hooks: this.loopHooks,
-      ...(workspace ? { approveTool: (tool, inp, callId) => this.requestApproval(runId, tool, inp, callId, workspace) } : {}),
-      depth: 0,
-      team,
-      spawnCounter: { count: 0 },
-      // REG-25：后台 teammate 挂进 run 级后台作用域 — 主循环结束即终止
-      registerBackground: scope => this.registerBackground(runId, scope),
-      unregisterBackground: scope => this.unregisterBackground(runId, scope),
-      onTeammateSettled: t => {
-        const cur = this.teamTokensByRun.get(runId) ?? { in: 0, out: 0 };
-        this.teamTokensByRun.set(runId, { in: cur.in + (t.tokensIn || 0), out: cur.out + (t.tokensOut || 0) });
-      },
-      subBudget: {
-        defaultSteps: Math.max(3, Math.floor(nominalSteps / 3)),
-        defaultTokens: Math.max(5000, Math.floor(nominalTokens / 3)),
-        maxSteps: Math.max(5, Math.floor(nominalSteps / 2)),
-        maxTokens: Math.max(10000, Math.floor(nominalTokens / 2)),
-      },
-    });
-    tools.push(spawn);
-    tools.push(teamSpawn);
-    tools.push(makeTeamSendTool(team, 'main'));
-    tools.push(makeTeamTasksTool(team, 'main'));
-    tools.push(makeTeamWaitTool(team));
+    // 派生额度：agent_spawn 与 team_spawn 共用一个计数器。此前两者各拿到一个 { count: 0 }——
+    // 报错信息写着"共用计数、上限 8"，实际各算各的（一个任务最多派生 16 个）。
+    // 额度由用户在设置里调（默认 16 = 修复前实际可用的总量，不因为修正接线而缩小现有能力）；
+    // 设为 0 = 不允许派生：工具直接不提供给模型（没有"用过之后消失"的缓存 / 兼容问题）。
+    const spawnCounter = { count: 0 };
+    const maxSpawns = effectiveBudget.maxSpawns;
+    const subBudget = {
+      defaultSteps: Math.max(3, Math.floor(nominalSteps / 3)),
+      defaultTokens: Math.max(5000, Math.floor(nominalTokens / 3)),
+      maxSteps: Math.max(5, Math.floor(nominalSteps / 2)),
+      maxTokens: Math.max(10000, Math.floor(nominalTokens / 2)),
+    };
+    if (maxSpawns > 0) {
+      const spawn = makeSpawnTool({
+        llm: this.deps.llm,
+        summarize: async transcript => this.summarizeTranscript(transcript),
+        baseTools: tools,
+        evidenceStore: this.evidence,
+        presets: this.agentPresets,
+        hooks: this.loopHooks,
+        // 审查 P2：审批通道透传（与主循环同一 requestApproval — waiting_human 语义一致）
+        ...(workspace ? { approveTool: (tool, inp, callId) => this.requestApproval(runId, tool, inp, callId, workspace) } : {}),
+        depth: 0,
+        spawnCounter,
+        maxSpawnsPerRun: maxSpawns,
+        subBudget,
+      });
+      const teamSpawn = makeTeamSpawnTool({
+        llm: this.deps.llm,
+        summarize: async transcript => this.summarizeTranscript(transcript),
+        baseTools: tools,
+        evidenceStore: this.evidence,
+        presets: this.agentPresets,
+        hooks: this.loopHooks,
+        ...(workspace ? { approveTool: (tool, inp, callId) => this.requestApproval(runId, tool, inp, callId, workspace) } : {}),
+        depth: 0,
+        team,
+        spawnCounter,
+        maxSpawnsPerRun: maxSpawns,
+        // REG-25：后台 teammate 挂进 run 级后台作用域 — 主循环结束即终止
+        registerBackground: scope => this.registerBackground(runId, scope),
+        unregisterBackground: scope => this.unregisterBackground(runId, scope),
+        onTeammateSettled: t => {
+          const cur = this.teamTokensByRun.get(runId) ?? { in: 0, out: 0 };
+          this.teamTokensByRun.set(runId, { in: cur.in + (t.tokensIn || 0), out: cur.out + (t.tokensOut || 0) });
+        },
+        subBudget,
+      });
+      tools.push(spawn);
+      tools.push(teamSpawn);
+      tools.push(makeTeamSendTool(team, 'main'));
+      tools.push(makeTeamTasksTool(team, 'main'));
+      tools.push(makeTeamWaitTool(team));
+    }
     // 会话经历回溯：跨全部历史 run 的全文检索（FTS5）
     tools.push(makeSessionSearchTool(this.search, this.deps.runStore as any));
     // 反问（ask_user）：**仅主循环持有** — spawn 在上方已捕获当时的 tools 数组，

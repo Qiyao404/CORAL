@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **Version: v2.7.1** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
+> **Version: v2.8.0** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
 > **Positioning: a local-first, single-command, single-file-storage personal agent runtime**
 
 ---
@@ -68,7 +68,7 @@ The `memory/` directory is plain Markdown exposed through four read/write tools;
 Every tool declares effect bits in `ToolEffects` (writes filesystem / launches process / accesses network / idempotent); the approval tier is derived from the effect combination by `derivePermission` rather than hand-annotated. Registration validates consistency between declaration and derivation — a declaration can only make approval stricter; annotations looser than the derived floor are automatically tightened at registration. Standard annotations of external MCP tools (readOnly / destructive / idempotent) map into the same contract.
 
 **10. Evidence layer**
-Output exceeding the per-tool result budget (`maxResultSizeChars`) is written whole into `data/evidence/{runId}/` (write-once, cleaned up when the run is deleted) and replaced in context by a "summary preview + record ID" object; when the model needs detail, `evidence_read` fetches it back with offset/limit pagination. The shelving layer archives old results into the evidence layer the same way.
+Output exceeding the per-tool result budget (`maxResultSizeChars`) is written whole into `data/evidence/{runId}/` (write-once, cleaned up when the run is deleted) and replaced in context by a "summary preview + record ID" object; when the model needs detail, `evidence_read` fetches it back (paging, field access, keyword search, structure outline). The shelving layer archives old results into the evidence layer the same way.
 
 **11. Three-tier context compression with usage warning**
 Single-result clipping (always on) → shelving old tool results (soft watermark, archived to the evidence layer and recoverable) → full LLM summary (hard watermark); a four-level usage warning (normal / warning / critical / blocked).
@@ -181,6 +181,15 @@ Deterministic, model-independent guarantees around a model-driven loop — each 
 - **Memory write-back**: distillation applies a line-level full-preserve merge to existing files (dropped lines → original untouched, only new lines appended), backs up before overwriting, and keeps the trust marker; evaluation sessions skip distillation
 - **Execution boundaries**: model-written code runs inside a restricted interpreter (audit hooks intercept file / process / network actions, self-checked before every run, refusing to run if enforcement fails); skill manifests declare `accepts_code` / `sandboxed`; `/ws/events` validates its origin before the handshake
 
+**35. Readable pages & visible waiting**
+An efficiency and experience pass driven by real run data:
+
+- **Readable pages**: `http_fetch` converts HTML to readable content by default — title, visible text in reading order, tables (header separator, rowspan / colspan expanded to every cell), links with context (hint text; external / link-list / site-menu flags), images, meta and structured data; navigation link lists are folded out of the text (the links stay), page scripts are not executed, and the declared character set is honored (GBK / Big5 pages no longer turn into mojibake). Links come as one list — content links first, site-menu links last; link-heavy pages (directories, listings) get a larger link budget, and whatever still does not fit is stored with the full page as an evidence record with a resume position. Long pages keep their beginning inline plus a heading outline (`sections`); pass `focus` to also get the passages most relevant to it (`excerpts`)
+- **Evidence search**: besides paging, `evidence_read` reads one field by `path`, searches by `query` (returning match positions with context) and shows a structure `outline` — finding one line in a large archive becomes one or two calls instead of sequential paging
+- **Fetch resilience**: transient connection errors are retried inside the tool (one failed fetch is a whole model round trip); failure messages carry the underlying error code and the recent network state; "network unavailable" is declared only after many consecutive failures across several hosts — a probe is allowed after a cool-down, and only if the model keeps fetching does the run wrap up from what it has (`end_reason=network_down`, resumable)
+- **Visible waiting**: the chat page shows "Thinking · Ns" and streams the model's reasoning live (broadcast only, never persisted); "Ask for interim findings" is one click away while a run is in progress; answers with many failed fetches carry a note; failures are summarized in plain words (usage quota / API key / interrupted / timeout / network)
+- **Spawn quota**: `agent_spawn` and `team_spawn` share one configurable limit (Settings → "Sub-agent spawn limit"), the quota is stated in the tool descriptions, and a rejection says what to do next; set it to 0 to remove the spawn tools entirely
+
 ---
 
 ## Feature Scope
@@ -281,13 +290,13 @@ Verified against DeepSeek and DashScope; any OpenAI-compatible endpoint (OpenRou
 | Persistence | SQLite (better-sqlite3, WAL mode, versioned schema migrations) |
 | Skills | YAML frontmatter (gray-matter) + chokidar hot reload |
 | Progress protocol | in-house `[CORAL_PROGRESS]` single-line stderr JSON protocol (Python + Node SDKs, see [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)) |
-| Quality | Vitest (631 cases + 14 web) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
+| Quality | Vitest (801 cases + 33 web) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
 
 ---
 
 ## Tests & Benchmarks
 
-- **Tests**: 631 cases (Vitest, server) + 14 (web) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
+- **Tests**: 801 cases (Vitest, server) + 33 (web) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
 - **GAIA benchmark**: [docs/GAIA.md](./docs/GAIA.md) — official GAIA benchmark validation split, **87.1%** (85 questions, deterministic exact match). L1 90.2% / L2 96.2% / L3 66.7%.
 - **Performance**: [docs/BENCHMARK.md](./docs/BENCHMARK.md) — context-compression gains (1.2MB history → 169KB, −86%), SQLite WAL and JSONL persistence throughput. Script: `npx tsx scripts/benchmark.mts`.
 
@@ -324,14 +333,14 @@ Data stays local (`data/personalization/`); one-click wipe.
 | `fs_list` / `fs_read` / `fs_search` | List dir / read text / keyword search (binaries skipped with a note) | auto (read-only) |
 | `fs_write` / `fs_edit` | Write file / exact-snippet edit (unified diff output, approval-gated; editing an existing file requires a prior read — Fact Gate enforced) | per workspace tier |
 | `docx_read` / `docx_write` | Word .docx read/write (pure standard-library OOXML) | read auto / write per tier |
-| `http_fetch` | Fetch any URL and read it | auto |
+| `http_fetch` | Fetch a URL (HTML becomes readable text / tables / links / meta; long pages come with a heading outline and focus excerpts; `raw` returns the source) | auto |
 | `shell_run` | Run commands (sandboxed env whitelist + process-tree termination) | always approval |
 | `memory_list` / `memory_read` / `memory_write` / `memory_search` / `memory_review` | Long-term memory I/O (Markdown files; writes default create-only, overwrites need explicit `overwrite`; review marks user confirmation) | auto |
 | `agent_spawn` | Spawn a sub-agent (own context / tool subset / depth ≤ 2 / unified security baseline) | auto |
 | `team_spawn` / `team_send` / `team_tasks` / `team_wait` | Multi-agent team: background named teammates / step-boundary direct messages / shared task board (CAS + acyclic DAG) / final-answer harvesting | auto |
 | `session_search` | Full-text search across all past runs (FTS5, CN/EN; experience recall) | auto |
 | `past_runs` | Retrieve past runs | auto |
-| `evidence_read` | Fetch evidence records (immutable archive of oversized tool results, paginated) | auto |
+| `evidence_read` | Fetch evidence records (immutable archive of oversized tool results; paging, field access and keyword search) | auto |
 | `dual_review` | Dual independent review with disagreement arbitration | auto |
 
 ---
@@ -564,7 +573,8 @@ CORAL/
 - **Gates are heuristic**: the Wrap-up Gate pattern library and Fact Gate rules cannot cover every phrasing; both have forced-release plus warning to avoid blocking delivery.
 - **MCP stdio execution boundary**: external MCP servers run as local subprocesses; their capability boundary is determined by their own implementations; the platform constrains via annotation mapping and approval tiers.
 - **code-exec is interpreter-level isolation**: audit hooks intercept *actions*; it is not an OS-level container — it does not defend against someone versed in interpreter internals deliberately bypassing it; file existence remains probeable; there is no memory cap. Only standard-library compute modules are available inside the sandbox (third-party libraries such as numpy / pandas load restricted modules during their own import)
-- **Web tests cover pure logic only**: the event window and event view are unit-tested, components are not — UI changes still rely on builds and live verification
+- **Readable-page extraction is heuristic**: it keeps visible text in reading order, folds navigation link lists and does not run page scripts — pages that need script rendering yield no text (the tool result says so), and complex layouts are approximated; the link tiers (content / link lists / site menus) are heuristic too, so pages with very many links inline only part of them and the rest is looked up by keyword in the evidence record
+- **Web tests cover pure logic only**: the event window, run view and thinking detection are unit-tested, components are not — UI changes still rely on builds and live verification
 
 ---
 

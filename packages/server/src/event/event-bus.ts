@@ -50,15 +50,20 @@ export class EventBus {
       payload,
       timestamp: new Date().toISOString(),
     };
+    // 只直播不留存（payload.__transient）：不进 ring buffer、不上全局 WebSocket —
+    // 只到达按 run 订阅的 SSE。用于推理过程这类"高频、量大、不需要回放"的事件
+    const transient = payload.__transient === true;
 
-    // ring buffer：保留最近 RING_BUFFER_LIMIT 条事件用于内存历史查询
-    this.eventHistory.push(event);
-    if (this.eventHistory.length > RING_BUFFER_LIMIT) {
-      this.eventHistory.splice(0, this.eventHistory.length - RING_BUFFER_LIMIT);
+    if (!transient) {
+      // ring buffer：保留最近 RING_BUFFER_LIMIT 条事件用于内存历史查询
+      this.eventHistory.push(event);
+      if (this.eventHistory.length > RING_BUFFER_LIMIT) {
+        this.eventHistory.splice(0, this.eventHistory.length - RING_BUFFER_LIMIT);
+      }
     }
 
     // 高频日志/进度事件不进 audit_logs（避免文件爆掉）
-    if (!VOLATILE_EVENT_TYPES.has(type)) {
+    if (!transient && !VOLATILE_EVENT_TYPES.has(type)) {
       try { auditStore.insert(event); } catch { /* 持久化失败不阻塞主流程 */ }
     }
 
@@ -69,6 +74,7 @@ export class EventBus {
 
     this.dispatchHandler(this.handlers.get('*'), event);
 
+    if (transient) return event;
     for (const send of this.wsClients) {
       try { send(event); } catch { /* 忽略断开的连接 */ }
     }

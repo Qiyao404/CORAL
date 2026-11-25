@@ -61,6 +61,13 @@ const SUB_EXTRA_SYSTEM = `You are a SUB-AGENT spawned by an orchestrator to exec
 Focus strictly on the assigned goal, use tools as needed, and finish with a concise, self-contained
 final answer — the orchestrator only sees that answer, not your intermediate steps.`;
 
+/** 额度说明（两个派生工具的描述共用）：额度是多少、超了怎么办 — 写在工具描述里，模型开工前就能看到 */
+function quotaNote(maxSpawns: number): string {
+  return `Each run has a spawn quota: at most ${maxSpawns} sub-agents/teammates in total (agent_spawn and team_spawn share it). ` +
+    'Plan within it — if you have more items than the quota, group several items into one subtask or do the rest yourself; ' +
+    'a rejected spawn wastes a step. ';
+}
+
 export function makeSpawnTool(deps: SpawnDeps): Tool {
   const maxDepth = deps.maxDepth ?? 2;
   const spawnCounter = deps.spawnCounter ?? { count: 0 };
@@ -72,7 +79,8 @@ export function makeSpawnTool(deps: SpawnDeps): Tool {
       'Spawn a sub-agent with a FRESH context window to execute a self-contained subtask and return its final answer. ' +
       'Use it to isolate long or noisy work (deep research, multi-file analysis, repetitive processing) from the main thread. ' +
       'Pass "agent" to use a named specialist preset (see the named sub-agents list in your instructions — researcher/reviewer/data/doc etc.); ' +
-      'optionally pass a subset of tool names; the sub-agent can never access tools beyond your own set.',
+      'optionally pass a subset of tool names; the sub-agent can never access tools beyond your own set. ' +
+      quotaNote(maxSpawns),
     inputSchema: {
       type: 'object',
       required: ['goal'],
@@ -102,7 +110,12 @@ export function makeSpawnTool(deps: SpawnDeps): Tool {
       if (goal.length > GOAL_LIMIT) return toolError('BAD_INPUT', `goal 过长（${goal.length}，上限 ${GOAL_LIMIT}）`);
 
       if (spawnCounter.count >= maxSpawns) {
-        return toolError('SPAWN_LIMIT', `本 run 的 sub-agent 数量已达上限（${maxSpawns}）`, false);
+        return toolError(
+          'SPAWN_LIMIT',
+          `派生额度已用完：本任务最多可派生 ${maxSpawns} 个子代理（agent_spawn 与 team_spawn 合计），已全部使用。` +
+            '之后的派生调用都会被拒绝——请把剩余工作合并成更少的子任务，或自己直接完成，不要再尝试派生。',
+          false
+        );
       }
 
       // 具名预设：agent 参数优先于显式 tools。预设白名单与基础工具集做**静默交集**
@@ -274,7 +287,8 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
       'Spawn a NAMED background teammate and return immediately (does NOT wait — collect results later via team_wait). ' +
       'Teammates run in parallel with a fresh context window and can receive direct messages (team_send) at step boundaries. ' +
       'Use for parallelizable independent subtasks (e.g. several independent searches/cross-checks); ' +
-      'use agent_spawn instead when you need the answer right now.',
+      'use agent_spawn instead when you need the answer right now. ' +
+      quotaNote(maxSpawns),
     inputSchema: {
       type: 'object',
       required: ['name', 'goal'],
@@ -303,7 +317,12 @@ export function makeTeamSpawnTool(deps: TeamSpawnDeps): Tool {
       }
 
       if (spawnCounter.count >= maxSpawns) {
-        return toolError('SPAWN_LIMIT', `本 run 的 sub-agent 数量已达上限（${maxSpawns}，含 agent_spawn 与 team_spawn 共用计数）`, false);
+        return toolError(
+          'SPAWN_LIMIT',
+          `派生额度已用完：本任务最多可派生 ${maxSpawns} 个（agent_spawn 与 team_spawn 合计），已全部使用。` +
+            '之后的派生调用都会被拒绝——可以把新任务用 team_send 交给已有的队友，或自己直接完成，不要再尝试派生。',
+          false
+        );
       }
 
       // 具名预设（与 agent_spawn 同规则：预设白名单与基础工具集静默交集）

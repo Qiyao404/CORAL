@@ -91,8 +91,13 @@ export function registerRunRoutes(app: FastifyInstance, engine: RunEngine, graph
       limit: hasSession ? 500 : (Math.min(parseInt(limit) || 50, 500)),
       offset: parseInt(offset) || 0,
     });
-    if (hasSession !== 'true') return base;
-    return { ...base, items: (base.items ?? []).filter((r: any) => r.session_id) };
+    // 每个运行带上"是否属于自动化会话"：对话页打开时不自动选中这类会话
+    const items = (base.items ?? []).map((r: any) => ({
+      ...r,
+      automation_session: engine.isAutomationSession(r.session_id),
+    }));
+    if (hasSession !== 'true') return { ...base, items };
+    return { ...base, items: items.filter((r: any) => r.session_id) };
   });
 
   app.get('/api/runs/:runId', async (request, reply) => {

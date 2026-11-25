@@ -8,7 +8,11 @@ import {
 import { api } from '../api/client';
 import { Button, Card, Tag, Textarea, Select, EmptyState, Modal, Input } from '../components/ui';
 import { ExecutionLogView } from '../components/ExecutionLog';
-import { useRunStream, deriveRunView, type RunEventItem } from '../hooks/useRunStream';
+import {
+  useRunStream, deriveRunView, deriveThinking, appendReasoning, classifyRunError,
+  FETCH_FAILURE_WARN_AT, type ReasoningLive, type RunEventItem,
+} from '../hooks/useRunStream';
+import { pickAutoSession } from '../hooks/session-select';
 import { useI18n } from '../i18n';
 
 /**
@@ -20,6 +24,8 @@ import { useI18n } from '../i18n';
 
 interface SessionItem {
   sessionId: string | null;
+  /** 自动化会话（评测 / 基准）：由服务端标记，打开页面时不自动选中 */
+  automation?: boolean;
   runs: Array<{ id: string; goal: string; status: string; createdAt: string; parentId?: string | null }>;
 }
 
@@ -129,8 +135,18 @@ export default function ChatPage() {
     }
   };
 
-  const { events, connected } = useRunStream(activeRunId ?? undefined);
+  // 思考过程直播：只直播不落库的 loop.reasoning 事件走旁路累积（只收主循环、按步重置）
+  const [reasoning, setReasoning] = useState<ReasoningLive | null>(null);
+  const onTransient = useCallback((ev: any) => {
+    if (ev?.type === 'loop.reasoning') setReasoning(cur => appendReasoning(cur, ev));
+  }, []);
+  const { events, connected } = useRunStream(activeRunId ?? undefined, onTransient);
   const view = useMemo(() => deriveRunView(events), [events]);
+  // 模型调用是否在途（"模型思考中 · N 秒"的依据）：只看主循环的最后一条事件
+  const thinking = useMemo(() => deriveThinking(events, view.runStatus), [events, view.runStatus]);
+  useEffect(() => {
+    if (!activeRunId || view.runStatus) setReasoning(null);
+  }, [activeRunId, view.runStatus]);
 
   // token 预算实时消耗（loop.step_started 携带累计值与预算；终态后保留末值）
   const tokenUsage = useMemo(() => {
@@ -252,7 +268,7 @@ export default function ChatPage() {
       const runSession = new Map<string, string | null>(allRuns.map((r: any) => [r.id, r.session_id]));
       for (const run of allRuns) {
         const key = run.session_id ?? '(未分组)';
-        if (!bySession.has(key)) bySession.set(key, { sessionId: run.session_id, runs: [] });
+        if (!bySession.has(key)) bySession.set(key, { sessionId: run.session_id, runs: [], automation: Boolean(run.automation_session) });
         bySession.get(key)!.runs.push({ id: run.id, goal: run.goal, status: run.status, createdAt: run.created_at, parentId: run.parent_run_id });
       }
       // 血缘求根：会话内任一 run 的 parent 指向别的会话 → 根 = 那个会话的根
@@ -388,10 +404,13 @@ export default function ChatPage() {
     }
   }, [view.runStatus, currentSessionId, loadSessionThread]);
 
-  // 会话列表加载后，若无当前会话则选中最近的（保持续接）
+  // 会话列表加载后，若无当前会话则选中最近的普通会话（保持续接）。
+  // 评测 / 基准这类自动化会话不自动选中：在里面接着提问会把最近一道评测题的完整过程带进新任务；
+  // 只有自动化会话时一个都不选，停在"新建任务"
   useEffect(() => {
-    if (!currentSessionId && sessions.length > 0 && !activeRunId) {
-      setCurrentSessionId(sessions[0].sessionId);
+    if (!currentSessionId && !activeRunId) {
+      const pick = pickAutoSession(sessions);
+      if (pick?.sessionId) setCurrentSessionId(pick.sessionId);
     }
   }, [sessions, currentSessionId, activeRunId]);
 
@@ -607,8 +626,9 @@ export default function ChatPage() {
     setSubmitting(true);
     try {
       const res = await api.createRun({
-        // 终审 P2：续接 goal 聚焦"完成剩余项"（配合 checkpoint 续接，模型直接从断点继续）
-        goal: '继续：上一轮因预算中断，请直接从上次进度继续（已完成的部分不要重做），完成剩余步骤并产出最终成果。若中途需要长篇输出，请分步写盘再合并，避免单次超长。',
+        // 终审 P2：续接 goal 聚焦"完成剩余项"（配合 checkpoint 续接，模型直接从断点继续）。
+        // 不写中断原因：预算耗尽 / 原地打转被终止 / 网络不可用都会走到这里
+        goal: '继续：上一轮中途中断了，请直接从上次进度继续（已完成的部分不要重做），完成剩余步骤并产出最终成果。若中途需要长篇输出，请分步写盘再合并，避免单次超长。',
         sessionId: currentSessionId,
         workspaceId: workspaceId || undefined,
         continueSession: true,
@@ -620,6 +640,19 @@ export default function ChatPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  // 先汇报：长任务跑到一半，用户想立刻看到目前的结论 — 走"运行中补充"的同一条通道，
+  // 在下一个步边界送达模型（不是打断：正在执行的工具照常跑完）。8 秒内只发一次，防连点刷屏
+  const reportSentAt = useRef(0);
+  const reportNow = async () => {
+    if (!activeRunId || Date.now() - reportSentAt.current < 8000) return;
+    reportSentAt.current = Date.now();
+    try {
+      await api.injectRunInput(activeRunId, t('chat.reportNowMessage'));
+      setInjectNote(t('chat.reportNowSent'));
+      setTimeout(() => setInjectNote(null), 4000);
+    } catch { /* 点下去的瞬间任务刚好结束：什么都不用做 */ }
   };
 
   const cancel = async () => {
@@ -868,7 +901,7 @@ export default function ChatPage() {
                 })()}
               </div>
             ))}
-          {activeRunId && <RunLiveView goal={(() => { const g = sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? sessionRuns.find(r => r.id === activeRunId)?.goal ?? ''; const cut = g.indexOf('\n\n（本对话继承从'); return cut >= 0 ? g.slice(0, cut) : g; })()} attachments={runAttachments[activeRunId]} inherited={sessionRuns.find(r => r.id === activeRunId)?.inherited} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} onDecide={decide} onContinue={continueRun} />}
+          {activeRunId && <RunLiveView goal={(() => { const g = sessions.flatMap(s => s.runs).find(r => r.id === activeRunId)?.goal ?? sessionRuns.find(r => r.id === activeRunId)?.goal ?? ''; const cut = g.indexOf('\n\n（本对话继承从'); return cut >= 0 ? g.slice(0, cut) : g; })()} attachments={runAttachments[activeRunId]} inherited={sessionRuns.find(r => r.id === activeRunId)?.inherited} view={view} events={events} streamingText={streamingText} fullFinal={fullFinal} thinking={thinking} reasoning={thinking && reasoning && reasoning.step === thinking.step ? reasoning : null} onReportNow={runExecuting ? reportNow : undefined} onDecide={decide} onContinue={continueRun} />}
           {/* 活跃 run 的产物 chips（实时 — 事件流派生，不等终态刷新） */}
           {(() => {
             const arts = activeRunId ? allArtifacts[activeRunId] : null;
@@ -1256,10 +1289,13 @@ function ProcessSection({
   runId,
   liveView,
   defaultOpen = false,
+  onReportNow,
 }: {
   runId?: string;
   liveView?: ReturnType<typeof deriveRunView>;
   defaultOpen?: boolean;
+  /** 运行中可用：让模型先给出目前的结论（长任务不用干等到结束） */
+  onReportNow?: () => void;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   const [loaded, setLoaded] = useState<ReturnType<typeof deriveRunView> | null>(null);
@@ -1287,8 +1323,9 @@ function ProcessSection({
 
   return (
     <div className="glass rounded-xl border border-glass-border overflow-hidden">
+      <div className="flex items-center">
       <button
-        className="w-full flex items-center gap-2 px-3 py-2 text-xs cursor-pointer text-left hover:bg-bg-elev/30"
+        className="flex-1 min-w-0 flex items-center gap-2 px-3 py-2 text-xs cursor-pointer text-left hover:bg-bg-elev/30"
         onClick={() => setOpen(o => !o)}
       >
         {running
@@ -1303,12 +1340,68 @@ function ProcessSection({
         <span className="flex-1" />
         {open ? <ChevronDownIcon className="w-3.5 h-3.5 text-fg-muted" /> : <ChevronRight className="w-3.5 h-3.5 text-fg-muted" />}
       </button>
+      {running && onReportNow && (
+        <button
+          className="shrink-0 mr-2 px-2 py-1 rounded-md text-[11px] text-fg-secondary hover:text-fg-primary hover:bg-bg-elev/40 border border-glass-border cursor-pointer"
+          onClick={onReportNow}
+        >
+          {t('chat.reportNow')}
+        </button>
+      )}
+      </div>
       {open && (
         <div className="px-3 pb-3 space-y-2 max-h-[480px] overflow-y-auto">
           {!v && <p className="text-xs text-fg-muted py-2">{t('chat.loadingEvents')}</p>}
           {v && <ExecutionLogView todos={v.todos} toolCards={v.toolCards} running={running} />}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * 等待可见（2026-11-24 性能体检落地）：推理模型先思考后下笔——实测从发出任务到看见第一个字
+ * 中位 14.8 秒、p90 49 秒，此前这段时间界面上只有一个转圈。现在显示"思考中 · N 秒"，
+ * 模型输出思考过程时把它直播出来（默认只露最后一截，可展开）。
+ */
+function ThinkingIndicator({ since, reasoning }: { since: number; reasoning: ReasoningLive | null }) {
+  const { t } = useI18n();
+  const [now, setNow] = useState(Date.now());
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  // 换了一步（上一步的思考不必继续展开）
+  useEffect(() => { setExpanded(false); }, [reasoning?.step]);
+
+  const seconds = Math.max(0, Math.round((now - since) / 1000));
+  const text = reasoning?.text ?? '';
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-[85%] chat-bubble-ai text-xs leading-relaxed text-fg-secondary">
+        <p className="flex items-center gap-2 flex-wrap">
+          <span className="animate-pulse text-status-info" aria-hidden>●</span>
+          <span data-testid="thinking-timer">{t('chat.thinkingTimer', { sec: seconds })}</span>
+          {text && (
+            <button
+              className="underline decoration-dotted cursor-pointer text-fg-muted hover:text-fg-primary"
+              onClick={() => setExpanded(v => !v)}
+            >
+              {t(expanded ? 'chat.reasoningHide' : 'chat.reasoningShow')}
+            </button>
+          )}
+        </p>
+        {text && !expanded && (
+          <p className="mt-1 text-fg-muted whitespace-pre-wrap break-words line-clamp-2">{text.slice(-160)}</p>
+        )}
+        {text && expanded && (
+          <div className="mt-2">
+            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-words text-[11px] font-mono text-fg-secondary bg-bg-panel/60 rounded-lg p-3 border border-glass-border">{text}</pre>
+            <p className="mt-1 text-[11px] text-fg-muted">{t('chat.reasoningHint')}</p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1343,6 +1436,9 @@ function RunLiveView({
   events,
   streamingText,
   fullFinal,
+  thinking,
+  reasoning,
+  onReportNow,
   onDecide,
   onContinue,
 }: {
@@ -1353,6 +1449,11 @@ function RunLiveView({
   events: RunEventItem[];
   streamingText: string;
   fullFinal: string | null;
+  /** 模型调用在途（思考计时）；null = 不在思考 / 已终态 */
+  thinking?: { since: number; step: number } | null;
+  /** 当前这一步的思考过程直播；没有（模型不输出思考过程）或不是同一步时为 null */
+  reasoning?: ReasoningLive | null;
+  onReportNow?: () => void;
   onDecide: (approvalId: string, approved: boolean) => void;
   onContinue?: () => void;
 }) {
@@ -1368,11 +1469,22 @@ function RunLiveView({
     ? <Tag variant={view.runStatus === 'completed' ? 'success' : view.runStatus === 'failed' ? 'danger' : 'info'}>{t(statusLabel(view.runStatus))}</Tag>
     : <Tag variant="info">{t('chat.statusRunning')}</Tag>;
 
+  // 失败原因归类成人话：用户先看到"额度用完了"，原始报错另起一行（认不出的原样显示）
+  const failureClass = view.runStatus === 'failed' ? classifyRunError(view.runError) : null;
+  // 这几类失败是"外部条件"造成的，续接有意义（配额恢复 / 网络恢复 / 服务重启之后）
+  const continueAfterFailure = failureClass === 'quota' || failureClass === 'network' || failureClass === 'timeout' || failureClass === 'interrupted';
+
   return (
     <div className="space-y-4">
-      {/* 失败原因（服务重启被中断 / 原地打转被终止 / 模型报错 — 此前界面上只有一个"失败"标签） */}
+      {/* 失败原因（服务重启被中断 / 原地打转被终止 / 模型报错 — 原因都在这个事件的 error 里） */}
       {view.runError && (
-        <p className="text-xs text-status-danger whitespace-pre-wrap break-words">{t('chat.failedReason', { reason: view.runError })}</p>
+        <div className="text-xs text-status-danger whitespace-pre-wrap break-words">
+          <p>{t('chat.failedReason', { reason: failureClass ? t(`chat.fail.${failureClass}`) : view.runError })}</p>
+          {failureClass && <p className="text-[11px] text-fg-muted mt-0.5">{view.runError}</p>}
+          {continueAfterFailure && onContinue && (
+            <Button size="sm" variant="secondary" className="mt-2" onClick={onContinue}>{t('chat.continueRun')}</Button>
+          )}
+        </div>
       )}
       {/* 继承的提问气泡（分支线） */}
       {inherited?.map((b, i) => (
@@ -1387,7 +1499,10 @@ function RunLiveView({
       <SentAttachments names={attachments} />
 
       {/* 执行过程（深度思考式：运行中实时展开，完成后折叠可回看） */}
-      <ProcessSection liveView={view} defaultOpen={!view.runStatus} />
+      <ProcessSection liveView={view} defaultOpen={!view.runStatus} onReportNow={onReportNow} />
+
+      {/* 等待可见：模型调用在途时显示"思考中 · N 秒"与思考过程直播 */}
+      {thinking && !view.runStatus && <ThinkingIndicator since={thinking.since} reasoning={reasoning ?? null} />}
 {/* 审批卡片 */}
       {view.pendingApprovals.map(a => (
         <Card key={a.approvalId} className="!p-4 border-status-warn/40">
@@ -1444,6 +1559,20 @@ function RunLiveView({
                   <Button size="sm" variant="secondary" onClick={onContinue}>{t('chat.continueRun')}</Button>
                 )}
               </div>
+            )}
+            {view.endReason === 'network_down' && (
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <p className="text-xs text-status-warn">{t('chat.networkDownNote')}</p>
+                {onContinue && (
+                  <Button size="sm" variant="secondary" onClick={onContinue}>{t('chat.continueRun')}</Button>
+                )}
+              </div>
+            )}
+            {/* 结果可信度：抓取失败较多时在回答旁提醒（网络层失败 ≥5 次的评测题正确率比零失败的低约 10 个百分点） */}
+            {view.runStatus === 'completed' && view.endReason === 'final_answer' && view.fetchFailures.total >= FETCH_FAILURE_WARN_AT && (
+              <p className="mt-2 text-xs text-status-warn">
+                {t('chat.fetchFailuresNote', { n: view.fetchFailures.total, net: view.fetchFailures.network })}
+              </p>
             )}
           </div>
         </div>
