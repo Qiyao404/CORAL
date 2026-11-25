@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { pickAutoSession } from '../session-select';
+import { pickAutoSession, sessionForNewMessage, isAutomationSession } from '../session-select';
 
 /**
  * 打开对话页时自动选中哪个会话。
@@ -28,5 +28,44 @@ describe('pickAutoSession · 自动选中哪个会话', () => {
   it('只认服务端给的标记，不看会话名字（规则只在服务端一处）', () => {
     // 名字像评测、但服务端没标 → 照常可选（规则改了前端不用跟着改）
     expect(pickAutoSession([s('eval-legacy-name')])).toEqual(s('eval-legacy-name'));
+  });
+});
+
+/**
+ * 在输入框里发新消息时落在哪个会话。
+ * 背景：人手动点开一个评测会话再输入，新任务会按"续接"接在最近一道评测题的完整过程后面；
+ * 而且评测会话在系统里按自动化会话对待——任务不写长期记忆、不做经验蒸馏。一个正常需求就这么悄悄按评测规则跑了。
+ */
+describe('sessionForNewMessage · 发送新消息落在哪个会话', () => {
+  const s = (sessionId: string, automation = false) => ({ sessionId, automation });
+  const fresh = () => 'sess_new';
+
+  it('当前在评测会话里 → 新开一个会话，不续接评测历史', () => {
+    const list = [s('gaia-eval-session', true), s('sess_mine')];
+    expect(sessionForNewMessage('gaia-eval-session', list, fresh)).toBe('sess_new');
+  });
+
+  it('当前在普通会话里 → 续接当前会话（多轮对话的体验不变）', () => {
+    expect(sessionForNewMessage('sess_mine', [s('gaia-eval-session', true), s('sess_mine')], fresh)).toBe('sess_mine');
+  });
+
+  it('没有选中会话 → 新开一个', () => {
+    expect(sessionForNewMessage(null, [s('sess_mine')], fresh)).toBe('sess_new');
+  });
+
+  it('当前会话不在最近的列表里（较早的会话）→ 当普通会话续接，不打断', () => {
+    expect(sessionForNewMessage('sess_old', [s('gaia-eval-session', true)], fresh)).toBe('sess_old');
+  });
+});
+
+describe('isAutomationSession · 输入框要不要提示"这里发送会新开会话"', () => {
+  const s = (sessionId: string, automation = false) => ({ sessionId, automation });
+  it('当前在评测会话里 → 提示', () => {
+    expect(isAutomationSession('gaia-eval-session', [s('gaia-eval-session', true), s('sess_mine')])).toBe(true);
+  });
+  it('普通会话、没有选中、或不在列表里 → 不提示', () => {
+    expect(isAutomationSession('sess_mine', [s('gaia-eval-session', true), s('sess_mine')])).toBe(false);
+    expect(isAutomationSession(null, [s('gaia-eval-session', true)])).toBe(false);
+    expect(isAutomationSession('sess_old', [s('gaia-eval-session', true)])).toBe(false);
   });
 });

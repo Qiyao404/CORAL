@@ -10,3 +10,28 @@
 export function pickAutoSession<T extends { automation?: boolean }>(sessions: T[]): T | null {
   return sessions.find(s => !s.automation) ?? null;
 }
+
+/**
+ * 在输入框里发新消息时落在哪个会话。
+ *
+ * 人手动点开一个评测会话再输入：按"续接"发起的话，新任务会接在最近一道评测题的完整过程后面；
+ * 而且评测会话在系统里按自动化会话对待 — 任务不写长期记忆、不做经验蒸馏，一个正常需求就这么悄悄按评测规则跑了。
+ * 所以在自动化会话里发送一律新开一个会话（想追问某道评测题，可以靠"经历回溯"在新会话里查历史）。
+ */
+export function sessionForNewMessage(
+  current: string | null,
+  sessions: Array<{ sessionId: string | null; automation?: boolean }>,
+  newSessionId: () => string,
+): string {
+  if (!current) return newSessionId();
+  if (sessions.find(s => s.sessionId === current)?.automation) return newSessionId();
+  return current;
+}
+
+/** 当前是否停在一个自动化会话里（输入框据此提示"这里发送会新开一个会话"） */
+export function isAutomationSession(
+  current: string | null,
+  sessions: Array<{ sessionId: string | null; automation?: boolean }>,
+): boolean {
+  return Boolean(current && sessions.find(s => s.sessionId === current)?.automation);
+}

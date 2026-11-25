@@ -12,7 +12,7 @@ import {
   useRunStream, deriveRunView, deriveThinking, appendReasoning, classifyRunError,
   FETCH_FAILURE_WARN_AT, type ReasoningLive, type RunEventItem,
 } from '../hooks/useRunStream';
-import { pickAutoSession } from '../hooks/session-select';
+import { pickAutoSession, sessionForNewMessage, isAutomationSession } from '../hooks/session-select';
 import { useI18n } from '../i18n';
 
 /**
@@ -500,8 +500,9 @@ export default function ChatPage() {
     if (!rawText.trim() || submitting) return;
     setSubmitting(true);
     try {
-      // 修复（用户反馈）：无会话时生成一个并记住 — 连续多次对话落在同一会话
-      const sid = currentSessionId ?? `sess_${Date.now().toString(36)}`;
+      // 无会话、或当前停在评测这类自动化会话里 → 新开一个会话（在评测会话里续接 = 带着最后一道题的完整过程，
+      // 而且任务按评测规则跑：不写长期记忆、不做经验蒸馏）；否则续接当前会话，连续多次对话落在同一会话
+      const sid = sessionForNewMessage(currentSessionId, sessions, () => `sess_${Date.now().toString(36)}`);
       setCurrentSessionId(sid);
       // 上传上下文注入：明确告诉 agent 用户刚传了哪些文件（消除与磁盘旧文件的歧义）
       const attached = uploadedFiles; // 发送瞬间的快照（await 期间新上传的不属于本条消息）
@@ -1215,7 +1216,7 @@ export default function ChatPage() {
                 }
                 if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit(); }
               }}
-              placeholder={t('chat.goalPlaceholder')}
+              placeholder={t(isAutomationSession(currentSessionId, sessions) ? 'chat.goalPlaceholderAutomation' : 'chat.goalPlaceholder')}
               rows={2}
               className="flex-1 resize-none"
             />

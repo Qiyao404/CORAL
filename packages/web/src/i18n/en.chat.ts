@@ -80,6 +80,7 @@ export const en: Record<string, string> = {
   'chat.slashHint': 'Slash commands — ↑↓ select · Tab/Enter complete · Esc close',
   'chat.atFileHint': 'Reference workspace files — ↑↓ select · Tab/Enter insert · Esc close',
   'chat.goalPlaceholder': 'Describe your goal… (type / for quick commands; Enter to send, Shift+Enter for a new line)',
+  'chat.goalPlaceholderAutomation': 'This is an eval session — a message sent here starts a new session… (Enter to send, Shift+Enter for a new line)',
   'chat.uploadToWorkspace': 'Upload files to the workspace',
   'chat.uploadNeedWorkspaceFirst': 'Create a workspace in Settings before uploading files',
   'chat.uploadNeedWorkspaceAlert': 'Uploading requires a workspace: create one on the Settings page (binding a local folder), then select it at the top.',

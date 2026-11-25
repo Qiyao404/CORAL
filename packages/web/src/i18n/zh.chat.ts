@@ -80,6 +80,7 @@ export const zh: Record<string, string> = {
   'chat.slashHint': '斜杠命令 — ↑↓ 选择 · Tab/Enter 补全 · Esc 关闭',
   'chat.atFileHint': '引用工作区文件 — ↑↓ 选择 · Tab/Enter 插入 · Esc 关闭',
   'chat.goalPlaceholder': '描述你的目标…（输入 / 唤起快捷命令；Enter 发送，Shift+Enter 换行）',
+  'chat.goalPlaceholderAutomation': '这是评测会话，在这里发送会新开一个会话…（Enter 发送，Shift+Enter 换行）',
   'chat.uploadToWorkspace': '上传文件到工作区',
   'chat.uploadNeedWorkspaceFirst': '先在设置页创建工作区，才能上传文件',
   'chat.uploadNeedWorkspaceAlert': '上传需要先绑定工作区：请到「设置」页创建工作区（绑定一个本地文件夹），然后在顶部选择它。',
