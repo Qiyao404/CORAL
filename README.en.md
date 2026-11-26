@@ -5,7 +5,7 @@
 [![CI](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml/badge.svg)](https://github.com/Qiyao404/CORAL/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 
-> **Version: v2.8.0** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
+> **Version: v2.8.1** · [Guided tour (DEMO.en.md)](DEMO.en.md) · [CHANGELOG](CHANGELOG.md)
 > **Positioning: a local-first, single-command, single-file-storage personal agent runtime**
 
 ---
@@ -152,7 +152,7 @@ Six incremental mechanisms covering loss-stopping within a single run, compressi
 **30. Runtime input & ask-back (full-duplex human-agent collaboration)**
 Two complementary channels turn "wait until it finishes" into bidirectional collaboration:
 
-- **Runtime follow-ups**: sending while a run executes no longer silently starts a second parallel run — a choice bar lets the user decide: **Inject now** (the message enters that run's injection inbox and is delivered at the next step boundary through the same gate as teammate messages — never lost, never interrupting the current step, zero prefix-cache invalidation; if the follow-up changes direction significantly, the injection carries a "rewrite your todo list first" nudge and the UI shows the re-plan live) or **Queue** (auto-sent as the next continuation turn after terminal state). Fully event-logged (`run.user_input_received/injected`).
+- **Runtime follow-ups**: sending while a run executes no longer silently starts a second parallel run — a choice bar lets the user decide: **Inject now** (the message enters that run's injection inbox and is delivered at the next step boundary through the same gate as teammate messages — never lost, never interrupting the current step, zero prefix-cache invalidation; if the follow-up changes direction significantly, the injection carries a "rewrite your todo list first" nudge and the UI shows the re-plan live) or **Queue** (auto-sent as the next continuation turn after terminal state; a queued message keeps its own session, run and attachments, so after a session switch it still goes to the original session and workspace once that run ends). Fully event-logged (`run.user_input_received/injected`).
 - **Ask-back (ask_user tool)**: the model proactively asks the user at high-impact decision points where guessing is expensive — multiple choice + recommended marker + free-text pseudo-option, multiple questions coexist with switching. Designed as a **tool, not a skill** (tool definitions are present on every request — no "should have asked but never invoked the skill" miss); shares the approval lifecycle (suspend waiting_human → human answers → resume). Guardrails: ≤3 questions per task (asking can't become an escape hatch), evaluation/automation sessions and scheduled/triggered runs never block (proceed with a stated best-guess assumption), user-configurable wait timeout (default: wait indefinitely); the "don't ask what you can look up yourself" discipline lives in the tool description (verified live: when long-term memory already held the preference, the model declined to ask and explained why). Q&A lands in checkpoints as tool results — fork from before the question to re-run with a different answer (fromSeq=0 origin replay supported when the question was the first step).
 
 **31. Content-addressed checkpoint storage & database compaction**
@@ -162,7 +162,7 @@ Checkpoints previously stored a full message snapshot every step with 90%+ overl
 Turns "done" from a claim into an auditable delivery with a level, proof, and accumulating standards:
 
 - **Criteria before work**: workspace tasks generate an acceptance checklist at start (3-7 binary pass/fail lines; a qualifying line = a third party who never saw the work can judge it in 30 seconds) from the task goal + the workspace's accumulated CHECKS.md. Generation input is strictly limited to the goal and accumulated checks — **never the work product or execution trail**, so the checklist cannot be reverse-tailored to the product; substantive ambiguities found during generation (readings that would materially change the deliverable) are handed to the model through a runtime note — clarify those via ask_user before work begins, take conventional defaults for the rest; unattended runs get no such note
-- **Verification gate**: before the final answer ships, an independent checker judges each line — **default deny** (lines missing a verdict are counted as failed), failures must cite evidence; lines that cannot be verified (e.g. require opening an external link) are honestly marked "unverifiable" rather than guessed PASS; at most 2 pushback rounds, the 3rd forces passage with a warning (the gate guards against letting bad work slip, not against delivery — the human rules last). The checker can read small text artifact contents (whitelisted extensions, ≤8KB) — **artifact content overrides the maker's own claims**
+- **Verification gate**: before the final answer ships, an independent checker judges each line — **default deny** (lines missing a verdict are counted as failed), failures must cite evidence; lines that cannot be verified (e.g. require opening an external link) are honestly marked "unverifiable" rather than guessed PASS; at most 2 pushback rounds, the 3rd forces passage with a warning (the gate guards against letting bad work slip, not against delivery — the human rules last). The checker can read small text artifact contents (whitelisted extensions, ≤8KB) — **artifact content overrides the maker's own claims**; files produced by the run itself are read first (tracked by artifact events, path-checked before reading); PASS verdicts must cite evidence too; all accumulated workspace checks are enforced, long lists in batches; an empty checklist is not graded as the top level
 - **Verification levels**: the completion event carries the verdict (L4 all-pass with evidence / L3 all-pass with some unverifiable / L2 has failures); the chat verdict card shows the level badge and per-line results, with one-click **"promote to permanent check"** on failed lines
 - **One rule per mistake**: promoted lines are appended to the workspace CHECKS.md (dated) and auto-loaded at the start of similar tasks — the checklist grows itself through use (promotion is human-gated, never auto-written)
 - Guardrails: evaluation/automation sessions skip verification entirely; a settings toggle disables it; a checker crash never blocks delivery (fail-open — verification is an enhancement, not a dependency)
@@ -290,13 +290,13 @@ Verified against DeepSeek and DashScope; any OpenAI-compatible endpoint (OpenRou
 | Persistence | SQLite (better-sqlite3, WAL mode, versioned schema migrations) |
 | Skills | YAML frontmatter (gray-matter) + chokidar hot reload |
 | Progress protocol | in-house `[CORAL_PROGRESS]` single-line stderr JSON protocol (Python + Node SDKs, see [docs/AUTHORING_PROGRESS.md](./docs/AUTHORING_PROGRESS.md)) |
-| Quality | Vitest (802 cases + 39 web) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
+| Quality | Vitest (807 cases + 41 web) + GitHub Actions (ubuntu/windows/macos × Node 20/22) |
 
 ---
 
 ## Tests & Benchmarks
 
-- **Tests**: 802 cases (Vitest, server) + 39 (web) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
+- **Tests**: 807 cases (Vitest, server) + 41 (web) covering the kernel loop / gates / context management / persistence / MCP / skill runtime / external guards / team collaboration; CI passes on three platforms (ubuntu / windows / macos × Node 20/22).
 - **GAIA benchmark**: [docs/GAIA.md](./docs/GAIA.md) — official GAIA benchmark validation split, **87.1%** (85 questions, deterministic exact match). L1 90.2% / L2 96.2% / L3 66.7%.
 - **Performance**: [docs/BENCHMARK.md](./docs/BENCHMARK.md) — context-compression gains (1.2MB history → 169KB, −86%), SQLite WAL and JSONL persistence throughput. Script: `npx tsx scripts/benchmark.mts`.
 
@@ -574,7 +574,7 @@ CORAL/
 - **MCP stdio execution boundary**: external MCP servers run as local subprocesses; their capability boundary is determined by their own implementations; the platform constrains via annotation mapping and approval tiers.
 - **code-exec is interpreter-level isolation**: audit hooks intercept *actions*; it is not an OS-level container — it does not defend against someone versed in interpreter internals deliberately bypassing it; file existence remains probeable; there is no memory cap. Only standard-library compute modules are available inside the sandbox (third-party libraries such as numpy / pandas load restricted modules during their own import); the trusted root is the interpreter's own directory — on Linux with the system Python that is /usr or /usr/local, which sandboxed code can open read-only
 - **Readable-page extraction is heuristic**: it keeps visible text in reading order, folds navigation link lists and does not run page scripts — pages that need script rendering yield no text (the tool result says so), and complex layouts are approximated; the link tiers (content / link lists / site menus) are heuristic too, so pages with very many links inline only part of them and the rest is looked up by keyword in the evidence record
-- **Web tests cover pure logic only**: the event window, run view and thinking detection are unit-tested, components are not — UI changes still rely on builds and live verification
+- **Web tests are mostly pure logic**: the event window, run view, thinking detection and the chat page's follow-up flow are tested; other components are not — UI changes still rely on builds and live verification
 
 ---
 

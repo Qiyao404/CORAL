@@ -4,7 +4,7 @@
 
 > Audience: you (verification) and interviewers/friends (demo). Ordered by "performance impact" — each act takes 1-3 minutes, all doable in a browser + one terminal.
 > Prereq: service running (http://127.0.0.1:3001) with a real model in `.env` (demo mode halves the effect).
-> Covers: v2.8.0. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
+> Covers: v2.8.1. The sidebar has a one-click EN/中文 switch — the whole UI is bilingual.
 
 ---
 
