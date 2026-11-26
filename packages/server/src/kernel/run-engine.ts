@@ -37,8 +37,9 @@ import { fsSearchTool } from '../tools/builtin/fs-search.js';
 import { docxTools } from '../tools/builtin/docx.js';
 import { unifiedDiff } from '../tools/diff.js';
 import { resolveWorkspacePath } from '../tools/workspace-path.js';
-import { readFileSync, existsSync, readdirSync, statSync } from 'fs';
-import { join as pathJoin } from 'path';
+import { readFileSync, existsSync } from 'fs';
+import { readdir, stat, readFile } from 'fs/promises';
+import { join as pathJoin, relative, sep } from 'path';
 import { dirname as pathDirname } from 'path';
 import { nanoid } from 'nanoid';
 import type { Tool, ToolPermission } from '../tools/types.js';
@@ -375,30 +376,49 @@ export class RunEngine {
   }
 
   /** 验证工程：工作区产物清单（名字+大小+小文本内容 — 检查者打开活产物，而不是听转述） */
-  private workspaceArtifacts(workspaceDir: string, cap = 50): Array<{ rel: string; bytes: number; content?: string }> {
-    try {
-      const out: Array<{ rel: string; bytes: number; content?: string }> = [];
-      const walk = (rel: string, depth: number) => {
-        if (out.length >= cap || depth > 2) return;
-        for (const e of readdirSync(pathJoin(workspaceDir, rel))) {
-          if (out.length >= cap) return;
-          if (e.startsWith('.') || e === 'node_modules' || e === 'CHECKS.md') continue;
-          const r = rel ? `${rel}/${e}` : e;
-          const abs = pathJoin(workspaceDir, r);
-          try {
-            const st = statSync(abs);
-            if (st.isDirectory()) walk(r, depth + 1);
-            else {
-              // 小文本产物带内容进判定（ground truth 而非读代码哲学的落地：打开它）
-              const small = /\.(md|txt|json|csv|html|ya?ml)$/i.test(e) && st.size <= 8 * 1024;
-              out.push({ rel: r, bytes: st.size, ...(small ? { content: readFileSync(abs, 'utf-8').slice(0, 6000) } : {}) });
-            }
-          } catch { /* 并发删除跳过 */ }
+  private async workspaceArtifacts(workspaceDir: string, runId: string, cap = 50): Promise<Array<{ rel: string; bytes: number; content?: string }>> {
+    const files = new Map<string, { bytes: number; mtime: number; tracked: boolean }>();
+    const ignored = (name: string) => name.startsWith('.') || name === 'node_modules' || name === 'CHECKS.md';
+    const add = async (abs: string, tracked: boolean) => {
+      const rel = relative(workspaceDir, abs).split(sep).join('/');
+      if (!rel || files.has(rel) || rel.split('/').some(ignored)) return;
+      try {
+        const st = await stat(abs);
+        if (st.isFile()) files.set(rel, { bytes: st.size, mtime: st.mtimeMs, tracked });
+      } catch { /* 产物可能已移走 */ }
+    };
+
+    for (const event of this.events.listArtifacts(runId).reverse()) {
+      const path = event.payload.rel ?? event.payload.path;
+      if (typeof path !== 'string') continue;
+      const resolved = resolveWorkspacePath(workspaceDir, path);
+      if (resolved.ok) await add(resolved.absPath, true);
+      if (files.size >= cap) break;
+    }
+    // 外部工具可能直接写盘而没有产物事件，按修改时间补足候选。
+    const walk = async (dir: string, depth: number) => {
+      try {
+        for (const entry of await readdir(dir, { withFileTypes: true })) {
+          if (ignored(entry.name)) continue;
+          const path = pathJoin(dir, entry.name);
+          if (entry.isDirectory() && depth < 2) await walk(path, depth + 1);
+          if (entry.isFile()) await add(path, false);
         }
-      };
-      walk('', 0);
-      return out;
-    } catch { return []; }
+      } catch { /* 目录可能已移走 */ }
+    };
+    if (files.size < cap) await walk(workspaceDir, 0);
+    const candidates = [...files].sort(([, a], [, b]) => Number(b.tracked) - Number(a.tracked) || b.mtime - a.mtime)
+      .slice(0, cap);
+    return Promise.all(candidates.map(async ([rel, { bytes }]) => {
+      if (/\.(md|txt|json|csv|html|ya?ml)$/i.test(rel) && bytes <= 8 * 1024) {
+        const resolved = resolveWorkspacePath(workspaceDir, rel);
+        if (resolved.ok) {
+          try { return { rel, bytes, content: (await readFile(resolved.absPath, 'utf-8')).slice(0, 6000) }; }
+          catch { /* 读取失败时仍保留文件信息 */ }
+        }
+      }
+      return { rel, bytes };
+    }));
   }
 
   /** 一错一规（人工采纳）：把一条检查行追加进该 run 工作区的 CHECKS.md */
@@ -833,7 +853,7 @@ export class RunEngine {
               goal: input.goal,
               criteria: criteria.lines,
               finalContent,
-              artifacts: this.workspaceArtifacts(workspace!.dir),
+              artifacts: await this.workspaceArtifacts(workspace!.dir, runId),
             });
             const rounds = (this.verdictByRun.get(runId)?.rounds ?? 0) + 1;
             this.verdictByRun.set(runId, { ...verdict, rounds });

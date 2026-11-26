@@ -45,6 +45,15 @@ describe('清单生成（B4 标准前置）', () => {
     expect(r.lines.find(l => l.line === '榜单为 3 行')?.source).toBe('generated');
   });
 
+  it('保留全部累积规则，即使超出生成提示与十行清单预算', async () => {
+    const rules = Array.from({ length: 24 }, (_, i) => i + ' ' + 'a'.repeat(200));
+    rules.forEach(rule => appendCheck(dir, rule));
+    const llm = stubLlm(() => ({ lines: [rules[0], '本轮专用规则'] }));
+    const criteria = await generateCriteria({ llm, goal: '交付报告', workspaceDir: dir });
+    expect(criteria.lines.filter(l => l.source === 'accumulated').map(l => l.line)).toEqual(rules);
+    expect(criteria.lines).toHaveLength(25);
+  });
+
   it('歧义返回 ambiguities（而不是猜成清单行）', async () => {
     const llm = stubLlm(() => ({ lines: ['文件存在'], ambiguities: ['"一页"未定义是 A4 还是长页'] }));
     const r = await generateCriteria({ llm, goal: '一页文档', workspaceDir: dir });
@@ -54,6 +63,26 @@ describe('清单生成（B4 标准前置）', () => {
 });
 
 describe('判定（A1 默认否）', () => {
+  it('模型声称通过但没有提供证据时打回', async () => {
+    const llm = stubLlm(() => ({ results: [{ index: 1, pass: true, evidence: '   ' }] }));
+    const v = await verifyDeliverable({ llm, goal: '报告', criteria: [{ line: '报告已保存', source: 'generated' }], finalContent: '', artifacts: [] });
+    expect(v).toMatchObject({ level: 2, passed: false, passedCount: 0 });
+    expect(v.results[0].evidence).toContain('证据');
+  });
+
+  it('长清单分批检查，最后一批的不通过会影响整体验收', async () => {
+    const criteria = Array.from({ length: 11 }, (_, i) => ({ line: String(i + 1), source: 'accumulated' as const }));
+    const llm = stubLlm(() => ({
+      results: llm.calls.length === 1
+        ? criteria.slice(0, 10).map(c => ({ line: c.line, pass: true, evidence: '见正文' }))
+        : [{ index: 1, pass: false, evidence: '缺少末项' }],
+    }));
+    const verdict = await verifyDeliverable({ llm, goal: '验收', criteria, artifacts: [], finalContent: '正文' });
+    expect(llm.calls).toHaveLength(2);
+    expect(verdict).toMatchObject({ passed: false, level: 2, passedCount: 10, totalCount: 11 });
+    expect(verdict.results[10]).toMatchObject({ line: '11', evidence: '缺少末项' });
+  });
+
   it('全过带证据 → level 4；有不可验 → 3；有失败 → 2；缺判定的行按 FAIL 补齐', async () => {
     const criteria = [
       { line: 'A', source: 'generated' as const },
@@ -68,12 +97,12 @@ describe('判定（A1 默认否）', () => {
     expect(v.level).toBe(4); expect(v.passed).toBe(true);
     // 一条不可验
     llm = stubLlm(() => ({ results: [
-      { line: 'A', pass: true }, { line: 'B', pass: false, unverifiable: true, evidence: '需要开链接' }, { line: 'C', pass: true },
+      { line: 'A', pass: true, evidence: '见最终回答' }, { line: 'B', pass: false, unverifiable: true, evidence: '需要开链接' }, { line: 'C', pass: true, evidence: '见最终回答' },
     ] }));
     v = await verifyDeliverable({ llm, goal: 'g', criteria, finalContent: 'f', artifacts: [] });
     expect(v.level).toBe(3); expect(v.passed).toBe(true); // 不可验不算失败（诚实而非猜 PASS）
     // 一条失败 + 一条缺判定（默认否补 FAIL）
-    llm = stubLlm(() => ({ results: [ { line: 'A', pass: true }, { line: 'B', pass: false, evidence: '产物中没有 X' } ] }));
+    llm = stubLlm(() => ({ results: [ { line: 'A', pass: true, evidence: '见最终回答' }, { line: 'B', pass: false, evidence: '产物中没有 X' } ] }));
     v = await verifyDeliverable({ llm, goal: 'g', criteria, finalContent: 'f', artifacts: [] });
     expect(v.level).toBe(2); expect(v.passed).toBe(false);
     expect(v.results.find(r => r.line === 'C')?.pass).toBe(false); // 缺判定 → FAIL

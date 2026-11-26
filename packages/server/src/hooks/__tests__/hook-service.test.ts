@@ -12,18 +12,16 @@ import { HookService } from '../hook-service.js';
 
 let dir: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'coral-hooks-'));
+  dir = mkdtempSync(join(tmpdir(), 'coral hooks-'));
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-const nodeBin = process.execPath.replace(/\\/g, '/');
-
 function writeHelper(name: string, code: string): string {
   const p = join(dir, name).replace(/\\/g, '/');
   writeFileSync(p, code, 'utf-8');
-  return `${nodeBin} ${p}`;
+  return `node "${p}"`;
 }
 
 function svcWith(hooks: Record<string, unknown[]>): HookService {

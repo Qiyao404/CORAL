@@ -33,7 +33,7 @@ export class FilesystemSkillRegistry {
     console.log(`[Skill 注册表] 已加载 ${this.cache.size} 个 Skill`);
   }
 
-  async reloadSkill(name: string): Promise<void> {
+  async reloadSkill(name: string): Promise<boolean> {
     const skillDir = join(this.skillsDir, name);
     const manifest = parseSkillMd(skillDir);
 
@@ -46,12 +46,14 @@ export class FilesystemSkillRegistry {
         version: manifest.version,
       });
       console.log(`[Skill 注册表] ${existed ? '更新' : '注册'}: ${name} v${manifest.version}`);
+      return true;
     } else {
       eventBus.emit('skill.reload_failed', {
         skillName: name,
         error: '解析 SKILL.md 失败',
       });
       console.warn(`[Skill 注册表] 加载失败: ${name}`);
+      return false;
     }
   }
 

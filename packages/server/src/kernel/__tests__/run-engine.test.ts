@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync } from 'fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, utimesSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -398,4 +398,24 @@ describe('REG-04/15 回归：checkpoint 不含悬空 toolCalls 与部分应答�
       }
     }
   }
+});
+
+it('验收优先收集本轮深层产物及最新写入文件', async () => {
+  const ws = join(tmp, 'artifact-priority');
+  mkdirSync(join(ws, 'a', 'b', 'c'), { recursive: true });
+  for (let i = 0; i < 55; i++) {
+    const file = join(ws, 'old-' + i + '.md');
+    writeFileSync(file, 'old');
+    utimesSync(file, 1000, 1000);
+  }
+  writeFileSync(join(ws, 'a/b/c/tracked.md'), 'tracked');
+  writeFileSync(join(ws, 'z-new.md'), 'new');
+  const engine = newEngine(makeLLM([]));
+  const runId = newRunId();
+  runStore.insert({ id: runId, goal: '验收', mode: 'free' });
+  eventStore.insert({ runId, seq: 1, type: 'artifact', payload: { rel: 'a/b/c/tracked.md' } });
+  const artifacts = await engine['workspaceArtifacts'](ws, runId);
+  expect(artifacts[0]).toMatchObject({ rel: 'a/b/c/tracked.md', content: 'tracked' });
+  expect(artifacts).toContainEqual(expect.objectContaining({ rel: 'z-new.md', content: 'new' }));
+  expect(artifacts).toHaveLength(50);
 });

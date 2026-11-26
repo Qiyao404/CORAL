@@ -9,6 +9,7 @@ import { TeamService } from '../team-service.js';
 import { SearchStore } from '../../store/search-store.js';
 import { migrate } from '../../store/migrate.js';
 import { buildTrajectoryLines } from '../trajectory.js';
+import { FilesystemSkillRegistry } from '../../skill-runtime/filesystem-registry.js';
 import { EvolutionService } from '../../services/evolution-service.js';
 import type { ChatRequest, ChatResponse } from '../../providers/types.js';
 import type { Tool } from '../../tools/types.js';
@@ -217,22 +218,37 @@ describe('轨迹 JSONL 导出（训练数据口径）', () => {
 // ─── ⑤ 演化管线（提议 → 人审 → 落地） ─────────────────────
 
 function makeEvolution(llmChat: (req: any) => Promise<{ content: string }>, skillsDir: string) {
-  const reloaded: string[] = [];
+  const registry = new FilesystemSkillRegistry(skillsDir);
   const svc = new EvolutionService(
-    { llm: { chat: llmChat }, skillsDir, registry: { listAll: () => [], reloadSkill: async (n: string) => { reloaded.push(n); } } as any },
+    { llm: { chat: llmChat }, skillsDir, registry },
     dir,
   );
-  return { svc, reloaded };
+  return { svc, registry };
 }
 
 describe('演化管线（技能修订 / 新技能 / 画像提议）', () => {
+  it('拒绝无法加载的新技能，不标记接受或写入无效清单', async () => {
+    const skillsDir = join(dir, 'skills');
+    const { svc } = makeEvolution(async () => ({
+      content: JSON.stringify({ name: 'new-note', rationale: '记录经验', skillMd: '# missing manifest' }),
+    }), skillsDir);
+    await svc.considerRun({
+      runId: 'new', goal: '整理记录', steps: 12, toolCalls: 15, skillsUsed: [], skillFailures: [],
+      gateRejections: 0, subagentFailures: 0, transcriptTail: '...',
+    });
+    const [proposal] = svc.list('pending');
+    expect((await svc.decide(proposal.id, true)).ok).toBe(false);
+    expect(svc.list('pending')).toHaveLength(1);
+    expect(existsSync(join(skillsDir, 'new-note', 'SKILL.md'))).toBe(false);
+  });
+
   it('① 技能修订：负信号足够 → LLM 起草 → 接受后写盘 + 旧版备份 + 热重载', async () => {
     const skillsDir = join(dir, 'skills');
     mkdirSync(join(skillsDir, 'my-skill'), { recursive: true });
-    writeFileSync(join(skillsDir, 'my-skill', 'SKILL.md'), '---\nname: my-skill\ndescription: d\n---\n\n旧版内容', 'utf-8');
+    writeFileSync(join(skillsDir, 'my-skill', 'SKILL.md'), '---\nname: my-skill\nversion: 1.0.0\nexecution_mode: llm_only\ndescription: d\n---\n\n旧版内容', 'utf-8');
 
-    const { svc, reloaded } = makeEvolution(async () => ({
-      content: JSON.stringify({ rationale: '修复超时处理缺失', revisedSkillMd: '---\nname: my-skill\ndescription: d\n---\n\n新版内容（含超时处理）' }),
+    const { svc, registry } = makeEvolution(async () => ({
+      content: JSON.stringify({ rationale: '修复超时处理缺失', revisedSkillMd: '---\nname: my-skill\nversion: 1.0.0\nexecution_mode: llm_only\ndescription: d\n---\n\n新版内容（含超时处理）' }),
     }), skillsDir);
 
     await svc.considerRun({
@@ -254,17 +270,17 @@ describe('演化管线（技能修订 / 新技能 / 画像提议）', () => {
     // 旧版备份 + 热重载调用
     const histDir = join(skillsDir, 'my-skill', '.history');
     expect(existsSync(histDir)).toBe(true);
-    expect(reloaded).toContain('my-skill');
+    expect(registry.has('my-skill')).toBe(true);
   });
 
   it('② 新技能提议：复杂任务 → 草案 → 接受后创建并重载', async () => {
     const skillsDir = join(dir, 'skills2');
     mkdirSync(skillsDir, { recursive: true });
-    const { svc, reloaded } = makeEvolution(async () => ({
+    const { svc, registry } = makeEvolution(async () => ({
       content: JSON.stringify({
         name: 'deploy-runbook',
         rationale: '部署排查流程可复用',
-        skillMd: '---\nname: deploy-runbook\ndescription: 部署排查\nexecution_mode: llm_only\n---\n\n# 部署排查\n\n步骤...',
+        skillMd: '---\nname: deploy-runbook\nversion: 1.0.0\ndescription: 部署排查\nexecution_mode: llm_only\n---\n\n# 部署排查\n\n步骤...',
       }),
     }), skillsDir);
 
@@ -282,7 +298,7 @@ describe('演化管线（技能修订 / 新技能 / 画像提议）', () => {
     const r = await svc.decide(pending[0].id, true);
     expect(r.ok).toBe(true);
     expect(existsSync(join(skillsDir, 'deploy-runbook', 'SKILL.md'))).toBe(true);
-    expect(reloaded).toContain('deploy-runbook');
+    expect(registry.has('deploy-runbook')).toBe(true);
   });
 
   it('③ 画像提议 + 拒绝路径；同一 run 只产生一类提议', async () => {

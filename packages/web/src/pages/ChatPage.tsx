@@ -35,6 +35,36 @@ interface Workspace {
   permission: string;
 }
 
+interface ChatMessageDraft {
+  text: string;
+  runId: string | null;
+  request: Parameters<typeof api.createRun>[0] & { sessionId: string };
+  attachments: string[];
+  references: string[];
+}
+
+function hasRunEnded(events: RunEventItem[], runId: string | null) {
+  return events.some(e => e.runId === runId && ['run.completed', 'run.failed', 'run.cancelled'].includes(e.type));
+}
+
+// 当前会话复用已有事件流，切换后继续监听原任务。
+function WaitForRun({ runId, visibleEvents, onFinish }: {
+  runId: string;
+  visibleEvents?: RunEventItem[];
+  onFinish: () => void;
+}) {
+  const background = useRunStream(visibleEvents ? undefined : runId);
+  const events = visibleEvents ?? background.events;
+  const sent = useRef(false);
+  useEffect(() => {
+    if (!sent.current && hasRunEnded(events, runId)) {
+      sent.current = true;
+      onFinish();
+    }
+  }, [events, runId, onFinish]);
+  return null;
+}
+
 export default function ChatPage() {
   const navigate = useNavigate();
   const { t } = useI18n();
@@ -42,6 +72,8 @@ export default function ChatPage() {
   const [submitting, setSubmitting] = useState(false);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const selection = useRef({ sessionId: currentSessionId, runId: activeRunId });
+  selection.current = { sessionId: currentSessionId, runId: activeRunId };
   const [sessions, setSessions] = useState<SessionItem[]>([]);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   // 工作区选择持久化：刷新/重开浏览器不丢（存在性在列表加载后校验）
@@ -301,7 +333,7 @@ export default function ChatPage() {
         .sort((a, b) => (b.sessions.at(-1)?.runs.at(-1)?.createdAt ?? '').localeCompare(a.sessions.at(-1)?.runs.at(-1)?.createdAt ?? ''))
         .slice(0, 20);
       setCollections(cols);
-      const list = [...bySession.values()].slice(0, 20);
+      const list = [...bySession.values()];
       setSessions(list);
       return list;
     } catch { return []; }
@@ -360,6 +392,7 @@ export default function ChatPage() {
         } catch { return r; }
       }));
       // Fix3：保留已有 inherited（防止 view.runStatus 触发的重载覆盖掉之前加载的继承气泡）
+      if (selection.current.sessionId !== sid) return;
       setSessionRuns(prev => enriched.map(item => {
         if (item.inherited?.length) return item;
         const old = prev.find(p => p.id === item.id);
@@ -369,10 +402,10 @@ export default function ChatPage() {
       // 自动订阅正在运行的 run（评测等外部创建的 run 不经 submit 流程，没有 activeRunId——
       // 用户点开会话后应自动看到实时过程，不需要手动刷新）
       const running = (res.items ?? []).find((r: any) => r.status === 'running' || r.status === 'waiting_human');
-      if (running && !activeRunId) {
+      if (running && !selection.current.runId) {
         setActiveRunId(running.id);
       }
-    } catch { setSessionRuns([]); }
+    } catch { if (selection.current.sessionId === sid) setSessionRuns([]); }
   }, []);
 
   useEffect(() => { loadSessionThread(currentSessionId); }, [currentSessionId, loadSessionThread]);
@@ -474,119 +507,116 @@ export default function ChatPage() {
 
   // ── 运行中输入三态（立即补充 / 排队 / 正常发送）──────────────────────
   // run 执行中发送不再静默开并行第二个 run —— 弹选择条由用户定夺
-  const [pendingSend, setPendingSend] = useState<string | null>(null);   // 待选择动作的文本
-  const [queuedFollowUp, setQueuedFollowUp] = useState<string | null>(null); // 排队：终态后自动发送
-  const [injectNote, setInjectNote] = useState<string | null>(null);     // 操作反馈（短暂显示）
+  const [pending, setPending] = useState<ChatMessageDraft | null>(null);
+  const [queue, setQueue] = useState<ChatMessageDraft[]>([]);
+  const [injectNote, setInjectNote] = useState<string | null>(null);
+  const pendingSend = pending && pending.runId === activeRunId && pending.request.sessionId === currentSessionId ? pending : null;
+  const queuedFollowUp = queue.find(m => m.runId === activeRunId);
   const runExecuting = Boolean(activeRunId) && !view.runStatus;
 
-  // 终态联动：排队的补充自动作为下一轮发出（会话上下文续接）
-  const runStatusNow = view.runStatus;
   useEffect(() => {
-    if (!runStatusNow || !['completed', 'failed', 'cancelled'].includes(runStatusNow)) return;
-    if (queuedFollowUp) {
-      const text = queuedFollowUp;
-      setQueuedFollowUp(null);
-      void sendGoal(text);
+    if (pendingSend && hasRunEnded(events, pendingSend.runId)) {
+      setGoal(pendingSend.text);
+      setPending(null);
     }
-    // 选择条打开期间任务结束：文本退回输入框正常发送（不再需要选择）
-    if (pendingSend) {
-      setGoal(pendingSend);
-      setPendingSend(null);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runStatusNow]);
+  }, [events, pendingSend]);
 
-  const sendGoal = async (rawText: string) => {
-    if (!rawText.trim() || submitting) return;
-    setSubmitting(true);
-    try {
-      // 无会话、或当前停在评测这类自动化会话里 → 新开一个会话（在评测会话里续接 = 带着最后一道题的完整过程，
-      // 而且任务按评测规则跑：不写长期记忆、不做经验蒸馏）；否则续接当前会话，连续多次对话落在同一会话
-      const sid = sessionForNewMessage(currentSessionId, sessions, () => `sess_${Date.now().toString(36)}`);
-      setCurrentSessionId(sid);
-      // 上传上下文注入：明确告诉 agent 用户刚传了哪些文件（消除与磁盘旧文件的歧义）
-      const attached = uploadedFiles; // 发送瞬间的快照（await 期间新上传的不属于本条消息）
-      const uploadNote = attached.length > 0
-        ? `## 用户刚上传的文件（工作区根目录）\n${attached.map(f => `- ${f}`).join('\n')}\n当用户提到"这份文件 / 我上传的文件 / 刚传的文件"时，优先指上述文件（而非工作区里的其他旧文件）。`
-        : undefined;
-      // @ 引用注入：把消息里的 @文件 解析为工作区路径，指示 agent 开工前先读
-      //（若该文件在本会话已分析过，会话上下文已有摘要 — 指令同时覆盖两种情况）
-      const rawGoal = rawText.trim();
-      const atRefs: string[] = [];
-      const goalWithRefs = rawGoal.replace(/@([^\s@，。,]+)/g, (whole, token: string) => {
-        const hit = wsFiles.find(f => f.rel === token || f.name === token)
-          ?? wsFiles.find(f => f.rel.toLowerCase() === token.toLowerCase() || f.name.toLowerCase() === token.toLowerCase());
-        if (!hit) return whole; // 解析不到（可能是邮箱等）— 原样保留
-        atRefs.push(hit.rel);
-        return `@${hit.rel}`;
-      });
-      const refNote = atRefs.length > 0
-        ? `\n\n## 本消息引用的文件（@ 引用）\n${atRefs.map(r => `- ${r}`).join('\n')}\n开工前先读取上述文件（.docx 用 docx_read，其余用 fs_read）；若其中某些在本会话已分析过且内容未变，可直接利用已有结论不必重读全文。`
-        : '';
-      const res = await api.createRun({
+  const prepareMessage = (rawText: string): ChatMessageDraft => {
+    const sid = sessionForNewMessage(currentSessionId, sessions, () => `sess_${Date.now().toString(36)}`);
+    // 上传上下文注入：明确告诉 agent 用户刚传了哪些文件（消除与磁盘旧文件的歧义）
+    const attached = uploadedFiles; // 发送瞬间的快照（await 期间新上传的不属于本条消息）
+    const uploadNote = attached.length > 0
+      ? `## 用户刚上传的文件（工作区根目录）\n${attached.map(f => `- ${f}`).join('\n')}\n当用户提到"这份文件 / 我上传的文件 / 刚传的文件"时，优先指上述文件（而非工作区里的其他旧文件）。`
+      : undefined;
+    // @ 引用注入：把消息里的 @文件 解析为工作区路径，指示 agent 开工前先读
+    //（若该文件在本会话已分析过，会话上下文已有摘要 — 指令同时覆盖两种情况）
+    const rawGoal = rawText.trim();
+    const atRefs: string[] = [];
+    const goalWithRefs = rawGoal.replace(/@([^\s@，。,]+)/g, (whole, token: string) => {
+      const hit = wsFiles.find(f => f.rel === token || f.name === token)
+        ?? wsFiles.find(f => f.rel.toLowerCase() === token.toLowerCase() || f.name.toLowerCase() === token.toLowerCase());
+      if (!hit) return whole; // 解析不到（可能是邮箱等）— 原样保留
+      atRefs.push(hit.rel);
+      return `@${hit.rel}`;
+    });
+    const refNote = atRefs.length > 0
+      ? `\n\n## 本消息引用的文件（@ 引用）\n${atRefs.map(r => `- ${r}`).join('\n')}\n开工前先读取上述文件（.docx 用 docx_read，其余用 fs_read）；若其中某些在本会话已分析过且内容未变，可直接利用已有结论不必重读全文。`
+      : '';
+    return {
+      text: rawGoal, runId: activeRunId, attachments: attached, references: atRefs,
+      request: {
         goal: atRefs.length > 0 ? goalWithRefs + refNote : rawGoal,
-        sessionId: sid,
-        workspaceId: workspaceId || undefined,
-        continueSession: true, // 同会话多轮：带上此前的完整对话上下文
-        extraSystem: uploadNote,
-      });
-      // 附件已随本条消息消耗：转到消息上展示，暂存区移除（后续轮次靠会话历史关联文件）
-      if (attached.length > 0) {
-        setRunAttachments(prev => ({ ...prev, [res.runId]: attached }));
-        setUploadedFiles(prev => prev.filter(f => !attached.includes(f)));
+        sessionId: sid, workspaceId: workspaceId || undefined, continueSession: true, extraSystem: uploadNote,
+      },
+    };
+  };
+
+  const sendGoal = async (message: ChatMessageDraft, queued = false) => {
+    const { request, attachments, references } = message;
+    if (!queued) {
+      setSubmitting(true);
+      setCurrentSessionId(request.sessionId);
+      if (request.sessionId !== currentSessionId) setActiveRunId(null);
+    }
+    try {
+      const res = await api.createRun(request);
+      if (attachments.length || references.length) {
+        setRunAttachments(prev => ({ ...prev, [res.runId]: [...attachments, ...references] }));
       }
-      // @ 引用同样挂到消息的附件标记上（与上传附件同一视觉位 — "这条消息关联了哪些文件"）
-      if (atRefs.length > 0) {
-        setRunAttachments(prev => ({ ...prev, [res.runId]: [...(prev[res.runId] ?? []), ...atRefs] }));
+      if (selection.current.sessionId === request.sessionId &&
+          (!queued || selection.current.runId === message.runId)) {
+        if (!queued) {
+          setGoal(prev => prev.trim() === message.text ? '' : prev);
+          setUploadedFiles(prev => prev.filter(f => !attachments.includes(f)));
+        }
+        setActiveRunId(res.runId);
       }
-      setGoal('');
-      setActiveRunId(res.runId);
       loadSessions();
     } catch (err: any) {
       alert(t('chat.createRunFailed', { message: err.message }));
+      if (queued) setPending(message);
     } finally {
-      setSubmitting(false);
+      if (!queued) setSubmitting(false);
     }
   };
 
-  // 发送入口：run 执行中 → 弹选择条（立即补充/排队），不再静默开并行 run
   const submit = () => {
     if (!goal.trim() || submitting) return;
-    if (runExecuting) { setPendingSend(goal.trim()); setGoal(''); return; }
-    void sendGoal(goal.trim());
-  };
-
-  // 立即补充：进入当前 run 的注入邮箱（下一步边界送达模型）
-  const chooseInject = async () => {
-    if (!pendingSend || !activeRunId) return;
-    try {
-      const r = await api.injectRunInput(activeRunId, pendingSend);
-      setInjectNote(t('chat.injectDone', { n: r.queued }));
-      setPendingSend(null);
-      setTimeout(() => setInjectNote(null), 6000);
-    } catch (err: any) {
-      // 竞态：注入瞬间 run 恰好终态 → 降级为正常发送
-      setInjectNote(t('chat.injectFallback'));
-      const text = pendingSend;
-      setPendingSend(null);
-      setTimeout(() => setInjectNote(null), 6000);
-      void sendGoal(text);
+    const message = prepareMessage(goal);
+    if (runExecuting && message.request.sessionId === currentSessionId) {
+      setPending(message);
+      setGoal('');
+      return;
     }
+    void sendGoal(message);
   };
 
-  // 排队：终态后自动作为下一轮发出（useEffect 监听 runStatus）
+  const chooseInject = async () => {
+    if (!pendingSend || !pendingSend.runId) return;
+    setPending(null);
+    try {
+      const r = await api.injectRunInput(pendingSend.runId, pendingSend.text);
+      setInjectNote(t('chat.injectDone', { n: r.queued }));
+    } catch {
+      setInjectNote(t('chat.injectFallback'));
+      void sendGoal(pendingSend, true);
+    }
+    setTimeout(() => setInjectNote(null), 6000);
+  };
+
   const chooseQueue = () => {
-    if (!pendingSend) return;
-    setQueuedFollowUp(pendingSend);
-    setPendingSend(null);
+    if (!pendingSend || queuedFollowUp) return;
+    setQueue(prev => [...prev, pendingSend]);
+    setUploadedFiles(prev => prev.filter(f => !pendingSend.attachments.includes(f)));
+    setPending(null);
     setInjectNote(t('chat.queuedDone'));
     setTimeout(() => setInjectNote(null), 6000);
   };
 
   const cancelPendingSend = () => {
     if (!pendingSend) return;
-    setGoal(pendingSend); // 文本退回输入框
-    setPendingSend(null);
+    setGoal(pendingSend.text);
+    setPending(null);
   };
 
   const decide = async (approvalId: string, approved: boolean) => {
@@ -708,6 +738,12 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-screen">
+      {queue.map(message => (
+        <WaitForRun key={message.runId} runId={message.runId!} visibleEvents={message.runId === activeRunId ? events : undefined} onFinish={() => {
+          setQueue(prev => prev.filter(item => item !== message));
+          void sendGoal(message, true);
+        }} />
+      ))}
       {/* 左侧：历史会话 */}
       <aside className="w-64 shrink-0 border-r border-glass-border glass rounded-none flex flex-col">
         <div className="p-3 border-b border-glass-border flex items-center justify-between">
@@ -1171,12 +1207,12 @@ export default function ChatPage() {
             {/* 运行中输入选择条：run 执行中发送 → 立即补充（注入当前任务）/ 排队（终态后自动发送） */}
             {pendingSend && (
               <div className="mb-2 p-2.5 rounded-lg border border-brand/40 bg-brand-soft/30">
-                <p className="text-xs text-fg-secondary mb-2 truncate" title={pendingSend}>
-                  “{pendingSend.length > 80 ? pendingSend.slice(0, 80) + '…' : pendingSend}”
+                <p className="text-xs text-fg-secondary mb-2 truncate" title={pendingSend.text}>
+                  “{pendingSend.text.length > 80 ? pendingSend.text.slice(0, 80) + '…' : pendingSend.text}”
                 </p>
                 <div className="flex items-center gap-2 flex-wrap">
                   <Button size="sm" onClick={chooseInject} icon={<Zap className="w-3.5 h-3.5" />}>{t('chat.injectNow')}</Button>
-                  <Button size="sm" variant="ghost" onClick={chooseQueue} icon={<Inbox className="w-3.5 h-3.5" />}>{t('chat.injectQueue')}</Button>
+                  <Button size="sm" variant="ghost" disabled={Boolean(queuedFollowUp)} onClick={chooseQueue} icon={<Inbox className="w-3.5 h-3.5" />}>{t('chat.injectQueue')}</Button>
                   <Button size="sm" variant="ghost" onClick={cancelPendingSend}>{t('chat.injectCancel')}</Button>
                   <span className="ml-auto text-[11px] text-fg-muted">{t('chat.injectHint')}</span>
                 </div>
@@ -1184,7 +1220,7 @@ export default function ChatPage() {
             )}
             {queuedFollowUp && (
               <p className="mb-1.5 text-[11px] text-fg-muted flex items-center gap-1">
-                <Inbox className="w-3 h-3" /> {t('chat.queuedWaiting')}：“{queuedFollowUp.length > 40 ? queuedFollowUp.slice(0, 40) + '…' : queuedFollowUp}”
+                <Inbox className="w-3 h-3" /> {t('chat.queuedWaiting')}：“{queuedFollowUp.text.length > 40 ? queuedFollowUp.text.slice(0, 40) + '…' : queuedFollowUp.text}”
               </p>
             )}
             {injectNote && <p className="mb-1.5 text-[11px] text-status-success">{injectNote}</p>}

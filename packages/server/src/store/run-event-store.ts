@@ -99,6 +99,13 @@ export class RunEventStore {
     return rows.map(r => this.fromRow(r));
   }
 
+  listArtifacts(runId: string): RunEvent[] {
+    const rows = this.stmt(
+      "SELECT * FROM events WHERE run_id = ? AND type = 'artifact' ORDER BY seq"
+    ).all(runId) as RunEventRow[];
+    return rows.map(r => this.fromRow(r));
+  }
+
   countByRun(runId: string): number {
     const row = this.stmt(`SELECT COUNT(*) AS n FROM events WHERE run_id = ?`).get(runId) as any;
     return row.n;

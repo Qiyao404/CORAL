@@ -10,12 +10,12 @@ import type { ParsedSkillManifest, SkillSource } from '../types/index.js';
  *         consumes_company_profile / empty_when / default / input_keys 字段。
  * 缺省 source 视为 builtin（兼容 v1.0.0 无 source 字段的 SKILL.md）。
  */
-export function parseSkillMd(skillDir: string): ParsedSkillManifest | null {
+export function parseSkillMd(skillDir: string, proposedContent?: string): ParsedSkillManifest | null {
   const skillMdPath = join(skillDir, 'SKILL.md');
-  if (!existsSync(skillMdPath)) return null;
+  if (proposedContent === undefined && !existsSync(skillMdPath)) return null;
 
   try {
-    const raw = readFileSync(skillMdPath, 'utf-8');
+    const raw = proposedContent ?? readFileSync(skillMdPath, 'utf-8');
     const { data: fm, content: prompt } = matter(raw);
 
     if (!fm.name || !fm.version || !fm.description || !fm.execution_mode) {

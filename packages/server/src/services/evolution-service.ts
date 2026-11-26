@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync, renameSync, copyFileSync } from 'fs';
 import { join, resolve, dirname } from 'path';
+import { parseSkillMd } from '../skill-runtime/skill-resolver.js';
 import { validateSkillName } from '../skill-runtime/skill-writer.js';
 import { applyProfileInsights, type ProfileInsight } from './user-profile-service.js';
 import type { FilesystemSkillRegistry } from '../skill-runtime/filesystem-registry.js';
@@ -339,6 +340,10 @@ export class EvolutionService {
         try { validateSkillName(name); } catch { return { ok: false, message: `技能名非法: ${name}` }; }
         const skillDir = resolve(this.deps.skillsDir, name);
         const target = join(skillDir, 'SKILL.md');
+        const content = String(p.content);
+        if (parseSkillMd(skillDir, content)?.name !== name) {
+          return { ok: false, message: '技能清单无效或名称不匹配，提议仍待处理' };
+        }
         mkdirSync(skillDir, { recursive: true });
         // 旧版备份进 .history/（存在才备份）
         if (existsSync(target)) {
@@ -346,11 +351,14 @@ export class EvolutionService {
           mkdirSync(histDir, { recursive: true });
           copyFileSync(target, join(histDir, `${new Date().toISOString().replace(/[:.]/g, '-')}.md`));
         }
-        writeFileSync(target, String(p.content), 'utf-8');
+        writeFileSync(target + '.tmp', content, 'utf-8');
+        renameSync(target + '.tmp', target);
         try {
-          await this.deps.registry.reloadSkill(name);
+          if (!await this.deps.registry.reloadSkill(name)) {
+            return { ok: false, message: '技能已写盘但加载失败，提议仍待处理' };
+          }
         } catch (err: any) {
-          return { ok: false, message: `技能已写盘但重载失败（下次启动生效）: ${err?.message ?? err}` };
+          return { ok: false, message: `技能已写盘但重载失败: ${err?.message ?? err}` };
         }
         p.status = 'accepted'; p.decidedAt = new Date().toISOString();
         this.persist();

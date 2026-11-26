@@ -63,7 +63,7 @@ export function readAccumulatedChecks(workspaceDir: string): string {
   try {
     const p = checksFilePath(workspaceDir);
     if (!existsSync(p)) return '';
-    return readFileSync(p, 'utf8').slice(0, MAX_CHECKS_CHARS);
+    return readFileSync(p, 'utf8');
   } catch { return ''; }
 }
 
@@ -95,7 +95,7 @@ export async function generateCriteria(deps: { llm: LlmChat; goal: string; works
   const prompt =
     `Convert this task into an acceptance checklist for an autonomous agent's deliverable.\n\n` +
     `== Task ==\n${goal.slice(0, MAX_GOAL_CHARS)}\n\n` +
-    (accumulated ? `== Accumulated workspace checks (must ALL be included verbatim) ==\n${accumulated}\n\n` : '') +
+    (accumulated ? `== Accumulated workspace checks (enforced separately; suggest additional task-specific checks) ==\n${accumulated.slice(0, MAX_CHECKS_CHARS)}\n\n` : '') +
     `Rules for each line:\n` +
     `- Binary pass/fail against the ARTIFACT (files produced, numbers, links) — never taste words like "professional" or "high quality"\n` +
     `- A third party who never saw the work must be able to judge it in 30 seconds\n` +
@@ -107,23 +107,22 @@ export async function generateCriteria(deps: { llm: LlmChat; goal: string; works
     `Reply JSON only: {"lines":["..."],"ambiguities":["..."]}`;
   const res = await llm.chat({ messages: [{ role: 'user', content: prompt }], jsonMode: true, maxTokens: 2000 });
   const parsed = safeJson(res.content);
-  const lines: VerifyLine[] = [];
+  const rules = new Map<string, VerifyLine['source']>();
+  for (const match of accumulated.matchAll(/^\s*-\s+(.+)$/gm)) {
+    const line = match[1].trim();
+    if (line) rules.set(line, 'accumulated');
+  }
   if (Array.isArray(parsed?.lines)) {
-    for (const l of parsed.lines.slice(0, 7)) {
-      if (typeof l === 'string' && l.trim()) lines.push({ line: l.trim().slice(0, 300), source: 'generated' });
+    for (const value of parsed.lines.slice(0, 7)) {
+      const line = typeof value === 'string' ? value.trim().slice(0, 300) : '';
+      if (line && !rules.has(line)) rules.set(line, 'generated');
     }
   }
-  if (accumulated) {
-    // 累积检查必须原样并入（用户的历史标准优先于生成）
-    for (const m of accumulated.matchAll(/^\s*-\s+(.+)$/gm)) {
-      const t = m[1].trim();
-      if (t && !lines.some(l => l.line === t)) lines.push({ line: t, source: 'accumulated' });
-    }
-  }
+  const lines = Array.from(rules, ([line, source]) => ({ line, source }));
   const ambiguities = Array.isArray(parsed?.ambiguities)
     ? parsed.ambiguities.filter((a: unknown) => typeof a === 'string' && a.trim()).slice(0, 2).map((a: string) => a.slice(0, 200))
     : [];
-  return { lines: lines.slice(0, 10), ambiguities };
+  return { lines, ambiguities };
 }
 
 /**
@@ -140,7 +139,16 @@ export async function verifyDeliverable(deps: {
 }): Promise<VerifyVerdict> {
   const { llm, goal, criteria, finalContent, artifacts } = deps;
   if (criteria.length === 0) {
-    return { passed: true, results: [], level: 4, passedCount: 0, totalCount: 0 };
+    return { passed: true, results: [], level: 3, passedCount: 0, totalCount: 0 };
+  }
+  // 长清单逐批验收，保留单次判定的输出预算。
+  if (criteria.length > 10) {
+    const results: VerifyLineResult[] = [];
+    for (let i = 0; i < criteria.length; i += 10) {
+      const batch = await verifyDeliverable({ ...deps, criteria: criteria.slice(i, i + 10) });
+      results.push(...batch.results);
+    }
+    return summarizeVerdict(results);
   }
   const prompt =
     `You are a skeptical acceptance checker. The maker claims the task is done; judge EACH checklist line strictly against the evidence below.\n\n` +
@@ -151,7 +159,7 @@ export async function verifyDeliverable(deps: {
     `Rules: default answer is FAIL. A line passes ONLY if the final answer or artifacts directly show it. ` +
     `Judge against the artifact CONTENT where provided (it is the ground truth, overriding the maker's claims). ` +
     `If judging a line requires evidence you cannot see (e.g. opening an external link), mark it "unverifiable": true rather than guessing PASS. ` +
-    `Every FAIL or unverifiable line MUST cite what you saw ("final answer says X but checklist requires Y" / "no artifact matching Z").\n` +
+    `Every result, including PASS, MUST cite what you saw ("final answer says X but checklist requires Y" / "no artifact matching Z").\n` +
     `Reply JSON only: {"results":[{"index":<the checklist line number>,"line":"<verbatim>","pass":true|false,"unverifiable":true|false,"evidence":"<what you saw>"}]}`;
   const res = await llm.chat({ messages: [{ role: 'user', content: prompt }], jsonMode: true, maxTokens: 3000 });
   const parsed = safeJson(res.content);
@@ -178,14 +186,20 @@ export async function verifyDeliverable(deps: {
       // 清单行缺失判定结果的按 FAIL 补齐（默认否 — 宁可误退不可漏放）
       return { line: c.line, pass: false, unverifiable: false, evidence: '(判定缺失 — 按未通过处理)' };
     }
+    const evidence = typeof hit.r.evidence === 'string' ? hit.r.evidence.trim().slice(0, 300) : '';
+    const supported = Boolean(evidence && (finalContent.trim() || artifacts.length));
     return {
       line: c.line,
-      pass: hit.r.pass === true && hit.r.unverifiable !== true,
+      pass: hit.r.pass === true && hit.r.unverifiable !== true && supported,
       unverifiable: hit.r.unverifiable === true,
-      evidence: typeof hit.r.evidence === 'string' ? hit.r.evidence.slice(0, 300) : '',
+      evidence: hit.r.pass === true && !supported ? '缺少可核验的证据' : evidence,
       matchedBy: hit.by,
     };
   });
+  return summarizeVerdict(results);
+}
+
+function summarizeVerdict(results: VerifyLineResult[]): VerifyVerdict {
   const passedCount = results.filter(r => r.pass).length;
   // 不可验 ≠ 失败（诚实而非猜 PASS）；硬失败 = 既未通过也不可验
   const unverifiable = results.filter(r => r.unverifiable && !r.pass).length;

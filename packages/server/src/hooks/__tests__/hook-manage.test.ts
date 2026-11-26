@@ -9,10 +9,10 @@ import { HookService } from '../hook-service.js';
 let dir: string;
 let allowCmd: string;
 beforeEach(() => {
-  dir = mkdtempSync(join(tmpdir(), 'coral-hooks-mgmt-'));
+  dir = mkdtempSync(join(tmpdir(), 'coral hooks-mgmt-'));
   const allowFile = join(dir, 'allow.mjs').replace(/\\/g, '/');
   writeFileSync(allowFile, `process.stdout.write(JSON.stringify({decision:'allow',reason:'ok'}));`, 'utf-8');
-  allowCmd = `${process.execPath.replace(/\\/g, '/')} ${allowFile}`;
+  allowCmd = `node "${allowFile}"`;
 });
 
 describe('HookService — 管理页能力', () => {
@@ -76,7 +76,7 @@ describe('HookService — 管理页能力', () => {
     const denyFile = join(dir, 'deny.mjs').replace(/\\/g, '/');
     writeFileSync(denyFile, `process.stderr.write('no .env');process.exit(2);`, 'utf-8');
     const svc = new HookService(dir);
-    const result = await svc.test('pre_tool_use', `${process.execPath.replace(/\\/g, '/')} ${denyFile}`, 10);
+    const result = await svc.test('pre_tool_use', `node "${denyFile}"`, 10);
     expect(result.decision).toBe('deny');
     expect(result.reason).toContain('no .env');
   });
